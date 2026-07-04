@@ -24,6 +24,7 @@ export type ApiResult = {
   mode?: string;
   message?: string;
 
+  annotatedSelectionGlbResult?: unknown;
   generatedGeometryResult?: unknown;
   projectStateResult?: unknown;
   reconstructionResult?: unknown;
@@ -33,7 +34,31 @@ export type ApiResult = {
 export async function saveFuzzycadProject(
   query: DocumentQuery,
   projectState: unknown,
+  options: {
+    annotatedSelectionGlb?: Blob | null;
+  } = {},
 ): Promise<ApiResult> {
+  if (options.annotatedSelectionGlb) {
+    const formData = new FormData();
+
+    formData.append("documentId", query.documentId);
+    formData.append("workspaceId", query.workspaceId);
+    formData.append("server", query.server);
+    formData.append("projectState", JSON.stringify(projectState));
+    formData.append(
+      "annotatedSelectionGlb",
+      options.annotatedSelectionGlb,
+      "fuzzycad-annotated-selection.glb",
+    );
+
+    const res = await fetch("/api/fuzzycad/save-project", {
+      method: "POST",
+      body: formData,
+    });
+
+    return res.json() as Promise<ApiResult>;
+  }
+
   const res = await fetch("/api/fuzzycad/save-project", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
