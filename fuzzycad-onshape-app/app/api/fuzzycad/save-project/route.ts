@@ -1087,214 +1087,6 @@ async function deleteExistingFuzzyCadOverlayInstances(input: {
   };
 }
 
-/**
- * After the rotated overlay is inserted into the assembly, hide the original
- * part2 occurrences for each angle annotation so only the rotated version is
- * visible. Hiding is best-effort — a failure here does not abort the save.
- */
-async function hideAngleAnnotationOriginals(input: {
-  server: string;
-  documentId: string;
-  workspaceId: string;
-  assemblyElementId: string;
-  accessToken: string;
-  projectState: UnknownRecord;
-}) {
-  const annotations = Array.isArray(input.projectState.annotations)
-    ? input.projectState.annotations
-    : [];
-
-  const angleAnnotations = annotations.filter(
-    (a): a is UnknownRecord =>
-      isRecord(a) &&
-      a.type === "angle" &&
-      isRecord(a.target) &&
-      typeof (a.target as UnknownRecord).part2PathKey === "string",
-  );
-
-  const bendAnnotations = annotations.filter(
-    (a): a is UnknownRecord =>
-      isRecord(a) &&
-      a.type === "bend" &&
-      isRecord(a.target) &&
-      typeof (a.target as UnknownRecord).pathKey === "string",
-  );
-
-  if (angleAnnotations.length === 0 && bendAnnotations.length === 0) {
-    return { ok: true, mode: "no-angle-annotations", hidden: [] };
-  }
-
-  const seenPathKeys = new Set<string>();
-  const occurrencesToHide: string[][] = [];
-
-  function addPathKeyToHide(pathKey: string) {
-    if (seenPathKeys.has(pathKey)) return;
-    seenPathKeys.add(pathKey);
-    const path = pathKey.split("/").filter((p) => p.length > 0);
-    if (path.length > 0) occurrencesToHide.push(path);
-  }
-
-  for (const annotation of angleAnnotations) {
-    const target = annotation.target as UnknownRecord;
-    // Hide the primary part2
-    const part2PathKey = target.part2PathKey as string;
-    addPathKeyToHide(part2PathKey);
-    // Also hide all related parts that move rigidly with part2
-    const relatedKeys = Array.isArray(target.relatedPart2PathKeys)
-      ? (target.relatedPart2PathKeys as unknown[]).filter(
-          (k): k is string => typeof k === "string",
-        )
-      : [];
-    for (const relatedKey of relatedKeys) {
-      addPathKeyToHide(relatedKey);
-    }
-  }
-
-  // Bend annotations: hide the original (unbent) part.
-  for (const annotation of bendAnnotations) {
-    const target = annotation.target as UnknownRecord;
-    addPathKeyToHide(target.pathKey as string);
-  }
-
-  if (occurrencesToHide.length === 0) {
-    return { ok: true, mode: "no-angle-part2-paths", hidden: [] };
-  }
-
-  /**
-   * Onshape's REST API cannot toggle the "hidden" flag of an existing
-   * occurrence (it is read-only; isHidden only exists on createInstance).
-   * Instance SUPPRESSION via the assembly `modify` endpoint is the documented
-   * way to remove an instance from view — and the user can restore it any
-   * time with right-click → Unsuppress in the Onshape UI.
-   *
-   * Suppression addresses top-level instance ids. For a top-level occurrence
-   * the instance id is the single path segment; occurrences nested inside
-   * subassemblies cannot be suppressed from the root assembly, so they are
-   * reported as skipped instead.
-   */
-  const suppressionStates: Record<string, { value: string }> = {};
-  const skippedNestedPaths: string[] = [];
-
-  for (const path of occurrencesToHide) {
-    if (path.length === 1) {
-      suppressionStates[path[0]] = { value: "true" };
-    } else {
-      skippedNestedPaths.push(path.join("/"));
-    }
-  }
-
-  if (Object.keys(suppressionStates).length === 0) {
-    return {
-      ok: false,
-      mode: "no-suppressible-top-level-instances",
-      skippedNestedPaths,
-      hidden: [],
-    };
-  }
-
-  const endpoint = `${input.server}/api/assemblies/d/${input.documentId}/w/${input.workspaceId}/e/${input.assemblyElementId}/modify`;
-
-  const res = await onshapeFetch(
-    endpoint,
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${input.accessToken}`,
-        Accept: "application/json",
-        "Content-Type": "application/json",
-      },
-      /**
-       * Onshape's modify schema documents two suppression forms:
-       * a suppressInstances id array and a suppressionStates map.
-       * Send both so whichever form this deployment honors takes effect.
-       */
-      body: JSON.stringify({
-        suppressInstances: Object.keys(suppressionStates),
-        suppressionStates,
-      }),
-    },
-    {
-      route: "/api/fuzzycad/save-project",
-      operation: "suppress-annotation-originals",
-    },
-  );
-
-  const data = await parseJsonOrText(res);
-
-  // Verify by force re-reading the assembly and checking instance
-  // suppression flags, so the client log reports what actually happened.
-  let verification: UnknownRecord | null = null;
-
-  if (res.ok) {
-    clearAssemblyCache();
-
-    const assemblyAfter = await getCachedAssembly({
-      server: input.server,
-      documentId: input.documentId,
-      workspaceId: input.workspaceId,
-      assemblyElementId: input.assemblyElementId,
-      accessToken: input.accessToken,
-      route: "/api/fuzzycad/save-project",
-      force: true,
-    });
-
-    if (assemblyAfter.ok && isRecord(assemblyAfter.data)) {
-      const rootAssembly = isRecord(assemblyAfter.data.rootAssembly)
-        ? assemblyAfter.data.rootAssembly
-        : null;
-      const instances = Array.isArray(rootAssembly?.instances)
-        ? rootAssembly.instances
-        : [];
-
-      const suppressedStates: { instanceId: string; suppressed: unknown }[] =
-        [];
-
-      for (const instance of instances) {
-        if (!isRecord(instance)) continue;
-        const id = typeof instance.id === "string" ? instance.id : null;
-        if (id && suppressionStates[id]) {
-          suppressedStates.push({
-            instanceId: id,
-            suppressed: instance.suppressed,
-          });
-        }
-      }
-
-      const allSuppressed =
-        suppressedStates.length > 0 &&
-        suppressedStates.every((state) => state.suppressed === true);
-
-      verification = {
-        checked: suppressedStates.length,
-        allSuppressed,
-        suppressedStates,
-        mode: allSuppressed
-          ? "verified-originals-suppressed"
-          : "suppress-call-accepted-but-not-applied",
-      };
-    } else {
-      verification = {
-        mode: "failed-to-verify-suppression-state",
-        status: assemblyAfter.status,
-      };
-    }
-  }
-
-  return {
-    ok: res.ok,
-    status: res.status,
-    mode: res.ok
-      ? "suppressed-annotation-originals"
-      : "failed-to-suppress-annotation-originals",
-    endpoint,
-    hiddenCount: Object.keys(suppressionStates).length,
-    hidden: occurrencesToHide,
-    skippedNestedPaths,
-    verification,
-    data,
-  };
-}
-
 // ── Native angle overlays ────────────────────────────────────────────────
 // Rotated parts are deployed as REAL instances of the original part with a
 // rotated occurrence transform — fully parametric/editable in Onshape and
@@ -2760,22 +2552,18 @@ const assemblyOverlayResult = existingOverlayPreflight.shouldSkipImport
         validation: visualizationLayerValidation,
       };
 
-  // Best-effort: suppress original occurrences after overlays exist. Either
-  // deployment path counts — mesh overlay (size/bend) or native rotated
-  // instances (angle) — since an angle-only save produces no STL at all.
-  const hideAngleOriginalsResult =
-    (isOkResult(assemblyOverlayResult) ||
-      isOkResult(nativeAngleOverlaysResult)) &&
-    selectedAssemblyElementId
-      ? await hideAngleAnnotationOriginals({
-          server,
-          documentId,
-          workspaceId,
-          assemblyElementId: selectedAssemblyElementId,
-          accessToken,
-          projectState,
-        })
-      : null;
+  /**
+   * The original occurrences are intentionally left untouched (visible).
+   * Both the original and the adjusted overlay stay in the assembly, and
+   * the user toggles either with Onshape's native hide/show (eye icon).
+   * (Programmatic hide isn't possible — the occurrence "hidden" flag is
+   * read-only via the REST API — and suppression's crossed-out state was
+   * rejected as confusing.)
+   */
+  const hideAngleOriginalsResult = {
+    ok: true,
+    mode: "originals-left-visible-by-design",
+  };
 
   const generatedGeometryPayload = buildGeneratedGeometryPayload({
     projectState,

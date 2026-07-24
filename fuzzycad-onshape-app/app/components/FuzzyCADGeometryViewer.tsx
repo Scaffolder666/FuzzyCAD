@@ -128,6 +128,13 @@ type FuzzyCADGeometryViewerProps = {
     /** Snapped pivot vertex (viewer world space). */
     pivot?: [number, number, number];
   }) => void;
+  /**
+   * Called when the unified angle tool switches internal mode ("angle" =
+   * rotate between parts, "bend" = bend within one part) — either inferred
+   * from the user's clicks or via the mode chip. Parent should set the
+   * active tool accordingly without resetting the viewer.
+   */
+  onAngleModeSwitch?: (mode: "angle" | "bend") => void;
   /** Externally-controlled bend delta (deg) for the bend tool. */
   bendDeltaDeg?: number | null;
   /** Bend profile: sharp crease or smooth radius band. */
@@ -1020,6 +1027,7 @@ function Model({
   angleMateEdges,
   angleResetNonce,
   onAngleSelection,
+  onAngleModeSwitch,
   bendDeltaDeg: bendDeltaDegExternal,
   bendProfile = "sharp",
   onBendSelection,
@@ -1056,6 +1064,7 @@ function Model({
     face2Normal?: [number, number, number];
     pivot?: [number, number, number];
   }) => void;
+  onAngleModeSwitch?: (mode: "angle" | "bend") => void;
   bendDeltaDeg?: number | null;
   bendProfile?: "sharp" | "radius";
   onBendSelection?: (data: {
@@ -1182,6 +1191,12 @@ function Model({
     pathKey: string;
     /** Snapped mesh vertex in viewer world space — the rotation pivot. */
     point: THREE.Vector3;
+    /**
+     * Face normal at the click (viewer world space). In the unified flow the
+     * pivot click doubles as the fixed-side face pick for rotations, and as
+     * the surface orientation for a bend crease.
+     */
+    faceNormal: THREE.Vector3;
   };
 
   const [angleVertex, setAngleVertex] = useState<VertexSelection | null>(null);
@@ -1983,6 +1998,39 @@ function Model({
     setAngleHoverVertex((previous) => (previous === null ? previous : null));
   }
 
+  /**
+   * Mode-chip switches. Both keep the user's first click (the pivot /
+   * crease-start point) so switching costs at most one extra click.
+   */
+  function switchToBendMode() {
+    if (!angleVertex) return;
+    resetAnglePreview();
+    setBendP1({
+      pathKey: angleVertex.pathKey,
+      point: angleVertex.point.clone(),
+      faceNormal: angleVertex.faceNormal.clone(),
+    });
+    setBendP2(null);
+    setBendSidePoint(null);
+    setBendDeltaDeg(0);
+    onAngleModeSwitch?.("bend");
+  }
+
+  function switchToRotateMode() {
+    if (!bendP1) return;
+    resetBendPreview();
+    setAngleVertex({
+      pathKey: bendP1.pathKey,
+      point: bendP1.point.clone(),
+      faceNormal: bendP1.faceNormal.clone(),
+    });
+    setAngleFace1(null);
+    setAngleFace2(null);
+    setAngleMeasuredDeg(null);
+    setAngleArcDeg(45);
+    onAngleModeSwitch?.("angle");
+  }
+
   function handlePointerDown(event: ThreeEvent<PointerEvent>) {
     event.stopPropagation();
 
@@ -1994,22 +2042,11 @@ function Model({
 
     const selectedPathKey = findFuzzyPathKey(selectedObject);
 
-    // Angle tool: intercept clicks for vertex → face 1 → face 2 selection
+    // Unified angle tool: click 1 picks the pivot point; click 2 decides the
+    // mode — another part means "rotate the angle BETWEEN parts", the same
+    // part means "bend the angle WITHIN this part".
     if (activeTool === "angle" && selectedPathKey) {
-      // Step 1: pivot vertex — snap the raycast hit to the nearest actual
-      // mesh vertex of the clicked object.
-      if (!angleVertex) {
-        setAngleVertex({
-          pathKey: selectedPathKey,
-          // Same picker as the hover ghost so the click lands exactly where
-          // the ghost marker showed.
-          point: angleHoverVertex?.clone() ?? pickSnapVertex(event),
-        });
-        setAngleHoverVertex(null);
-        return;
-      }
-
-      // Steps 2/3: face picks — capture the clicked face's world-space normal.
+      // World-space face normal of this click (used by every step).
       let faceNormal = new THREE.Vector3(0, 1, 0); // fallback
       if (event.face) {
         const localNormal = event.face.normal.clone();
@@ -2019,40 +2056,75 @@ function Model({
         faceNormal = localNormal.applyMatrix3(normalMatrix).normalize();
       }
 
-      const selection = {
-        pathKey: selectedPathKey,
-        faceNormal,
-        hitPoint: event.point.clone(),
-      };
-
-      if (!angleFace1) {
-        setAngleFace1(selection);
-      } else if (!angleFace2 && selectedPathKey !== angleFace1.pathKey) {
-        // Record the measured angle between the two face normals and start
-        // the editable target there (absolute-angle semantics).
-        const cosAngle = Math.max(
-          -1,
-          Math.min(1, angleFace1.faceNormal.dot(selection.faceNormal)),
-        );
-        const measured = (Math.acos(cosAngle) * 180) / Math.PI;
-        setAngleFace2(selection);
-        setAngleMeasuredDeg(measured);
-        setAngleArcDeg(measured);
-      } else if (!angleFace2) {
-        // Second face must be on a different part — ignore the click.
-        return;
-      } else {
-        // Selection already complete: restart with a fresh pivot vertex.
-        resetAnglePreview();
+      // Step 1: pivot point — snapped to the nearest mesh vertex; the face
+      // it sits on doubles as the fixed-side reference for rotations.
+      if (!angleVertex) {
         setAngleVertex({
           pathKey: selectedPathKey,
-          point: pickSnapVertex(event),
+          // Same picker as the hover ghost so the click lands exactly where
+          // the ghost marker showed.
+          point: angleHoverVertex?.clone() ?? pickSnapVertex(event),
+          faceNormal,
         });
-        setAngleFace1(null);
-        setAngleFace2(null);
-        setAngleMeasuredDeg(null);
-        setAngleArcDeg(45);
+        setAngleHoverVertex(null);
+        return;
       }
+
+      // Step 2: mode-deciding click.
+      if (!angleFace2) {
+        if (selectedPathKey !== angleVertex.pathKey) {
+          // Different part → rotate. The pivot click already provided the
+          // fixed-side face, so this single click completes the selection.
+          const face1 = {
+            pathKey: angleVertex.pathKey,
+            faceNormal: angleVertex.faceNormal.clone(),
+            hitPoint: angleVertex.point.clone(),
+          };
+          const face2 = {
+            pathKey: selectedPathKey,
+            faceNormal,
+            hitPoint: event.point.clone(),
+          };
+          const cosAngle = Math.max(
+            -1,
+            Math.min(1, face1.faceNormal.dot(face2.faceNormal)),
+          );
+          const measured = (Math.acos(cosAngle) * 180) / Math.PI;
+          setAngleFace1(face1);
+          setAngleFace2(face2);
+          setAngleMeasuredDeg(measured);
+          setAngleArcDeg(measured);
+        } else {
+          // Same part → bend. Seed the crease from the pivot click + this
+          // click and hand the flow to the bend state machine.
+          setBendP1({
+            pathKey: angleVertex.pathKey,
+            point: angleVertex.point.clone(),
+            faceNormal: angleVertex.faceNormal.clone(),
+          });
+          setBendP2({
+            pathKey: selectedPathKey,
+            point: event.point.clone(),
+            faceNormal,
+          });
+          setBendSidePoint(null);
+          setBendDeltaDeg(0);
+          onAngleModeSwitch?.("bend");
+        }
+        return;
+      }
+
+      // Selection already complete: restart with a fresh pivot.
+      resetAnglePreview();
+      setAngleVertex({
+        pathKey: selectedPathKey,
+        point: pickSnapVertex(event),
+        faceNormal,
+      });
+      setAngleFace1(null);
+      setAngleFace2(null);
+      setAngleMeasuredDeg(null);
+      setAngleArcDeg(45);
       return;
     }
 
@@ -2388,12 +2460,66 @@ function Model({
             }}
           >
             {!angleVertex
-              ? "Step 1/3 — Click a corner (vertex) to set the rotation pivot"
-              : !angleFace1
-                ? "Step 2/3 — Click a face on the part that stays fixed"
-                : !angleFace2
-                  ? "Step 3/3 — Click a face on a different part to rotate"
-                  : "Drag the blue handle or edit θ in the panel, then Save mark"}
+              ? "Step 1 — Click a corner where the angle changes (on any part)"
+              : !angleFace2
+                ? "Step 2 — Click another part to rotate it, or the same part again to bend it"
+                : "Drag the blue handle or edit θ in the panel, then Save mark"}
+          </div>
+        </Html>
+      ) : null}
+
+      {/* Mode chip: states the current interpretation in plain language and
+          offers a one-click switch that keeps the first click. */}
+      {(activeTool === "angle" && angleVertex) ||
+      (activeTool === "bend" && bendP1) ? (
+        <Html fullscreen style={{ pointerEvents: "none" }}>
+          <div
+            style={{
+              position: "absolute",
+              top: 48,
+              left: "50%",
+              transform: "translateX(-50%)",
+              display: "flex",
+              gap: 10,
+              alignItems: "center",
+              background: "rgba(23,32,51,0.88)",
+              color: "white",
+              padding: "4px 12px",
+              borderRadius: 8,
+              fontSize: 11,
+              fontFamily: "Arial, sans-serif",
+              whiteSpace: "nowrap",
+              pointerEvents: "auto",
+              boxShadow: "0 4px 14px rgba(15,23,42,0.25)",
+            }}
+          >
+            <span>
+              {activeTool === "angle"
+                ? angleFace2
+                  ? "Adjusting the angle between two parts"
+                  : "Pivot set — pick what moves"
+                : "Bending within one part"}
+            </span>
+            <button
+              type="button"
+              onClick={
+                activeTool === "angle" ? switchToBendMode : switchToRotateMode
+              }
+              style={{
+                background: "none",
+                border: "none",
+                padding: 0,
+                color: "#8ab4ff",
+                fontSize: 11,
+                fontWeight: 700,
+                textDecoration: "underline",
+                cursor: "pointer",
+              }}
+            >
+              {activeTool === "angle"
+                ? "Bend one part instead"
+                : "Rotate against another part instead"}
+            </button>
           </div>
         </Html>
       ) : null}
@@ -2424,6 +2550,7 @@ export default function FuzzyCADGeometryViewer({
   angleMateEdges,
   angleResetNonce,
   onAngleSelection,
+  onAngleModeSwitch,
   bendDeltaDeg,
   bendProfile,
   onBendSelection,
@@ -2493,6 +2620,7 @@ export default function FuzzyCADGeometryViewer({
                   angleMateEdges={angleMateEdges}
                   angleResetNonce={angleResetNonce}
                   onAngleSelection={onAngleSelection}
+                  onAngleModeSwitch={onAngleModeSwitch}
                   bendDeltaDeg={bendDeltaDeg}
                   bendProfile={bendProfile}
                   onBendSelection={onBendSelection}

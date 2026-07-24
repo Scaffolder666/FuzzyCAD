@@ -849,18 +849,6 @@ async function saveProjectStateToOnshape() {
   );
 
   console.log("Saved FuzzyCAD project:", result);
-
-  // Focused log for the suppress-originals step so failures are easy to spot.
-  const resultRecord =
-    result && typeof result === "object"
-      ? (result as Record<string, unknown>)
-      : null;
-  if (resultRecord && "hideAngleOriginalsResult" in resultRecord) {
-    console.log(
-      "[FuzzyCAD] Suppress originals result:",
-      resultRecord.hideAngleOriginalsResult,
-    );
-  }
 }
 
 
@@ -1069,6 +1057,19 @@ if (result.ok && result.state) {
 
               return next;
             });
+          }}
+          onAngleModeSwitch={(mode) => {
+            // Internal mode switch of the unified angle tool: change the
+            // active tool WITHOUT bumping the reset nonce so the viewer's
+            // seeded selection (the user's first click) survives.
+            setActiveTool(mode);
+            if (mode === "bend") {
+              setPendingAngle(null);
+              setPendingAngleComment("");
+            } else {
+              setPendingBend(null);
+              setPendingBendComment("");
+            }
           }}
           bendDeltaDeg={
             activeTool === "bend" ? pendingBend?.deltaDeg ?? null : null

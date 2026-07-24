@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import styles from "../fuzzycad-home.module.css";
 import type { OperationTool } from "../lib/operations/types";
 
@@ -68,17 +68,6 @@ function AngleIcon() {
   );
 }
 
-function BendIcon() {
-  return (
-    <svg viewBox="0 0 32 32" aria-hidden="true">
-      <path d="M5 10H16" />
-      <path d="M16 10L26 20" />
-      <path d="M16 6V14" strokeDasharray="2 2" />
-      <path d="M21 10C21 13 20 15 18 16" />
-    </svg>
-  );
-}
-
 function MoveIcon() {
   return (
     <svg viewBox="0 0 32 32" aria-hidden="true">
@@ -119,25 +108,12 @@ const tools: ToolItem[] = [
     icon: <SizeIcon />,
     hidden: true,
   },
-];
-
-/**
- * The Angle entry is a split button: hovering it reveals the two angle
- * modes — Rotate (two-part vertex + face flow) and Bend (single-part
- * crease flow).
- */
-const angleModes: { id: OperationTool; label: string; title: string; icon: ReactNode }[] = [
   {
     id: "angle",
-    label: "Rotate",
-    title: "Rotate one part relative to another around a pivot vertex",
+    label: "Angle",
+    title:
+      "Adjust an angle — between two parts, or within one part (bend). The tool figures out which from your clicks.",
     icon: <AngleIcon />,
-  },
-  {
-    id: "bend",
-    label: "Bend",
-    title: "Draw a crease line on one part and bend it",
-    icon: <BendIcon />,
   },
 ];
 
@@ -146,19 +122,18 @@ export default function OperationToolbar({
   disabled = false,
   onToolChange,
 }: OperationToolbarProps) {
-  const [angleMenuOpen, setAngleMenuOpen] = useState(false);
-
-  const angleActive = activeTool === "angle" || activeTool === "bend";
-  const activeAngleMode =
-    angleModes.find((mode) => mode.id === activeTool) ?? angleModes[0];
-
   return (
     <div className={styles.operationToolbarWrap}>
       <div className={styles.operationToolbar} aria-label="FuzzyCAD tools">
         {tools
           .filter((tool) => !tool.hidden)
           .map((tool) => {
-            const active = activeTool === tool.id;
+            // The single Angle button covers both internal modes (rotate the
+            // gap between two parts, or bend within one part) — the viewer
+            // infers which from the user's clicks.
+            const active =
+              activeTool === tool.id ||
+              (tool.id === "angle" && activeTool === "bend");
 
             return (
               <button
@@ -180,88 +155,6 @@ export default function OperationToolbar({
               </button>
             );
           })}
-
-        {/* Angle split button: hover reveals Rotate | Bend */}
-        <div
-          style={{ position: "relative", display: "inline-flex" }}
-          onMouseEnter={() => setAngleMenuOpen(true)}
-          onMouseLeave={() => setAngleMenuOpen(false)}
-        >
-          <button
-            type="button"
-            title="Angle tools — hover for Rotate / Bend"
-            disabled={disabled}
-            className={
-              angleActive
-                ? `${styles.operationToolButton} ${styles.operationToolButtonActive}`
-                : styles.operationToolButton
-            }
-            onClick={() => {
-              // Clicking the main button activates the last-used / default mode.
-              onToolChange(angleActive ? activeAngleMode.id : "angle");
-            }}
-          >
-            <span className={styles.operationToolIcon}>
-              {activeAngleMode.icon}
-            </span>
-            <span className={styles.operationToolLabel}>
-              {angleActive ? activeAngleMode.label : "Angle"}
-            </span>
-          </button>
-
-          {angleMenuOpen && !disabled ? (
-            <div
-              style={{
-                position: "absolute",
-                bottom: "100%",
-                left: "50%",
-                transform: "translateX(-50%)",
-                paddingBottom: 6,
-                zIndex: 30,
-              }}
-            >
-              <div
-                style={{
-                  display: "flex",
-                  gap: 4,
-                  background: "rgba(255,255,255,0.97)",
-                  border: "1px solid rgba(43,108,255,0.25)",
-                  borderRadius: 10,
-                  padding: 4,
-                  boxShadow: "0 6px 18px rgba(15,23,42,0.16)",
-                }}
-              >
-                {angleModes.map((mode) => {
-                  const modeActive = activeTool === mode.id;
-
-                  return (
-                    <button
-                      key={mode.id}
-                      type="button"
-                      title={mode.title}
-                      className={
-                        modeActive
-                          ? `${styles.operationToolButton} ${styles.operationToolButtonActive}`
-                          : styles.operationToolButton
-                      }
-                      onClick={() => {
-                        onToolChange(mode.id);
-                        setAngleMenuOpen(false);
-                      }}
-                    >
-                      <span className={styles.operationToolIcon}>
-                        {mode.icon}
-                      </span>
-                      <span className={styles.operationToolLabel}>
-                        {mode.label}
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          ) : null}
-        </div>
       </div>
     </div>
   );
