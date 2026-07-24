@@ -7,10 +7,51 @@ import {
 } from "../../components/viewer/placement";
 import { prepareRenderableMeshes } from "../../components/viewer/materials";
 import type {
+  AngleUncertaintyAnnotation,
   BendUncertaintyAnnotation,
   FuzzyCADUncertaintyAnnotation,
 } from "../uncertainty/document";
 import { bendGeometryInPlace } from "./bendDeform";
+
+/**
+ * Rotation transform for angle annotations: rotates the part2 mesh so the
+ * angle between face1Normal and face2Normal equals the target angleDeg.
+ * Mirrors the native-instance transform computed server-side, so the sketchy
+ * mesh overlay and the editable native copy land at the same pose.
+ *
+ * All vectors are in Onshape assembly coordinate space.
+ */
+function buildAngleRotationTransform(
+  annotation: AngleUncertaintyAnnotation,
+): THREE.Matrix4 | null {
+  const { face1Normal, face2Normal } = annotation;
+  const pivotPoint =
+    (annotation.pivot?.kind === "vertex" ? annotation.pivot.point : undefined) ??
+    annotation.pivotPoint;
+  if (!face1Normal || !face2Normal || !pivotPoint) return null;
+
+  const n1 = new THREE.Vector3(...face1Normal).normalize();
+  const n2 = new THREE.Vector3(...face2Normal).normalize();
+
+  const currentAngleRad = Math.acos(Math.max(-1, Math.min(1, n1.dot(n2))));
+  const deltaRad = (annotation.angleDeg * Math.PI) / 180 - currentAngleRad;
+
+  let hinge = new THREE.Vector3().crossVectors(n1, n2);
+  if (hinge.lengthSq() < 0.0001) {
+    hinge =
+      Math.abs(n1.y) < 0.9
+        ? new THREE.Vector3().crossVectors(new THREE.Vector3(0, 1, 0), n1)
+        : new THREE.Vector3().crossVectors(new THREE.Vector3(1, 0, 0), n1);
+  }
+  hinge.normalize();
+
+  const pivot = new THREE.Vector3(...pivotPoint);
+  const toOrigin = new THREE.Matrix4().makeTranslation(-pivot.x, -pivot.y, -pivot.z);
+  const rotation = new THREE.Matrix4().makeRotationAxis(hinge, deltaRad);
+  const fromOrigin = new THREE.Matrix4().makeTranslation(pivot.x, pivot.y, pivot.z);
+
+  return fromOrigin.multiply(rotation).multiply(toOrigin);
+}
 
 function getAnnotatedPathKeys(annotations: FuzzyCADUncertaintyAnnotation[]) {
   const pathKeys = new Set<string>();
@@ -210,20 +251,25 @@ export async function exportAnnotatedSelectionStl(input: {
   const sizePathKeys = getAnnotatedPathKeys(input.annotations);
 
   /**
-   * Angle (rotate) annotations are intentionally ABSENT here: rotated parts
-   * are deployed natively by the save route (a new instance of the original
-   * part with a rotated occurrence transform), so they stay parametric and
-   * editable. Only size marks and bend deformations need mesh export.
+   * Angle (rotate) annotations get BOTH deployments: the save route creates
+   * a native editable instance at the rotated pose, and this export adds a
+   * sketchy faceted mesh at the SAME pose so the copy is visually marked as
+   * an uncertainty overlay from the moment it appears.
    */
+  const angleAnnotations = input.annotations.filter(
+    (a): a is AngleUncertaintyAnnotation => a.type === "angle",
+  );
+
   const bendAnnotations = input.annotations.filter(
-    (a): a is import("../uncertainty/document").BendUncertaintyAnnotation =>
-      a.type === "bend",
+    (a): a is BendUncertaintyAnnotation => a.type === "bend",
   );
 
   const allStaticPathKeys = [...new Set(sizePathKeys)];
 
   const hasContent =
-    allStaticPathKeys.length > 0 || bendAnnotations.length > 0;
+    allStaticPathKeys.length > 0 ||
+    angleAnnotations.length > 0 ||
+    bendAnnotations.length > 0;
   if (!hasContent) return null;
 
   const loader = new GLTFLoader();
@@ -250,6 +296,27 @@ export async function exportAnnotatedSelectionStl(input: {
   const staticObjects = findTopLevelAnnotatedObjects(scene, allStaticPathKeys);
   for (const object of staticObjects) {
     exportRoot.add(cloneObjectInWorldSpace(object));
+  }
+
+  // Angle part2 objects: sketchy mesh clones rotated to the target angle —
+  // the visual companion of the native editable instance.
+  for (const annotation of angleAnnotations) {
+    const rotatingPathKeys = [
+      annotation.target.part2PathKey,
+      ...(annotation.target.relatedPart2PathKeys ?? []),
+    ];
+
+    const rotatingObjects = findTopLevelAnnotatedObjects(
+      scene,
+      rotatingPathKeys,
+    );
+    const transform = buildAngleRotationTransform(annotation);
+
+    for (const object of rotatingObjects) {
+      const clone = cloneObjectInWorldSpace(object, transform ?? undefined);
+      clone.name = `FuzzyCAD_AngleRotated__${object.name || annotation.id}`;
+      exportRoot.add(clone);
+    }
   }
 
   // Bend objects: clone with per-vertex crease deformation applied.
