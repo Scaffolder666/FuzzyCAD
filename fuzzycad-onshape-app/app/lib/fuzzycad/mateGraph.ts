@@ -10,6 +10,16 @@ export type MateGraphEdge = {
   a: string;
   b: string;
   mateType?: string | null;
+  /** Mate connector origin at each side, in Onshape assembly space. */
+  connectorA?: number[] | null;
+  connectorB?: number[] | null;
+  /**
+   * Mate connector rotation axis at each side (Onshape's z-axis convention —
+   * the axis REVOLUTE/CYLINDRICAL mates rotate about), in Onshape assembly
+   * space.
+   */
+  connectorAxisA?: number[] | null;
+  connectorAxisB?: number[] | null;
 };
 
 /**
@@ -83,4 +93,55 @@ export function findMateConnectedParts(
   }
 
   return result;
+}
+
+/** Mate types that define an actual rotational hinge with a well-defined axis. */
+const ROTATIONAL_MATE_TYPES = new Set(["REVOLUTE", "CYLINDRICAL"]);
+
+export type MateHinge = {
+  /** Hinge origin, in Onshape assembly space. */
+  origin: [number, number, number];
+  /** Hinge rotation axis, in Onshape assembly space (not necessarily unit length). */
+  axis: [number, number, number];
+  mateType: string;
+};
+
+/**
+ * Finds a REVOLUTE/CYLINDRICAL mate directly connecting the two given
+ * occurrence pathKeys — an exact edge match, not a BFS through rigid groups,
+ * mirroring the granularity Onshape reports mate edges at (matches only the
+ * two occurrences the mate feature itself references).
+ *
+ * When present, this is ground truth: the joint's real hinge geometry,
+ * rather than an axis derived from whichever two triangles the user
+ * happened to click. Callers should prefer this over face-normal-derived
+ * hinges and fall back only when it returns null (no direct rotational mate
+ * between the two parts).
+ */
+export function findDirectRotationalMate(
+  pathKeyA: string,
+  pathKeyB: string,
+  edges: MateGraphEdge[],
+): MateHinge | null {
+  for (const edge of edges) {
+    const mateType = edge.mateType?.toUpperCase();
+    if (!mateType || !ROTATIONAL_MATE_TYPES.has(mateType)) continue;
+
+    const matches =
+      (edge.a === pathKeyA && edge.b === pathKeyB) ||
+      (edge.a === pathKeyB && edge.b === pathKeyA);
+    if (!matches) continue;
+
+    const origin = edge.connectorA ?? edge.connectorB;
+    const axis = edge.connectorAxisA ?? edge.connectorAxisB;
+    if (!origin || origin.length !== 3 || !axis || axis.length !== 3) continue;
+
+    return {
+      origin: [origin[0], origin[1], origin[2]],
+      axis: [axis[0], axis[1], axis[2]],
+      mateType,
+    };
+  }
+
+  return null;
 }

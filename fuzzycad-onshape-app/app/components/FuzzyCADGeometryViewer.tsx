@@ -30,7 +30,7 @@ import {
   selectPathKeysByLasso,
   type ScreenPoint,
 } from "./viewer/lassoObjectSelection";
-import { buildObjectSummaries } from "./viewer/objectSummary";
+import { buildObjectSummaries, snapNormalToObbFace } from "./viewer/objectSummary";
 import type { AxialStretchObjectSummary } from "../lib/operations/axialStretchTypes";
 import {
   findObjectsByPathKeys,
@@ -41,6 +41,7 @@ import {
 } from "./viewer/manipulation";
 import {
   findMateConnectedParts,
+  findDirectRotationalMate,
   type MateGraphEdge,
 } from "../lib/fuzzycad/mateGraph";
 import { bendGeometryInPlace } from "../lib/fuzzycad/bendDeform";
@@ -174,6 +175,17 @@ type HandleConfig =
       objects: THREE.Object3D[];
     }
   | null;
+
+/**
+ * Convert a vector/point from Onshape assembly space into Three.js viewer
+ * world space — the inverse of fuzzycad-home.tsx's viewerToOnshape, undoing
+ * the same scene.rotation.x = -π/2 display rotation: onshape (x, y, z) →
+ * viewer (x, z, -y). A proper rotation, so it's valid for both points and
+ * direction vectors (e.g. a mate connector's axis).
+ */
+function onshapeToViewer(v: number[]): THREE.Vector3 {
+  return new THREE.Vector3(v[0], v[2], -v[1]);
+}
 
 function midpoint(a: [number, number, number], b: [number, number, number]) {
   return [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2] as [
@@ -2056,6 +2068,18 @@ function Model({
         faceNormal = localNormal.applyMatrix3(normalMatrix).normalize();
       }
 
+      // Snap the raw triangle normal to the nearest of the part's 6 OBB face
+      // normals. Without this, two clicks a few pixels apart on a faceted or
+      // curved region can land on different triangles and silently change
+      // the measured angle/hinge axis; this collapses that to one of 6
+      // canonical directions per part, so nearby clicks agree.
+      const clickedSummary = objectSummaries.find(
+        (summary) => summary.pathKey === selectedPathKey,
+      );
+      if (clickedSummary) {
+        faceNormal = snapNormalToObbFace(faceNormal, clickedSummary);
+      }
+
       // Step 1: pivot point — snapped to the nearest mesh vertex; the face
       // it sits on doubles as the fixed-side reference for rotations.
       if (!angleVertex) {
@@ -2074,15 +2098,62 @@ function Model({
       if (!angleFace2) {
         if (selectedPathKey !== angleVertex.pathKey) {
           // Different part → rotate. The pivot click already provided the
-          // fixed-side face, so this single click completes the selection.
+          // fixed-side face, so this single click completes the selection —
+          // unless a real REVOLUTE/CYLINDRICAL mate directly connects the
+          // two parts, in which case that joint's actual axis/origin is
+          // ground truth and replaces the clicked-vertex geometry entirely.
+          const directMate = findDirectRotationalMate(
+            angleVertex.pathKey,
+            selectedPathKey,
+            angleMateEdges ?? [],
+          );
+          const mateAxis = directMate
+            ? onshapeToViewer(directMate.axis)
+            : null;
+
+          let face1FaceNormal = angleVertex.faceNormal.clone();
+          let face2FaceNormal = faceNormal;
+          let pivotPoint = angleVertex.point.clone();
+
+          if (directMate && mateAxis && mateAxis.lengthSq() > 1e-8) {
+            mateAxis.normalize();
+            pivotPoint = onshapeToViewer(directMate.origin);
+
+            // Encode the mate axis as a synthetic perpendicular normal pair
+            // so the existing n1×n2 hinge math (here and in the save
+            // pipeline's buildAngleDeltaMatrix) reconstructs this exact
+            // axis with no schema or save-route changes needed. These are
+            // NOT real clicked face normals in this path — n1·n2 is fixed
+            // at 0 (a 90° reference) purely so "measured" is a stable
+            // baseline for the target-angle delta math.
+            const reference =
+              Math.abs(mateAxis.y) < 0.9
+                ? new THREE.Vector3(0, 1, 0)
+                : new THREE.Vector3(1, 0, 0);
+            face1FaceNormal = reference
+              .clone()
+              .sub(mateAxis.clone().multiplyScalar(reference.dot(mateAxis)))
+              .normalize();
+            face2FaceNormal = mateAxis.clone().cross(face1FaceNormal).normalize();
+
+            // Re-seat the pivot at the joint's real origin (not the clicked
+            // vertex) so the arc overlay, live preview, and saved annotation
+            // all hinge there.
+            setAngleVertex({
+              pathKey: angleVertex.pathKey,
+              point: pivotPoint,
+              faceNormal: face1FaceNormal,
+            });
+          }
+
           const face1 = {
             pathKey: angleVertex.pathKey,
-            faceNormal: angleVertex.faceNormal.clone(),
-            hitPoint: angleVertex.point.clone(),
+            faceNormal: face1FaceNormal,
+            hitPoint: pivotPoint,
           };
           const face2 = {
             pathKey: selectedPathKey,
-            faceNormal,
+            faceNormal: face2FaceNormal,
             hitPoint: event.point.clone(),
           };
           const cosAngle = Math.max(
