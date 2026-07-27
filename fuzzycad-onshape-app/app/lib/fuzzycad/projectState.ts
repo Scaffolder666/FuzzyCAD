@@ -89,9 +89,19 @@ export type FuzzyCADGeneratedGeometryManifest = {
 export type FuzzyCADGeneratedVisualObject = {
   id: string;
   annotationId: string;
-  kind: "blur-shell" | "direction-arrow" | "dashed-line" | "placeholder-mesh";
+  kind:
+    | "blur-shell"
+    | "direction-arrow"
+    | "dashed-line"
+    | "placeholder-mesh"
+    | "angle-rotated-part"
+    | "bent-part";
   targetPathKeys: string[];
   axis?: "x" | "y" | "z";
+  /** For angle-rotated-part: the target angle in degrees. */
+  angleDeg?: number;
+  /** For bent-part: the bend adjustment in degrees. */
+  deltaDeg?: number;
 };
 
 export function createEmptyGeneratedGeometryState(): FuzzyCADGeneratedGeometryState {
@@ -176,29 +186,48 @@ export function buildGeneratedGeometryManifest(
   const visualObjects: FuzzyCADGeneratedVisualObject[] = [];
 
   for (const annotation of annotations) {
-    if (annotation.type !== "size") {
-      continue;
-    }
+    if (annotation.type === "size") {
+      const uncertainAxes = (["x", "y", "z"] as const).filter(
+        (axis) => annotation.confidence[axis] !== "high",
+      );
 
-    const uncertainAxes = (["x", "y", "z"] as const).filter(
-      (axis) => annotation.confidence[axis] !== "high",
-    );
+      for (const axis of uncertainAxes) {
+        visualObjects.push({
+          id: `${annotation.id}:blur-shell:${axis}`,
+          annotationId: annotation.id,
+          kind: "blur-shell",
+          targetPathKeys: annotation.target.pathKeys,
+          axis,
+        });
 
-    for (const axis of uncertainAxes) {
+        visualObjects.push({
+          id: `${annotation.id}:direction-arrow:${axis}`,
+          annotationId: annotation.id,
+          kind: "direction-arrow",
+          targetPathKeys: annotation.target.pathKeys,
+          axis,
+        });
+      }
+    } else if (annotation.type === "angle") {
+      // Angle annotation: represent as a rotated version of part2
       visualObjects.push({
-        id: `${annotation.id}:blur-shell:${axis}`,
+        id: `${annotation.id}:angle-rotated-part`,
         annotationId: annotation.id,
-        kind: "blur-shell",
-        targetPathKeys: annotation.target.pathKeys,
-        axis,
+        kind: "angle-rotated-part",
+        targetPathKeys: [
+          annotation.target.part1PathKey,
+          annotation.target.part2PathKey,
+        ],
+        angleDeg: annotation.angleDeg,
       });
-
+    } else if (annotation.type === "bend") {
+      // Bend annotation: represent as a crease-deformed copy of the part
       visualObjects.push({
-        id: `${annotation.id}:direction-arrow:${axis}`,
+        id: `${annotation.id}:bent-part`,
         annotationId: annotation.id,
-        kind: "direction-arrow",
-        targetPathKeys: annotation.target.pathKeys,
-        axis,
+        kind: "bent-part",
+        targetPathKeys: [annotation.target.pathKey],
+        deltaDeg: annotation.deltaDeg,
       });
     }
   }

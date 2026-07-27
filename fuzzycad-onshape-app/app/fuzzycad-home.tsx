@@ -18,6 +18,8 @@ import type {
 } from "./components/FuzzyCADGeometryViewer";
 import { usePartGraph } from "./hooks/usePartGraph";
 import {
+  clearAssemblySessionCache,
+  fetchFuzzycadAssemblyData,
   fetchFuzzycadAssemblySummary,
   fetchFuzzycadRelationshipGraph,
   fetchOnshapeAssembly,
@@ -56,6 +58,10 @@ import {
 import { useUncertaintyDocument } from "./hooks/useUncertaintyDocument";
 import { buildFuzzyCADProjectState } from "./lib/fuzzycad/projectState";
 import { exportAnnotatedSelectionStl } from "./lib/fuzzycad/exportAnnotatedSelectionStl";
+import {
+  findMateConnectedParts,
+  type MateGraphEdge,
+} from "./lib/fuzzycad/mateGraph";
 
 const FuzzyCADGeometryViewer = dynamic(
   () => import("./components/FuzzyCADGeometryViewer"),
@@ -82,6 +88,18 @@ function isElementArray(data: unknown): data is OnshapeElement[] {
 }
 
 
+
+/**
+ * Convert a vector/point from Three.js viewer world space to Onshape assembly
+ * space by undoing the viewer's scene.rotation.x = -π/2 display rotation:
+ * viewer (x, y, z) → onshape (x, -z, y).
+ */
+function viewerToOnshape(
+  v?: [number, number, number],
+): [number, number, number] | undefined {
+  if (!v) return undefined;
+  return [v[0], -v[2], v[1]];
+}
 
 export default function FuzzyCADHome() {
   const params = useSearchParams();
@@ -159,6 +177,38 @@ export default function FuzzyCADHome() {
   const [busy, setBusy] = useState<boolean>(false);
   const [activeTool, setActiveTool] = useState<OperationTool>("select");
 
+  const [pendingAngle, setPendingAngle] = useState<{
+    part1PathKey: string;
+    part2PathKey: string;
+    /** Target angle (deg) the user is editing toward. */
+    angleDeg: number;
+    /** Angle between the two selected face normals as clicked (deg). */
+    measuredAngleDeg?: number;
+    /** Face normals in viewer world space (scene.rotation.x = -π/2 applied). */
+    face1NormalViewer?: [number, number, number];
+    face2NormalViewer?: [number, number, number];
+    /** Snapped pivot vertex in viewer world space. */
+    pivotViewer?: [number, number, number];
+  } | null>(null);
+  const [pendingAngleComment, setPendingAngleComment] = useState("");
+  /** Incremented to tell the viewer to clear its angle/bend selection + preview. */
+  const [angleResetNonce, setAngleResetNonce] = useState(0);
+
+  const [pendingBend, setPendingBend] = useState<{
+    pathKey: string;
+    deltaDeg: number;
+    /** Crease + plane in viewer world space (converted on save). */
+    creaseStartViewer: [number, number, number];
+    creaseEndViewer: [number, number, number];
+    planeNormalViewer: [number, number, number];
+    bendSideSign: 1 | -1;
+    bandWidth?: number;
+  } | null>(null);
+  const [pendingBendComment, setPendingBendComment] = useState("");
+  const [pendingBendProfile, setPendingBendProfile] = useState<
+    "sharp" | "radius"
+  >("radius");
+
   const [pendingHeightRolePreview, setPendingHeightRolePreview] =
     useState<RolePreviewPlan | null>(null);
   const [confirmedHeightPlan, setConfirmedHeightPlan] =
@@ -213,6 +263,8 @@ export default function FuzzyCADHome() {
     deleteAnnotation,
     replaceUncertaintyDocument,
     updateAnnotationComment,
+    saveAngleMark,
+    saveBendMark,
   } = useUncertaintyDocument(currentUncertaintySource);
 
   const assemblyElements = useMemo(() => {
@@ -455,6 +507,27 @@ export default function FuzzyCADHome() {
     setRelationshipGraphResult(data);
   }
 
+  /**
+   * Fetch both the relationship graph and assembly summary in a single request,
+   * saving one Onshape API call on cache-miss and one HTTP round-trip.
+   * The combined ApiResult has both `graph` and `summary` fields populated.
+   */
+  async function loadAssemblyData(options: LoadOptions = {}) {
+    const data = await fetchFuzzycadAssemblyData({
+      documentId: documentId || "",
+      workspaceId: workspaceId || "",
+      assemblyElementId: selectedAssemblyId,
+      server,
+      force: options.force,
+    });
+
+    // Both hooks (usePartGraph, useAssemblyPlacementTree) read `result.graph`
+    // from ApiResult. The combined response sets `graph` at the top level.
+    setRelationshipGraphResult(data);
+    // Dev panel shows this as a debug value; summary is at `data.summary`.
+    setAssemblySummaryResult(data);
+  }
+
   async function loadSelectedAssembly() {
     if (!selectedAssemblyId) {
       return;
@@ -463,8 +536,12 @@ export default function FuzzyCADHome() {
     setBusy(true);
 
     try {
-      await buildRelationshipGraph();
-      await loadAssemblyGeometry();
+      // Combined endpoint fetches assembly once and returns graph + summary.
+      // Geometry load is run in parallel with the combined call.
+      await Promise.all([
+        loadAssemblyData(),
+        loadAssemblyGeometry(),
+      ]);
       await loadProjectStateFromOnshape();
     } finally {
       setBusy(false);
@@ -641,6 +718,88 @@ export default function FuzzyCADHome() {
     updateAnnotationComment(annotationId, comment);
   }
 
+  /** Mate edges from the relationship graph (already fetched — no extra API calls). */
+  const mateEdges = useMemo<MateGraphEdge[]>(() => {
+    const data = relationshipGraphResult?.data as
+      | Record<string, unknown>
+      | undefined;
+    return Array.isArray(data?.mateEdges)
+      ? (data.mateEdges as MateGraphEdge[])
+      : [];
+  }, [relationshipGraphResult]);
+
+  /** Clear pending-angle UI state and tell the viewer to reset its selection + preview. */
+  function finishPendingAngle() {
+    setPendingAngle(null);
+    setPendingAngleComment("");
+    setAngleResetNonce((nonce) => nonce + 1);
+  }
+
+  /**
+   * Save the pending angle mark for each given part2 pathKey (one annotation
+   * per instance for "apply to all"), then reset the angle tool.
+   */
+  function commitPendingAngle(part2PathKeys: string[]) {
+    if (!pendingAngle) return;
+
+    for (const part2PathKey of part2PathKeys) {
+      const related = findMateConnectedParts(
+        part2PathKey,
+        pendingAngle.part1PathKey,
+        mateEdges,
+      );
+
+      const pivotPoint = viewerToOnshape(pendingAngle.pivotViewer);
+
+      saveAngleMark({
+        part1PathKey: pendingAngle.part1PathKey,
+        part2PathKey,
+        relatedPart2PathKeys: related.length > 0 ? related : undefined,
+        angleDeg: pendingAngle.angleDeg,
+        face1Normal: viewerToOnshape(pendingAngle.face1NormalViewer),
+        face2Normal: viewerToOnshape(pendingAngle.face2NormalViewer),
+        pivotPoint,
+        pivot: pivotPoint ? { kind: "vertex", point: pivotPoint } : undefined,
+        comment: pendingAngleComment || undefined,
+      });
+    }
+
+    finishPendingAngle();
+    setActiveTool("select");
+  }
+
+  /** Clear pending-bend UI state and reset the viewer's bend selection + preview. */
+  function finishPendingBend() {
+    setPendingBend(null);
+    setPendingBendComment("");
+    setAngleResetNonce((nonce) => nonce + 1);
+  }
+
+  function commitPendingBend() {
+    if (!pendingBend) return;
+
+    const creaseStart = viewerToOnshape(pendingBend.creaseStartViewer);
+    const creaseEnd = viewerToOnshape(pendingBend.creaseEndViewer);
+    const planeNormal = viewerToOnshape(pendingBend.planeNormalViewer);
+
+    if (!creaseStart || !creaseEnd || !planeNormal) return;
+
+    saveBendMark({
+      pathKey: pendingBend.pathKey,
+      deltaDeg: pendingBend.deltaDeg,
+      creaseStart,
+      creaseEnd,
+      planeNormal,
+      bendSideSign: pendingBend.bendSideSign,
+      profile: pendingBendProfile,
+      bandWidth: pendingBend.bandWidth,
+      comment: pendingBendComment || undefined,
+    });
+
+    finishPendingBend();
+    setActiveTool("select");
+  }
+
 async function saveProjectStateToOnshape() {
   if (!documentId || !workspaceId) {
     console.warn("Missing documentId or workspaceId");
@@ -662,7 +821,20 @@ async function saveProjectStateToOnshape() {
         })
       : null;
 
-  console.log("Annotated selection STL:", annotatedSelectionStl);
+  const angleAnnotationCount =
+    uncertaintyDocumentWithCurrentSource.annotations.filter(
+      (annotation) => annotation.type === "angle",
+    ).length;
+  const bendAnnotationCount =
+    uncertaintyDocumentWithCurrentSource.annotations.filter(
+      (annotation) => annotation.type === "bend",
+    ).length;
+
+  console.log(
+    `[FuzzyCAD] Save to Onshape: ${uncertaintyDocumentWithCurrentSource.annotations.length} annotation(s) (${angleAnnotationCount} angle, ${bendAnnotationCount} bend). STL: ${
+      annotatedSelectionStl ? `${annotatedSelectionStl.size} bytes` : "none generated"
+    }`,
+  );
 
   const result = await saveFuzzycadProject(
     {
@@ -751,6 +923,15 @@ if (result.ok && result.state) {
   }
 
   function handleAssemblyChange(assemblyId: string) {
+    // Clear the previous assembly's client-side session cache before switching
+    if (selectedAssemblyId && documentId && workspaceId) {
+      clearAssemblySessionCache({
+        documentId,
+        workspaceId,
+        assemblyElementId: selectedAssemblyId,
+        server,
+      });
+    }
     setSelectedAssemblyId(assemblyId);
     resetGeometryState();
     setGeometryZipManifest(null);
@@ -829,6 +1010,107 @@ if (result.ok && result.state) {
             setHighlightedPathKey(pathKeys[0] ?? null);
             leaveUncertaintyEditingState();
           }}
+          angleTargetDeg={
+            activeTool === "angle" ? pendingAngle?.angleDeg ?? null : null
+          }
+          angleMateEdges={mateEdges}
+          angleResetNonce={angleResetNonce}
+          onAngleSelection={({
+            part1PathKey,
+            part2PathKey,
+            angleDeg,
+            measuredAngleDeg,
+            face1Normal,
+            face2Normal,
+            pivot,
+          }) => {
+            // Fires when the vertex + two-face selection completes, and again
+            // on every arc-handle drag. Just keep pendingAngle in sync — the
+            // "apply to similar parts" check happens at save time instead.
+            setPendingAngle((previous) => {
+              const next = {
+                part1PathKey,
+                part2PathKey,
+                angleDeg,
+                measuredAngleDeg,
+                face1NormalViewer: face1Normal,
+                face2NormalViewer: face2Normal,
+                pivotViewer: pivot,
+              };
+
+              const samePivot =
+                previous?.pivotViewer && pivot
+                  ? previous.pivotViewer.every(
+                      (value, index) => Math.abs(value - pivot[index]) < 1e-9,
+                    )
+                  : previous?.pivotViewer === pivot;
+
+              if (
+                previous &&
+                previous.part1PathKey === part1PathKey &&
+                previous.part2PathKey === part2PathKey &&
+                samePivot &&
+                Math.abs(previous.angleDeg - angleDeg) < 1e-4
+              ) {
+                return previous;
+              }
+
+              return next;
+            });
+          }}
+          onAngleModeSwitch={(mode) => {
+            // Internal mode switch of the unified angle tool: change the
+            // active tool WITHOUT bumping the reset nonce so the viewer's
+            // seeded selection (the user's first click) survives.
+            setActiveTool(mode);
+            if (mode === "bend") {
+              setPendingAngle(null);
+              setPendingAngleComment("");
+            } else {
+              setPendingBend(null);
+              setPendingBendComment("");
+            }
+          }}
+          bendDeltaDeg={
+            activeTool === "bend" ? pendingBend?.deltaDeg ?? null : null
+          }
+          bendProfile={pendingBendProfile}
+          onBendSelection={({
+            pathKey,
+            deltaDeg,
+            creaseStart,
+            creaseEnd,
+            planeNormal,
+            bendSideSign,
+            bandWidth,
+          }) => {
+            setPendingBend((previous) => {
+              if (
+                previous &&
+                previous.pathKey === pathKey &&
+                previous.bendSideSign === bendSideSign &&
+                Math.abs(previous.deltaDeg - deltaDeg) < 1e-4 &&
+                previous.creaseStartViewer.every(
+                  (value, index) => Math.abs(value - creaseStart[index]) < 1e-9,
+                ) &&
+                previous.creaseEndViewer.every(
+                  (value, index) => Math.abs(value - creaseEnd[index]) < 1e-9,
+                )
+              ) {
+                return previous;
+              }
+
+              return {
+                pathKey,
+                deltaDeg,
+                creaseStartViewer: creaseStart,
+                creaseEndViewer: creaseEnd,
+                planeNormalViewer: planeNormal,
+                bendSideSign,
+                bandWidth,
+              };
+            });
+          }}
         />
 
         <OperationToolbar
@@ -837,7 +1119,21 @@ if (result.ok && result.state) {
           onToolChange={(tool) => {
             if (tool === "height") {
               startHeightUncertainty();
+              setPendingAngle(null);
+              setPendingAngleComment("");
+              setPendingBend(null);
+              setPendingBendComment("");
               return;
+            }
+
+            if (tool !== "angle") {
+              setPendingAngle(null);
+              setPendingAngleComment("");
+            }
+
+            if (tool !== "bend") {
+              setPendingBend(null);
+              setPendingBendComment("");
             }
 
             setActiveTool(tool);
@@ -857,6 +1153,32 @@ if (result.ok && result.state) {
           onDeleteAnnotation={deleteUncertaintyCard}
           onCommentChange={updateUncertaintyCardComment}
           onSaveToOnshape={() => void saveProjectStateToOnshape()}
+          pendingAngle={activeTool === "angle" ? pendingAngle : null}
+          pendingAngleComment={pendingAngleComment}
+          onPendingAngleCommentChange={setPendingAngleComment}
+          onSaveAngle={() => {
+            if (!pendingAngle) return;
+            // Save only the rotated part — no "apply to related parts" prompt.
+            commitPendingAngle([pendingAngle.part2PathKey]);
+          }}
+          onCancelAngle={finishPendingAngle}
+          pendingBend={activeTool === "bend" ? pendingBend : null}
+          pendingBendComment={pendingBendComment}
+          pendingBendProfile={pendingBendProfile}
+          onPendingBendProfileChange={setPendingBendProfile}
+          onPendingBendCommentChange={setPendingBendComment}
+          onPendingBendValueChange={(deltaDeg) => {
+            if (pendingBend) {
+              setPendingBend({ ...pendingBend, deltaDeg });
+            }
+          }}
+          onSaveBend={commitPendingBend}
+          onCancelBend={finishPendingBend}
+          onPendingAngleValueChange={(deg) => {
+            if (pendingAngle) {
+              setPendingAngle({ ...pendingAngle, angleDeg: deg });
+            }
+          }}
         />
 
         {heightCandidateOpen ? (
@@ -864,18 +1186,18 @@ if (result.ok && result.state) {
             operation="height"
             title={
               heightCandidatePathKeys.length > 0
-                ? "Related objects found"
+                ? "Modify related components?"
                 : "Select one object first"
             }
             description={
               heightCandidatePathKeys.length > 1
-                ? `FuzzyCAD found ${
+                ? `${
                     heightCandidatePathKeys.length - 1 === 1
-                      ? "one related object"
-                      : `${heightCandidatePathKeys.length - 1} related objects`
-                  }. You can annotate only the selected object, or apply the same size uncertainty annotation to the related objects as a group.`
+                      ? "1 similar component was"
+                      : `${heightCandidatePathKeys.length - 1} similar components were`
+                  } found. Apply this annotation to all of them, or just the selected one.`
                 : heightCandidatePathKeys.length === 1
-                  ? "FuzzyCAD did not find other similar objects. You can still annotate the selected object."
+                  ? "No similar components found. Continuing will annotate only the selected object."
                   : "Click one object in the viewer, then click Size."
             }
             suggestedObjects={
@@ -885,7 +1207,7 @@ if (result.ok && result.state) {
             }
             confirmLabel={
               heightCandidatePathKeys.length > 1
-                ? "Include related"
+                ? "Apply to all"
                 : "Continue"
             }
             secondaryConfirmLabel={
@@ -938,6 +1260,7 @@ if (result.ok && result.state) {
             }}
           />
         ) : null}
+
       </div>
 
       {dev ? (

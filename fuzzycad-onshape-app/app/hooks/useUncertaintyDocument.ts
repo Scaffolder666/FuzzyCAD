@@ -1,5 +1,7 @@
 import { useMemo, useState } from "react";
 import {
+  addAngleAnnotation,
+  addBendAnnotation,
   createEmptyUncertaintyDocument,
   removeSizeAnnotationsForPathKeys,
   removeUncertaintyAnnotationById,
@@ -97,6 +99,39 @@ export function useUncertaintyDocument(source: FuzzyCADUncertaintySource) {
     );
   }
 
+  function saveAngleMark(input: {
+    part1PathKey: string;
+    part2PathKey: string;
+    /** All occurrences that move rigidly with part2 (from mate graph BFS). */
+    relatedPart2PathKeys?: string[];
+    angleDeg: number;
+    face1Normal?: [number, number, number];
+    face2Normal?: [number, number, number];
+    pivotPoint?: [number, number, number];
+    pivot?: import("../lib/uncertainty/document").AnglePivot;
+    comment?: string;
+  }) {
+    setUncertaintyDocument((previous) =>
+      addAngleAnnotation({ ...previous, source }, input),
+    );
+  }
+
+  function saveBendMark(input: {
+    pathKey: string;
+    deltaDeg: number;
+    creaseStart: [number, number, number];
+    creaseEnd: [number, number, number];
+    planeNormal: [number, number, number];
+    bendSideSign: 1 | -1;
+    profile?: "sharp" | "radius";
+    bandWidth?: number;
+    comment?: string;
+  }) {
+    setUncertaintyDocument((previous) =>
+      addBendAnnotation({ ...previous, source }, input),
+    );
+  }
+
   return {
     uncertaintyDocument,
     uncertaintyDocumentWithCurrentSource,
@@ -107,5 +142,7 @@ export function useUncertaintyDocument(source: FuzzyCADUncertaintySource) {
     removeSizeMarks,
     deleteAnnotation,
     updateAnnotationComment,
+    saveAngleMark,
+    saveBendMark,
   };
 }

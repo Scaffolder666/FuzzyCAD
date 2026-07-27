@@ -482,6 +482,12 @@ type MateMember = {
   occurrencePath: string[];
   occurrencePathKey: string;
   connectorOrigin: number[] | null;
+  /**
+   * Mate connector rotation axis (Onshape's z-axis convention: REVOLUTE and
+   * CYLINDRICAL mates rotate about this axis), in Onshape assembly space.
+   * Null for mate types where this doesn't apply / wasn't present.
+   */
+  connectorAxis: number[] | null;
 };
 type MateFeatureNode = {
   featureId: string | null;
@@ -496,6 +502,9 @@ type MateEdge = {
   featureId: string | null;
   connectorA: number[] | null;
   connectorB: number[] | null;
+  /** Rotation axis at each side's mate connector (see MateMember.connectorAxis). */
+  connectorAxisA: number[] | null;
+  connectorAxisB: number[] | null;
 };
 
 function asStringArray(value: unknown): string[] {
@@ -504,12 +513,15 @@ function asStringArray(value: unknown): string[] {
     : [];
 }
 
-function getOrigin(cs: unknown): number[] | null {
+function getVec3Field(cs: unknown, keys: string[]): number[] | null {
   if (!isRecord(cs)) return null;
-  const origin = cs.origin;
-  return Array.isArray(origin) && origin.every((n) => typeof n === "number")
-    ? (origin as number[])
-    : null;
+  for (const key of keys) {
+    const value = cs[key];
+    if (Array.isArray(value) && value.every((n) => typeof n === "number")) {
+      return value as number[];
+    }
+  }
+  return null;
 }
 
 function extractMateMembers(featureData: UnknownRecord): MateMember[] {
@@ -527,7 +539,9 @@ function extractMateMembers(featureData: UnknownRecord): MateMember[] {
       return {
         occurrencePath: path,
         occurrencePathKey: path.join("/"),
-        connectorOrigin: getOrigin(cs),
+        connectorOrigin: getVec3Field(cs, ["origin"]),
+        // Onshape mate connectors rotate about their local z-axis.
+        connectorAxis: getVec3Field(cs, ["zAxis"]),
       };
     })
     .filter((m): m is MateMember => m !== null);
@@ -573,6 +587,8 @@ function buildMateEdges(mates: MateFeatureNode[]): MateEdge[] {
           featureId: mate.featureId,
           connectorA: a.connectorOrigin,
           connectorB: b.connectorOrigin,
+          connectorAxisA: a.connectorAxis,
+          connectorAxisB: b.connectorAxis,
         });
       }
     }

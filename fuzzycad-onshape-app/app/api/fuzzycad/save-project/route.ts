@@ -3,7 +3,10 @@ import {
   clearElementsCache,
   getCachedElements,
 } from "../../../lib/server/onshapeElementsCache";
-import { clearAssemblyCache } from "../../../lib/server/onshapeAssemblyCache";
+import {
+  clearAssemblyCache,
+  getCachedAssembly,
+} from "../../../lib/server/onshapeAssemblyCache";
 import { onshapeFetch, parseJsonOrText } from "../../../lib/server/onshapeApi";
 
 const PROJECT_STATE_FILENAME = "fuzzycad-project-state.json";
@@ -478,29 +481,22 @@ async function getAssemblyDefinitionForOverlay(input: {
   assemblyElementId: string;
   accessToken: string;
 }) {
-  const endpoint = `${input.server}/api/assemblies/d/${input.documentId}/w/${input.workspaceId}/e/${input.assemblyElementId}`;
-
-  const res = await onshapeFetch(
-    endpoint,
-    {
-      method: "GET",
-      headers: {
-        Authorization: `Bearer ${input.accessToken}`,
-        Accept: "application/json",
-      },
-    },
-    {
-      route: "/api/fuzzycad/save-project",
-      operation: "get-selected-assembly-before-overlay-insert",
-    },
-  );
-
-  return {
-    ok: res.ok,
-    status: res.status,
-    endpoint,
-    data: await parseJsonOrText(res),
-  };
+  /**
+   * force: true is critical in the save path. Overlay skip/replace/insert
+   * decisions are made from this assembly definition; a stale cached copy
+   * (primed while the panel was interacting) can list overlay instances that
+   * were deleted — silently skipping insertion — or miss ones that exist.
+   * Save is an explicit user action, so one fresh read here is acceptable.
+   */
+  return getCachedAssembly({
+    server: input.server,
+    documentId: input.documentId,
+    workspaceId: input.workspaceId,
+    assemblyElementId: input.assemblyElementId,
+    accessToken: input.accessToken,
+    route: "/api/fuzzycad/save-project",
+    force: true,
+  });
 }
 
 function getAssemblyInstances(data: unknown) {
@@ -812,6 +808,8 @@ async function findExistingFuzzyCadOverlayBeforeImport(input: {
     workspaceId: input.workspaceId,
     accessToken: input.accessToken,
     route: "/api/fuzzycad/save-project",
+    // Fresh read: stale elements can hide previously imported visualization
+    // layers, which corrupts the skip/replace decision below.
     force: true,
   });
 
@@ -999,6 +997,22 @@ async function deleteAssemblyInstance(input: {
     }
   }
 
+  // If every endpoint said 404 the instance is already gone (e.g. the user
+  // deleted it manually) — treat that as success so the save can proceed.
+  const allNotFound = attempts.every(
+    (attempt) => typeof attempt.status === "number" && attempt.status === 404,
+  );
+
+  if (allNotFound && attempts.length > 0) {
+    return {
+      ok: true,
+      status: 404,
+      mode: "instance-already-deleted",
+      instanceId: input.instanceId,
+      attempts,
+    };
+  }
+
   return {
     ok: false,
     mode: "failed-to-delete-assembly-instance",
@@ -1070,6 +1084,454 @@ async function deleteExistingFuzzyCadOverlayInstances(input: {
     mode: "deleted-existing-fuzzycad-overlay-instances",
     deletedCount: deleted.length,
     deleted,
+  };
+}
+
+// ── Native angle overlays ────────────────────────────────────────────────
+// Rotated parts are deployed as REAL instances of the original part with a
+// rotated occurrence transform — fully parametric/editable in Onshape and
+// exportable as STEP, unlike mesh imports.
+
+type Vec3 = [number, number, number];
+
+/** Multiply two row-major 4x4 matrices: result = a × b. */
+function multiplyRowMajor4x4(a: number[], b: number[]): number[] {
+  const result = new Array<number>(16).fill(0);
+  for (let row = 0; row < 4; row++) {
+    for (let col = 0; col < 4; col++) {
+      let sum = 0;
+      for (let k = 0; k < 4; k++) {
+        sum += a[row * 4 + k] * b[k * 4 + col];
+      }
+      result[row * 4 + col] = sum;
+    }
+  }
+  return result;
+}
+
+function normalizeVec3(v: Vec3): Vec3 | null {
+  const length = Math.hypot(v[0], v[1], v[2]);
+  if (length < 1e-12) return null;
+  return [v[0] / length, v[1] / length, v[2] / length];
+}
+
+function crossVec3(a: Vec3, b: Vec3): Vec3 {
+  return [
+    a[1] * b[2] - a[2] * b[1],
+    a[2] * b[0] - a[0] * b[2],
+    a[0] * b[1] - a[1] * b[0],
+  ];
+}
+
+function dotVec3(a: Vec3, b: Vec3): number {
+  return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+}
+
+/**
+ * Row-major 4x4 for a rotation of `angleRad` around `axis` passing through
+ * `pivot` (Rodrigues form composed with translate-to/from pivot).
+ */
+function rotationAboutAxisThroughPoint(
+  axis: Vec3,
+  angleRad: number,
+  pivot: Vec3,
+): number[] {
+  const [x, y, z] = axis;
+  const c = Math.cos(angleRad);
+  const s = Math.sin(angleRad);
+  const t = 1 - c;
+
+  // Rotation part (row-major 3x3)
+  const r00 = t * x * x + c;
+  const r01 = t * x * y - s * z;
+  const r02 = t * x * z + s * y;
+  const r10 = t * x * y + s * z;
+  const r11 = t * y * y + c;
+  const r12 = t * y * z - s * x;
+  const r20 = t * x * z - s * y;
+  const r21 = t * y * z + s * x;
+  const r22 = t * z * z + c;
+
+  // Translation = pivot - R * pivot
+  const [px, py, pz] = pivot;
+  const tx = px - (r00 * px + r01 * py + r02 * pz);
+  const ty = py - (r10 * px + r11 * py + r12 * pz);
+  const tz = pz - (r20 * px + r21 * py + r22 * pz);
+
+  return [r00, r01, r02, tx, r10, r11, r12, ty, r20, r21, r22, tz, 0, 0, 0, 1];
+}
+
+function getVec3Field(record: UnknownRecord, key: string): Vec3 | null {
+  const value = record[key];
+  if (
+    Array.isArray(value) &&
+    value.length === 3 &&
+    value.every((item) => typeof item === "number")
+  ) {
+    return value as Vec3;
+  }
+  return null;
+}
+
+/**
+ * Delta rotation matrix (Onshape space, row-major) that takes an angle
+ * annotation's part2 from its current pose to the target angle. Mirrors the
+ * client-side preview math exactly.
+ */
+function buildAngleDeltaMatrix(annotation: UnknownRecord): number[] | null {
+  const face1Normal = getVec3Field(annotation, "face1Normal");
+  const face2Normal = getVec3Field(annotation, "face2Normal");
+
+  const pivotRecord = isRecord(annotation.pivot) ? annotation.pivot : null;
+  const pivotPoint =
+    (pivotRecord?.kind === "vertex"
+      ? getVec3Field(pivotRecord, "point")
+      : null) ?? getVec3Field(annotation, "pivotPoint");
+
+  const angleDeg =
+    typeof annotation.angleDeg === "number" ? annotation.angleDeg : null;
+
+  if (!face1Normal || !face2Normal || !pivotPoint || angleDeg === null) {
+    return null;
+  }
+
+  const n1 = normalizeVec3(face1Normal);
+  const n2 = normalizeVec3(face2Normal);
+  if (!n1 || !n2) return null;
+
+  const currentAngleRad = Math.acos(
+    Math.max(-1, Math.min(1, dotVec3(n1, n2))),
+  );
+  const deltaRad = (angleDeg * Math.PI) / 180 - currentAngleRad;
+
+  let hinge = normalizeVec3(crossVec3(n1, n2));
+  if (!hinge) {
+    // Parallel normals — same fallback the viewer uses.
+    hinge = normalizeVec3(
+      Math.abs(n1[1]) < 0.9
+        ? crossVec3([0, 1, 0], n1)
+        : crossVec3([1, 0, 0], n1),
+    );
+  }
+  if (!hinge) return null;
+
+  return rotationAboutAxisThroughPoint(hinge, deltaRad, pivotPoint);
+}
+
+function getAssemblyInstanceRecords(assemblyData: unknown): UnknownRecord[] {
+  if (!isRecord(assemblyData)) return [];
+  const rootAssembly = isRecord(assemblyData.rootAssembly)
+    ? assemblyData.rootAssembly
+    : null;
+  return Array.isArray(rootAssembly?.instances)
+    ? rootAssembly.instances.filter(isRecord)
+    : [];
+}
+
+function getOccurrenceTransformByPath(
+  assemblyData: unknown,
+  pathKey: string,
+): number[] | null {
+  if (!isRecord(assemblyData)) return null;
+  const rootAssembly = isRecord(assemblyData.rootAssembly)
+    ? assemblyData.rootAssembly
+    : null;
+  const occurrences = Array.isArray(rootAssembly?.occurrences)
+    ? rootAssembly.occurrences
+    : [];
+
+  for (const occurrence of occurrences) {
+    if (!isRecord(occurrence)) continue;
+    const path = Array.isArray(occurrence.path) ? occurrence.path.join("/") : null;
+    if (path !== pathKey) continue;
+    const transform = occurrence.transform;
+    if (
+      Array.isArray(transform) &&
+      transform.length === 16 &&
+      transform.every((item) => typeof item === "number")
+    ) {
+      return transform as number[];
+    }
+  }
+
+  return null;
+}
+
+function getNativeAngleSignature(projectState: UnknownRecord) {
+  const manifest = buildAnnotatedSelectionManifest(projectState);
+  return manifest.includedObjects
+    .filter((item) => item.type === "angle")
+    .map((item) => `${item.annotationId}:${item.pathKey}`)
+    .sort()
+    .join("|");
+}
+
+/**
+ * Create/refresh the native rotated-instance overlays for angle annotations.
+ *
+ * If the angle selection is unchanged and the previously created instances
+ * still exist, they are reused (zero writes). Otherwise the old instances
+ * are deleted and new ones are created: insert a fresh instance of the
+ * original part, then set its occurrence transform to deltaRotation ×
+ * originalTransform (absolute, Onshape space).
+ */
+async function syncNativeAngleOverlays(input: {
+  server: string;
+  documentId: string;
+  workspaceId: string;
+  accessToken: string;
+  assemblyElementId: string;
+  projectState: UnknownRecord;
+}) {
+  const annotations = Array.isArray(input.projectState.annotations)
+    ? input.projectState.annotations.filter(
+        (a): a is UnknownRecord =>
+          isRecord(a) &&
+          a.type === "angle" &&
+          isRecord(a.target) &&
+          typeof (a.target as UnknownRecord).part2PathKey === "string",
+      )
+    : [];
+
+  const signature = getNativeAngleSignature(input.projectState);
+
+  const generatedGeometry = isRecord(input.projectState.generatedGeometry)
+    ? input.projectState.generatedGeometry
+    : null;
+  const previousRecord = isRecord(generatedGeometry?.nativeAngleOverlays)
+    ? generatedGeometry.nativeAngleOverlays
+    : null;
+  const previousInstanceIds = Array.isArray(previousRecord?.instanceIds)
+    ? (previousRecord.instanceIds as unknown[]).filter(
+        (id): id is string => typeof id === "string",
+      )
+    : [];
+  const previousSignature =
+    typeof previousRecord?.signature === "string"
+      ? previousRecord.signature
+      : null;
+
+  const assemblyResult = await getCachedAssembly({
+    server: input.server,
+    documentId: input.documentId,
+    workspaceId: input.workspaceId,
+    assemblyElementId: input.assemblyElementId,
+    accessToken: input.accessToken,
+    route: "/api/fuzzycad/save-project",
+  });
+
+  if (!assemblyResult.ok) {
+    return {
+      ok: false,
+      mode: "failed-to-read-assembly-for-native-overlays",
+      status: assemblyResult.status,
+      instanceIds: previousInstanceIds,
+      signature,
+    };
+  }
+
+  const existingInstanceIds = new Set(
+    getAssemblyInstanceRecords(assemblyResult.data)
+      .map((instance) => getInstanceId(instance))
+      .filter((id): id is string => typeof id === "string"),
+  );
+
+  // Unchanged selection + instances still present → nothing to do.
+  if (
+    annotations.length > 0 &&
+    previousSignature === signature &&
+    previousInstanceIds.length > 0 &&
+    previousInstanceIds.every((id) => existingInstanceIds.has(id))
+  ) {
+    return {
+      ok: true,
+      mode: "reused-existing-native-angle-overlays",
+      instanceIds: previousInstanceIds,
+      signature,
+    };
+  }
+
+  // Delete previously created native overlay instances (404-tolerant).
+  const deletions: UnknownRecord[] = [];
+  for (const instanceId of previousInstanceIds) {
+    if (!existingInstanceIds.has(instanceId)) continue;
+    const deletion = await deleteAssemblyInstance({
+      server: input.server,
+      documentId: input.documentId,
+      workspaceId: input.workspaceId,
+      assemblyElementId: input.assemblyElementId,
+      instanceId,
+      accessToken: input.accessToken,
+    });
+    deletions.push({ instanceId, ...deletion });
+  }
+
+  if (annotations.length === 0) {
+    clearAssemblyCache();
+    return {
+      ok: true,
+      mode: "no-angle-annotations",
+      instanceIds: [] as string[],
+      signature,
+      deletions,
+    };
+  }
+
+  const created: string[] = [];
+  const details: UnknownRecord[] = [];
+  let knownIds = existingInstanceIds;
+
+  for (const annotation of annotations) {
+    const target = annotation.target as UnknownRecord;
+    const part2PathKey = target.part2PathKey as string;
+    const topLevelInstanceId = part2PathKey.split("/")[0];
+
+    const sourceInstance = getAssemblyInstanceRecords(assemblyResult.data).find(
+      (instance) => getInstanceId(instance) === topLevelInstanceId,
+    );
+    const originalTransform = getOccurrenceTransformByPath(
+      assemblyResult.data,
+      part2PathKey,
+    );
+    const deltaMatrix = buildAngleDeltaMatrix(annotation);
+
+    if (!sourceInstance || !originalTransform || !deltaMatrix) {
+      details.push({
+        annotationId: annotation.id ?? null,
+        ok: false,
+        mode: !sourceInstance
+          ? "part2-instance-not-found-top-level"
+          : !originalTransform
+            ? "part2-occurrence-transform-not-found"
+            : "annotation-missing-rotation-data",
+        part2PathKey,
+      });
+      continue;
+    }
+
+    // 1. Insert a fresh instance of the same part.
+    const insertBody: UnknownRecord = {
+      documentId: getStringFromRecord(sourceInstance, "documentId"),
+      elementId: getStringFromRecord(sourceInstance, "elementId"),
+      partId: getStringFromRecord(sourceInstance, "partId"),
+      configuration:
+        getStringFromRecord(sourceInstance, "configuration") ?? "default",
+      isAssembly: false,
+      isWholePartStudio: false,
+    };
+
+    const insertRes = await onshapeFetch(
+      `${input.server}/api/assemblies/d/${input.documentId}/w/${input.workspaceId}/e/${input.assemblyElementId}/instances`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${input.accessToken}`,
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(insertBody),
+      },
+      {
+        route: "/api/fuzzycad/save-project",
+        operation: "insert-native-angle-overlay-instance",
+      },
+    );
+    const insertData = await parseJsonOrText(insertRes);
+
+    if (!insertRes.ok) {
+      details.push({
+        annotationId: annotation.id ?? null,
+        ok: false,
+        mode: "failed-to-insert-native-instance",
+        status: insertRes.status,
+        insertBody,
+        data: insertData,
+      });
+      continue;
+    }
+
+    // 2. Identify the new instance id by re-reading the assembly and diffing.
+    clearAssemblyCache();
+    const afterInsert = await getCachedAssembly({
+      server: input.server,
+      documentId: input.documentId,
+      workspaceId: input.workspaceId,
+      assemblyElementId: input.assemblyElementId,
+      accessToken: input.accessToken,
+      route: "/api/fuzzycad/save-project",
+      force: true,
+    });
+
+    const idsAfter = new Set(
+      getAssemblyInstanceRecords(afterInsert.data)
+        .map((instance) => getInstanceId(instance))
+        .filter((id): id is string => typeof id === "string"),
+    );
+    const newIds = [...idsAfter].filter((id) => !knownIds.has(id));
+    knownIds = idsAfter;
+
+    if (newIds.length !== 1) {
+      details.push({
+        annotationId: annotation.id ?? null,
+        ok: false,
+        mode: "could-not-identify-new-instance",
+        newIds,
+      });
+      continue;
+    }
+
+    const newInstanceId = newIds[0];
+
+    // 3. Move the new instance into the rotated pose (absolute transform).
+    const finalTransform = multiplyRowMajor4x4(deltaMatrix, originalTransform);
+
+    const transformRes = await onshapeFetch(
+      `${input.server}/api/assemblies/d/${input.documentId}/w/${input.workspaceId}/e/${input.assemblyElementId}/occurrencetransforms`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${input.accessToken}`,
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          isRelative: false,
+          occurrences: [{ path: [newInstanceId] }],
+          transform: finalTransform,
+        }),
+      },
+      {
+        route: "/api/fuzzycad/save-project",
+        operation: "transform-native-angle-overlay-instance",
+      },
+    );
+    const transformData = await parseJsonOrText(transformRes);
+
+    created.push(newInstanceId);
+    details.push({
+      annotationId: annotation.id ?? null,
+      ok: transformRes.ok,
+      mode: transformRes.ok
+        ? "native-instance-created-and-rotated"
+        : "instance-created-but-transform-failed",
+      newInstanceId,
+      transformStatus: transformRes.status,
+      transformData: transformRes.ok ? undefined : transformData,
+    });
+  }
+
+  clearAssemblyCache();
+
+  return {
+    ok: created.length > 0 && details.every((detail) => detail.ok !== false),
+    mode:
+      created.length > 0
+        ? "created-native-angle-overlays"
+        : "failed-to-create-native-angle-overlays",
+    instanceIds: created,
+    signature,
+    deletions,
+    details,
   };
 }
 
@@ -1478,6 +1940,8 @@ async function validateVisualizationLayerElement(input: {
     };
   }
 
+  // force: true is critical here — the visualization layer element was just
+  // created by the STL translation and will not be in the stale elements cache.
   const elementsResult = await getCachedElements({
     server: input.server,
     documentId: input.documentId,
@@ -1555,24 +2019,65 @@ function buildAnnotatedSelectionManifest(projectState: UnknownRecord) {
 
   for (const annotation of annotations) {
     if (!isRecord(annotation)) continue;
-    if (annotation.type !== "size") continue;
 
     const annotationId =
       typeof annotation.id === "string" ? annotation.id : "unknown-annotation";
 
-    const target = isRecord(annotation.target) ? annotation.target : null;
-    const pathKeys = Array.isArray(target?.pathKeys)
-      ? target.pathKeys.filter(
-          (item): item is string => typeof item === "string",
-        )
-      : [];
+    if (annotation.type === "size") {
+      const target = isRecord(annotation.target) ? annotation.target : null;
+      const pathKeys = Array.isArray(target?.pathKeys)
+        ? target.pathKeys.filter(
+            (item): item is string => typeof item === "string",
+          )
+        : [];
 
-    for (const pathKey of pathKeys) {
-      includedObjects.push({
-        annotationId,
-        pathKey,
-        type: "size",
-      });
+      for (const pathKey of pathKeys) {
+        includedObjects.push({ annotationId, pathKey, type: "size" });
+      }
+    } else if (annotation.type === "angle") {
+      const target = isRecord(annotation.target) ? annotation.target : null;
+      const part1PathKey =
+        typeof target?.part1PathKey === "string" ? target.part1PathKey : null;
+      const part2PathKey =
+        typeof target?.part2PathKey === "string" ? target.part2PathKey : null;
+      // Include angleDeg in the path key so any edit to the angle changes the
+      // signature and triggers overlay replacement instead of skip-import.
+      const angleDeg =
+        typeof annotation.angleDeg === "number"
+          ? annotation.angleDeg.toFixed(2)
+          : "0.00";
+
+      // part1 is intentionally NOT part of the overlay anymore: only the
+      // rotated part2 gets exported. part1PathKey still contributes to the
+      // signature so re-selecting a different fixed part triggers replacement.
+      if (part2PathKey) {
+        includedObjects.push({
+          annotationId,
+          pathKey: `${part2PathKey}@angle-part2:${angleDeg}${
+            part1PathKey ? `:ref=${part1PathKey}` : ""
+          }`,
+          type: "angle",
+        });
+      }
+    } else if (annotation.type === "bend") {
+      const target = isRecord(annotation.target) ? annotation.target : null;
+      const pathKey =
+        typeof target?.pathKey === "string" ? target.pathKey : null;
+      const deltaDeg =
+        typeof annotation.deltaDeg === "number"
+          ? annotation.deltaDeg.toFixed(2)
+          : "0.00";
+
+      const profile =
+        typeof annotation.profile === "string" ? annotation.profile : "sharp";
+
+      if (pathKey) {
+        includedObjects.push({
+          annotationId,
+          pathKey: `${pathKey}@bend:${deltaDeg}:${profile}`,
+          type: "bend",
+        });
+      }
     }
   }
 
@@ -1656,11 +2161,64 @@ function getResolvedVisualizationLayerElementId(input: {
   );
 }
 
+/**
+ * Recover the previous save's generated-geometry record from the document.
+ *
+ * The client rebuilds projectState from scratch on every save and page
+ * reload, so it cannot tell us which visualization elements / overlay
+ * instances earlier saves created. Without that memory, stale overlay
+ * instances (including dangling ones whose source element was replaced)
+ * never match the cleanup filters and linger in the assembly forever.
+ * The record is persisted as fuzzycad-generated-geometry.json — read it back.
+ */
+async function loadPreviousGeneratedGeometry(input: {
+  server: string;
+  documentId: string;
+  workspaceId: string;
+  accessToken: string;
+  elements: unknown;
+}): Promise<UnknownRecord | null> {
+  const element = findLatestElementByName(
+    input.elements,
+    GENERATED_GEOMETRY_FILENAME,
+  );
+  const elementId = element ? getElementId(element) : null;
+
+  if (!elementId) {
+    return null;
+  }
+
+  const endpoint = `${input.server}/api/blobelements/d/${input.documentId}/w/${input.workspaceId}/e/${elementId}`;
+
+  const res = await onshapeFetch(
+    endpoint,
+    {
+      headers: {
+        Authorization: `Bearer ${input.accessToken}`,
+        Accept: "application/json,text/plain,*/*",
+      },
+    },
+    {
+      route: "/api/fuzzycad/save-project",
+      operation: "load-previous-generated-geometry",
+    },
+  );
+
+  if (!res.ok) {
+    return null;
+  }
+
+  const data = await parseJsonOrText(res);
+
+  return isRecord(data) ? data : null;
+}
+
 function buildGeneratedGeometryPayload(input: {
   projectState: UnknownRecord;
   annotatedSelectionStlResult: UpsertBlobResult | null;
   reconstructionResult: UnknownRecord | null;
   assemblyOverlayResult: UnknownRecord | null;
+  nativeAngleOverlaysResult?: UnknownRecord | null;
 }) {
   const now = new Date().toISOString();
   const source = getProjectSource(input.projectState);
@@ -1710,6 +2268,27 @@ const visualizationLayerElementId = getResolvedVisualizationLayerElementId({
       elementId: visualizationLayerElementId,
       status: visualizationLayerElementId ? "ready" : "missing",
     },
+
+    /**
+     * Memory for the native rotated-instance overlays (angle tool): the
+     * instance ids this save created, plus the angle-selection signature so
+     * the next save knows whether to reuse or replace them.
+     */
+    nativeAngleOverlays: input.nativeAngleOverlaysResult
+      ? {
+          instanceIds: Array.isArray(
+            input.nativeAngleOverlaysResult.instanceIds,
+          )
+            ? input.nativeAngleOverlaysResult.instanceIds
+            : [],
+          signature:
+            typeof input.nativeAngleOverlaysResult.signature === "string"
+              ? input.nativeAngleOverlaysResult.signature
+              : "",
+          mode: getModeFromResult(input.nativeAngleOverlaysResult),
+          updatedAt: now,
+        }
+      : null,
 
     assemblyOverlay: selectedAssemblyElementId
       ? {
@@ -1778,7 +2357,6 @@ export async function POST(req: NextRequest) {
     workspaceId,
     accessToken,
     route: "/api/fuzzycad/save-project",
-    force: true,
   });
 
   if (!elementsResult.ok || !Array.isArray(elementsResult.data)) {
@@ -1791,6 +2369,34 @@ export async function POST(req: NextRequest) {
       },
       { status: elementsResult.status },
     );
+  }
+
+  /**
+   * Restore the previous save's generated-geometry memory (visualization
+   * element ids + selection signature) before making any overlay decisions.
+   * The client-side projectState never carries this — it only lives in the
+   * document's fuzzycad-generated-geometry.json blob.
+   */
+  const clientGeneratedGeometry = isRecord(projectState.generatedGeometry)
+    ? projectState.generatedGeometry
+    : null;
+  const clientHasGeneratedGeometryMemory =
+    clientGeneratedGeometry !== null &&
+    isRecord(clientGeneratedGeometry.visualizationLayer);
+
+  if (!clientHasGeneratedGeometryMemory) {
+    const previousGeneratedGeometry = await loadPreviousGeneratedGeometry({
+      server,
+      documentId,
+      workspaceId,
+      accessToken,
+      elements: elementsResult.data,
+    });
+
+    if (previousGeneratedGeometry) {
+      (projectState as UnknownRecord).generatedGeometry =
+        previousGeneratedGeometry;
+    }
   }
 
   const annotatedSelectionStlResult = annotatedSelectionStl
@@ -1855,6 +2461,24 @@ export async function POST(req: NextRequest) {
       { status: 500 },
     );
   }
+
+  // Native rotated-instance overlays for angle annotations (parametric,
+  // editable — replaces the old mesh-import path for rotations).
+  const nativeAngleOverlaysResult = selectedAssemblyElementId
+    ? await syncNativeAngleOverlays({
+        server,
+        documentId,
+        workspaceId,
+        accessToken,
+        assemblyElementId: selectedAssemblyElementId,
+        projectState,
+      })
+    : {
+        ok: false,
+        mode: "missing-selected-assembly",
+        instanceIds: [] as string[],
+        signature: "",
+      };
 
   const reconstructionResult = existingOverlayPreflight.shouldSkipImport
     ? {
@@ -1928,6 +2552,19 @@ const assemblyOverlayResult = existingOverlayPreflight.shouldSkipImport
         validation: visualizationLayerValidation,
       };
 
+  /**
+   * The original occurrences are intentionally left untouched (visible).
+   * Both the original and the adjusted overlay stay in the assembly, and
+   * the user toggles either with Onshape's native hide/show (eye icon).
+   * (Programmatic hide isn't possible — the occurrence "hidden" flag is
+   * read-only via the REST API — and suppression's crossed-out state was
+   * rejected as confusing.)
+   */
+  const hideAngleOriginalsResult = {
+    ok: true,
+    mode: "originals-left-visible-by-design",
+  };
+
   const generatedGeometryPayload = buildGeneratedGeometryPayload({
     projectState,
     annotatedSelectionStlResult,
@@ -1936,6 +2573,9 @@ const assemblyOverlayResult = existingOverlayPreflight.shouldSkipImport
       : null,
     assemblyOverlayResult: isRecord(assemblyOverlayResult)
       ? assemblyOverlayResult
+      : null,
+    nativeAngleOverlaysResult: isRecord(nativeAngleOverlaysResult)
+      ? nativeAngleOverlaysResult
       : null,
   });
 
@@ -2110,6 +2750,8 @@ return NextResponse.json({
   reconstructionResult,
   visualizationLayerValidation,
   assemblyOverlayResult,
+  hideAngleOriginalsResult,
+  nativeAngleOverlaysResult,
   projectStateResult,
   projectState: projectStateWithGeneratedGeometry,
 });

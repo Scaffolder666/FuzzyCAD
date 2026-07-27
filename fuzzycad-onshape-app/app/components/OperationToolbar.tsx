@@ -111,10 +111,10 @@ const tools: ToolItem[] = [
   {
     id: "angle",
     label: "Angle",
-    title: "Adjust support arm angle",
+    title:
+      "Adjust an angle — between two parts, or within one part (bend). The tool figures out which from your clicks.",
     icon: <AngleIcon />,
   },
- 
 ];
 
 export default function OperationToolbar({
@@ -128,7 +128,12 @@ export default function OperationToolbar({
         {tools
           .filter((tool) => !tool.hidden)
           .map((tool) => {
-            const active = activeTool === tool.id;
+            // The single Angle button covers both internal modes (rotate the
+            // gap between two parts, or bend within one part) — the viewer
+            // infers which from the user's clicks.
+            const active =
+              activeTool === tool.id ||
+              (tool.id === "angle" && activeTool === "bend");
 
             return (
               <button

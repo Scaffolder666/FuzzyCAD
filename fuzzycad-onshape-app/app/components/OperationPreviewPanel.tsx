@@ -88,7 +88,6 @@ export default function OperationPreviewPanel({
     <section className={styles.panel} aria-label={`${operation} preview`}>
       <div className={styles.header}>
         <div>
-          <div className={styles.eyebrow}>Operation preview</div>
           <h2 className={styles.title}>{title}</h2>
         </div>
       </div>
@@ -97,12 +96,9 @@ export default function OperationPreviewPanel({
 
       {suggestedObjects && suggestedObjects.length > 0 ? (
         <div className={styles.suggestionList}>
-          <div className={styles.configLabel}>Detected related objects</div>
-          {suggestedObjects.map((item) => (
-            <div key={item} className={styles.suggestionItem}>
-              {item}
-            </div>
-          ))}
+          <div className={styles.configLabel}>
+            {suggestedObjects.length} related component{suggestedObjects.length !== 1 ? "s" : ""} found
+          </div>
         </div>
       ) : null}
 
