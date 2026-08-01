@@ -67,13 +67,8 @@ type RangeSectionProfile = {
   sectionCount: number;
   rangeRatio: number;
   minRangeRatio: number;
-  firstScale: number;
-  lastScale: number;
   contourOpacity: number;
-  connectorOpacity: number;
-  connectorCount: number;
   contourLineWidth: number;
-  connectorLineWidth: number;
 };
 
 type AxisConfig = {
@@ -82,17 +77,6 @@ type AxisConfig = {
   direction: ConfidenceDirection;
   worldAxis: THREE.Vector3;
   halfExtent: number;
-};
-
-type ContourTemplate = {
-  capCenter: THREE.Vector3;
-  basePoints: THREE.Vector3[];
-  halfExtent: number;
-};
-
-type SectionGeometryData = {
-  contourPositions: number[];
-  connectorPositions: number[];
 };
 
 const LINE_OVERLAY_VERTEX_SHADER = /* glsl */ `
@@ -363,18 +347,10 @@ function getRangeSectionProfile(level: ConfidenceLevel): RangeSectionProfile {
       sectionCount: 4,
       rangeRatio: 0.46,
       minRangeRatio: 0.085,
-      // No taper: every section repeats the part's own cap silhouette
-      // unscaled, so the envelope reads as an extension of the real
-      // geometry rather than a generic shrinking cone.
-      firstScale: 1,
-      lastScale: 1,
       // Near-opaque + dashed: directionality comes from the dash pattern
       // and stacked repeats, not from a translucent "ghost copy" look.
       contourOpacity: 0.92,
-      connectorOpacity: 0.68,
-      connectorCount: 6,
-      contourLineWidth: 2.4,
-      connectorLineWidth: 1.4,
+      contourLineWidth: 2.2,
     };
   }
 
@@ -383,13 +359,8 @@ function getRangeSectionProfile(level: ConfidenceLevel): RangeSectionProfile {
       sectionCount: 2,
       rangeRatio: 0.26,
       minRangeRatio: 0.055,
-      firstScale: 1,
-      lastScale: 1,
       contourOpacity: 0.82,
-      connectorOpacity: 0.52,
-      connectorCount: 4,
-      contourLineWidth: 1.8,
-      connectorLineWidth: 1.1,
+      contourLineWidth: 1.7,
     };
   }
 
@@ -397,13 +368,8 @@ function getRangeSectionProfile(level: ConfidenceLevel): RangeSectionProfile {
     sectionCount: 0,
     rangeRatio: 0,
     minRangeRatio: 0,
-    firstScale: 1,
-    lastScale: 1,
     contourOpacity: 0,
-    connectorOpacity: 0,
-    connectorCount: 0,
     contourLineWidth: 0,
-    connectorLineWidth: 0,
   };
 }
 
@@ -601,47 +567,6 @@ function collectObjectWorldPoints(object: THREE.Object3D) {
     new THREE.Vector3(fallbackBox.max.x, fallbackBox.max.y, fallbackBox.min.z),
     new THREE.Vector3(fallbackBox.max.x, fallbackBox.max.y, fallbackBox.max.z),
   ];
-}
-
-function collectObjectLocalPoints(object: THREE.Object3D) {
-  const points: THREE.Vector3[] = [];
-  const localPoint = new THREE.Vector3();
-
-  object.updateWorldMatrix(true, true);
-
-  const objectWorldInverse = object.matrixWorld.clone().invert();
-
-  object.traverse((child) => {
-    if (!(child instanceof THREE.Mesh)) {
-      return;
-    }
-
-    if (child.userData?.[FUZZY_VISUAL_CHILD]) {
-      return;
-    }
-
-    const position = child.geometry.getAttribute("position");
-
-    if (!position) {
-      return;
-    }
-
-    child.updateWorldMatrix(true, false);
-
-    const childToObjectMatrix = objectWorldInverse
-      .clone()
-      .multiply(child.matrixWorld);
-
-    for (let index = 0; index < position.count; index += 1) {
-      localPoint
-        .fromBufferAttribute(position, index)
-        .applyMatrix4(childToObjectMatrix);
-
-      points.push(localPoint.clone());
-    }
-  });
-
-  return points;
 }
 
 function measureObjectDirectionality(
@@ -881,225 +806,151 @@ function createLineSegmentsObject({
   return line;
 }
 
-function getPerpendicularBasis(axis: THREE.Vector3) {
-  const normalizedAxis = axis.clone().normalize();
-  const reference =
-    Math.abs(normalizedAxis.dot(new THREE.Vector3(0, 1, 0))) > 0.85
-      ? new THREE.Vector3(1, 0, 0)
-      : new THREE.Vector3(0, 1, 0);
+/** Flat, object-local triangle soup (3 verts per triangle, index-expanded). */
+function collectObjectLocalTriangleSoup(object: THREE.Object3D): THREE.Vector3[] {
+  const triangleVertices: THREE.Vector3[] = [];
 
-  const u = new THREE.Vector3()
-    .crossVectors(normalizedAxis, reference)
-    .normalize();
-  const v = new THREE.Vector3().crossVectors(normalizedAxis, u).normalize();
+  object.updateWorldMatrix(true, true);
 
-  return { u, v };
-}
+  const objectWorldInverse = object.matrixWorld.clone().invert();
 
-function pushSegment(
-  positions: number[],
-  a: THREE.Vector3,
-  b: THREE.Vector3,
-) {
-  positions.push(a.x, a.y, a.z, b.x, b.y, b.z);
-}
-
-type PlanarPoint = { x: number; y: number };
-
-/** Monotone-chain 2D convex hull, counter-clockwise, no duplicate closing point. */
-function computeConvexHull2D(points: PlanarPoint[]): PlanarPoint[] {
-  if (points.length < 3) {
-    return points;
-  }
-
-  const sorted = [...points].sort((a, b) => (a.x === b.x ? a.y - b.y : a.x - b.x));
-
-  const cross = (o: PlanarPoint, a: PlanarPoint, b: PlanarPoint) =>
-    (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
-
-  const lower: PlanarPoint[] = [];
-
-  for (const point of sorted) {
-    while (
-      lower.length >= 2 &&
-      cross(lower[lower.length - 2], lower[lower.length - 1], point) <= 0
-    ) {
-      lower.pop();
+  object.traverse((child) => {
+    if (!(child instanceof THREE.Mesh)) {
+      return;
     }
 
-    lower.push(point);
-  }
-
-  const upper: PlanarPoint[] = [];
-
-  for (let index = sorted.length - 1; index >= 0; index -= 1) {
-    const point = sorted[index];
-
-    while (
-      upper.length >= 2 &&
-      cross(upper[upper.length - 2], upper[upper.length - 1], point) <= 0
-    ) {
-      upper.pop();
+    if (child.userData?.[FUZZY_VISUAL_CHILD]) {
+      return;
     }
 
-    upper.push(point);
-  }
+    const geometry = child.geometry;
+    const position = geometry.getAttribute("position");
 
-  lower.pop();
-  upper.pop();
+    if (!position) {
+      return;
+    }
 
-  return lower.concat(upper);
+    child.updateWorldMatrix(true, false);
+
+    const childToObjectMatrix = objectWorldInverse
+      .clone()
+      .multiply(child.matrixWorld);
+
+    const index = geometry.getIndex();
+    const vertexCount = index ? index.count : position.count;
+    const vertex = new THREE.Vector3();
+
+    for (let i = 0; i < vertexCount; i += 1) {
+      const vertexIndex = index ? index.getX(i) : i;
+
+      vertex.fromBufferAttribute(position, vertexIndex).applyMatrix4(childToObjectMatrix);
+      triangleVertices.push(vertex.clone());
+    }
+  });
+
+  return triangleVertices;
 }
 
-function buildContourTemplate({
-  points,
-  centerLocal,
-  axisLocal,
-  sign,
-}: {
-  points: THREE.Vector3[];
-  centerLocal: THREE.Vector3;
-  axisLocal: THREE.Vector3;
-  sign: number;
-}): ContourTemplate | null {
-  if (points.length === 0) {
-    return null;
-  }
-
+function getAxisProjectionRange(
+  points: THREE.Vector3[],
+  centerLocal: THREE.Vector3,
+  axisLocal: THREE.Vector3,
+): { minCoord: number; maxCoord: number } | null {
   const axis = axisLocal.clone().normalize();
-  const { u, v } = getPerpendicularBasis(axis);
-
   let minCoord = Infinity;
   let maxCoord = -Infinity;
 
-  const coords = points.map((point) => {
+  for (const point of points) {
     const coord = point.clone().sub(centerLocal).dot(axis);
 
     minCoord = Math.min(minCoord, coord);
     maxCoord = Math.max(maxCoord, coord);
-
-    return coord;
-  });
+  }
 
   if (!Number.isFinite(minCoord) || !Number.isFinite(maxCoord)) {
     return null;
   }
 
-  const halfExtent = Math.max((maxCoord - minCoord) / 2, 0.0001);
-  const capCoord = sign > 0 ? maxCoord : minCoord;
-  const capCenter = centerLocal.clone().add(axis.clone().multiplyScalar(capCoord));
-  const sideMax = sign * capCoord;
-  const sideWindow = Math.max(halfExtent * 0.42, 0.0001);
+  return { minCoord, maxCoord };
+}
 
-  const radialPoints: PlanarPoint[] = [];
+/**
+ * Traces the real edges of the part's own geometry near one end (the same
+ * "near cap" window as before), instead of approximating the cross-section
+ * with a convex hull. Concave/complex real silhouettes — a hook, a notch —
+ * come through as-is, because this is a literal subset of the actual mesh
+ * triangles, not a synthesized outline.
+ */
+function buildNearCapSilhouetteEdgePositions({
+  triangleSoup,
+  centerLocal,
+  axisLocal,
+  sign,
+  halfExtent,
+}: {
+  triangleSoup: THREE.Vector3[];
+  centerLocal: THREE.Vector3;
+  axisLocal: THREE.Vector3;
+  sign: number;
+  halfExtent: number;
+}): number[] | null {
+  const axis = axisLocal.clone().normalize();
+  const sideWindow = Math.max(halfExtent * 0.42, 1e-6);
+  const centroid = new THREE.Vector3();
+  const positions: number[] = [];
 
-  for (let index = 0; index < points.length; index += 1) {
-    const point = points[index];
-    const coord = coords[index];
-    const sideCoord = sign * coord;
+  let sideMax = -Infinity;
+
+  for (let i = 0; i + 2 < triangleSoup.length; i += 3) {
+    const coord = triangleSoup[i]
+      .clone()
+      .add(triangleSoup[i + 1])
+      .add(triangleSoup[i + 2])
+      .multiplyScalar(1 / 3)
+      .sub(centerLocal)
+      .dot(axis);
+
+    sideMax = Math.max(sideMax, sign * coord);
+  }
+
+  if (!Number.isFinite(sideMax)) {
+    return null;
+  }
+
+  for (let i = 0; i + 2 < triangleSoup.length; i += 3) {
+    const a = triangleSoup[i];
+    const b = triangleSoup[i + 1];
+    const c = triangleSoup[i + 2];
+
+    centroid.copy(a).add(b).add(c).multiplyScalar(1 / 3).sub(centerLocal);
+
+    const sideCoord = sign * centroid.dot(axis);
 
     if (sideMax - sideCoord > sideWindow) {
       continue;
     }
 
-    const axialPoint = centerLocal.clone().add(axis.clone().multiplyScalar(coord));
-    const radial = point.clone().sub(axialPoint);
-    const x = radial.dot(u);
-    const y = radial.dot(v);
-
-    if (x * x + y * y <= 1e-10) {
-      continue;
-    }
-
-    radialPoints.push({ x, y });
+    positions.push(a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z);
   }
 
-  // Trace the part's own silhouette at this end instead of falling back to
-  // a synthetic circle, so the envelope reads as an extension of the real
-  // geometry rather than a generic conical shape.
-  const hull = computeConvexHull2D(radialPoints);
-
-  if (hull.length < 3) {
+  if (positions.length === 0) {
     return null;
   }
 
-  const basePoints = hull.map((point) =>
-    capCenter
-      .clone()
-      .add(u.clone().multiplyScalar(point.x))
-      .add(v.clone().multiplyScalar(point.y)),
+  const soupGeometry = new THREE.BufferGeometry();
+  soupGeometry.setAttribute(
+    "position",
+    new THREE.Float32BufferAttribute(positions, 3),
   );
 
-  return {
-    capCenter,
-    basePoints,
-    halfExtent,
-  };
-}
+  const edges = new THREE.EdgesGeometry(soupGeometry, 25);
+  const edgePosition = edges.getAttribute("position");
+  const edgePositions = Array.from(edgePosition.array as Float32Array);
 
-function buildSectionGeometryData({
-  template,
-  axisLocal,
-  sign,
-  profile,
-  rangeDistance,
-}: {
-  template: ContourTemplate;
-  axisLocal: THREE.Vector3;
-  sign: number;
-  profile: RangeSectionProfile;
-  rangeDistance: number;
-}): SectionGeometryData {
-  const contourPositions: number[] = [];
-  const connectorPositions: number[] = [];
-  const axis = axisLocal.clone().normalize();
-  const pointCount = template.basePoints.length;
-  const sectionLayers: THREE.Vector3[][] = [];
+  soupGeometry.dispose();
+  edges.dispose();
 
-  for (let sectionIndex = 0; sectionIndex < profile.sectionCount; sectionIndex += 1) {
-    const t = (sectionIndex + 1) / profile.sectionCount;
-    const sectionOffset = rangeDistance * t;
-    const sectionScale = THREE.MathUtils.lerp(
-      profile.firstScale,
-      profile.lastScale,
-      t,
-    );
-    const sectionCenter = template.capCenter
-      .clone()
-      .add(axis.clone().multiplyScalar(sign * sectionOffset));
-
-    const sectionPoints = template.basePoints.map((basePoint) => {
-      const radial = basePoint.clone().sub(template.capCenter);
-
-      return sectionCenter.clone().add(radial.multiplyScalar(sectionScale));
-    });
-
-    for (let index = 0; index < pointCount; index += 1) {
-      const current = sectionPoints[index];
-      const next = sectionPoints[(index + 1) % pointCount];
-
-      pushSegment(contourPositions, current, next);
-    }
-
-    sectionLayers.push(sectionPoints);
-  }
-
-  if (sectionLayers.length === 0) {
-    return { contourPositions, connectorPositions };
-  }
-
-  const finalLayer = sectionLayers[sectionLayers.length - 1];
-  const connectorCount = Math.max(profile.connectorCount, 1);
-  const connectorStep = Math.max(Math.floor(pointCount / connectorCount), 1);
-
-  for (let index = 0; index < pointCount; index += connectorStep) {
-    const basePoint = template.basePoints[index];
-    const finalPoint = finalLayer[index];
-
-    pushSegment(connectorPositions, basePoint, finalPoint);
-  }
-
-  return { contourPositions, connectorPositions };
+  return edgePositions.length > 0 ? edgePositions : null;
 }
 
 function disposeObjectVisual(object: THREE.Object3D) {
@@ -1433,9 +1284,9 @@ function createSectionedRangeEnvelope({
   const centerLocal = measure.centerWorld
     .clone()
     .applyMatrix4(objectWorldInverse);
-  const localPoints = collectObjectLocalPoints(object);
+  const triangleSoup = collectObjectLocalTriangleSoup(object);
 
-  if (localPoints.length === 0) {
+  if (triangleSoup.length === 0) {
     return null;
   }
 
@@ -1459,62 +1310,65 @@ function createSectionedRangeEnvelope({
     const signs = getDirectionSigns(axisConfig.direction);
 
     for (const sign of signs) {
-      const template = buildContourTemplate({
-        points: localPoints,
+      const range = getAxisProjectionRange(triangleSoup, centerLocal, localAxis);
+
+      if (!range) {
+        continue;
+      }
+
+      const halfExtent = Math.max((range.maxCoord - range.minCoord) / 2, 1e-6);
+
+      const edgePositions = buildNearCapSilhouetteEdgePositions({
+        triangleSoup,
         centerLocal,
         axisLocal: localAxis,
         sign,
+        halfExtent,
       });
 
-      if (!template) {
+      if (!edgePositions) {
         continue;
       }
 
       const rangeDistance = Math.max(
-        template.halfExtent * profile.rangeRatio,
+        halfExtent * profile.rangeRatio,
         measure.objectSize * profile.minRangeRatio,
       );
 
-      const geometryData = buildSectionGeometryData({
-        template,
-        axisLocal: localAxis,
-        sign,
-        profile,
-        rangeDistance,
-      });
-
-      // Dash sizes are derived from the object's own scale, never a fixed
+      // Dash size is derived from the object's own scale, never a fixed
       // world-unit constant — a fixed dash length would either disappear
       // (huge model) or smear every layer into one solid blob (tiny model,
       // the "square" artifact) once the part is far from whatever scale it
       // was tuned against.
-      const contourDashSize = Math.max(measure.objectSize * 0.05, 1e-6);
-      const connectorDashSize = Math.max(rangeDistance * 0.22, 1e-6);
+      const dashSize = Math.max(measure.objectSize * 0.05, 1e-6);
+      const axis = localAxis.clone().normalize();
 
-      const contourLines = createLineSegmentsObject({
-        positions: geometryData.contourPositions,
-        opacity: profile.contourOpacity,
-        linewidth: profile.contourLineWidth,
-        dashSize: contourDashSize,
-        gapSize: contourDashSize * 0.65,
-        renderOrder: 1710,
-      });
+      // Repeat the part's own real near-cap silhouette, translated further
+      // outward each time — a stack of dashed "echoes" of the actual
+      // geometry, not a synthesized/tapered shell.
+      for (let sectionIndex = 0; sectionIndex < profile.sectionCount; sectionIndex += 1) {
+        const t = (sectionIndex + 1) / profile.sectionCount;
+        const sectionOffset = rangeDistance * t;
+        const layerOpacity = profile.contourOpacity * THREE.MathUtils.lerp(1, 0.5, t);
 
-      if (contourLines) {
+        const contourLines = createLineSegmentsObject({
+          positions: edgePositions,
+          opacity: layerOpacity,
+          linewidth: profile.contourLineWidth,
+          dashSize,
+          gapSize: dashSize * 0.65,
+          renderOrder: 1710,
+        });
+
+        if (!contourLines) {
+          continue;
+        }
+
+        contourLines.position.copy(
+          axis.clone().multiplyScalar(sign * sectionOffset),
+        );
+
         envelopeGroup.add(contourLines);
-      }
-
-      const connectorLines = createLineSegmentsObject({
-        positions: geometryData.connectorPositions,
-        opacity: profile.connectorOpacity,
-        linewidth: profile.connectorLineWidth,
-        dashSize: connectorDashSize,
-        gapSize: connectorDashSize * 0.85,
-        renderOrder: 1705,
-      });
-
-      if (connectorLines) {
-        envelopeGroup.add(connectorLines);
       }
     }
   }

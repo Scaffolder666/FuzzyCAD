@@ -495,25 +495,44 @@ function getArrowGeometry(
   const axisVector = getAxisVectorFromFrame(frame, axis);
   const sign = direction === "positive" ? 1 : -1;
 
-  const halfLengthAlongAxis =
-    axis === "y"
-      ? summary.axisLength / 2
-      : Math.max(summary.crossSectionSize * 1.2, 1e-5);
+  let surfacePoint: THREE.Vector3;
+  let insetOrigin: THREE.Vector3;
+
+  if (axis === "y") {
+    // The object's own principal axis: anchor on the real measured extreme
+    // point (summary.positiveEndWorld / negativeEndWorld), not
+    // center + axisLength/2. That formula silently assumes the point-cloud
+    // centroid sits exactly at the midpoint of the extent, which is false
+    // for any asymmetric part — the actual source of arrows landing well
+    // outside (or short of) the real end of the geometry.
+    const positiveEnd = new THREE.Vector3(...summary.positiveEndWorld);
+    const negativeEnd = new THREE.Vector3(...summary.negativeEndWorld);
+
+    surfacePoint = sign > 0 ? positiveEnd : negativeEnd;
+    insetOrigin = positiveEnd
+      .clone()
+      .add(negativeEnd)
+      .multiplyScalar(0.5)
+      .lerp(surfacePoint, 0.55);
+  } else {
+    const halfLengthAlongAxis = Math.max(summary.crossSectionSize * 1.2, 1e-5);
+
+    surfacePoint = center
+      .clone()
+      .add(axisVector.clone().multiplyScalar(sign * halfLengthAlongAxis));
+    insetOrigin = center
+      .clone()
+      .add(
+        axisVector.clone().multiplyScalar(sign * halfLengthAlongAxis * 0.55),
+      );
+  }
 
   const pad = Math.max(summary.crossSectionSize * 0.9, 1e-5);
-  const insetDepth = halfLengthAlongAxis * 0.55;
 
-  const start = center
+  const start = insetOrigin;
+  const end = surfacePoint
     .clone()
-    .add(axisVector.clone().multiplyScalar(sign * insetDepth));
-
-  const end = center
-    .clone()
-    .add(
-      axisVector
-        .clone()
-        .multiplyScalar(sign * (halfLengthAlongAxis + pad + externalLength)),
-    );
+    .add(axisVector.clone().multiplyScalar(sign * (pad + externalLength)));
 
   return {
     start: [start.x, start.y, start.z],
