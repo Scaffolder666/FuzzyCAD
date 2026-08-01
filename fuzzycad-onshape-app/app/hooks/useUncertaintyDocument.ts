@@ -3,7 +3,11 @@ import {
   createEmptyUncertaintyDocument,
   removeSizeAnnotationsForPathKeys,
   removeUncertaintyAnnotationById,
+  reopenUncertaintyAnnotation,
+  resolveUncertaintyAnnotation,
+  selectAlternativeOption,
   toFuzzyConfidenceAnnotations,
+  updateUncertaintyAnnotationAssignee,
   updateUncertaintyAnnotationComment,
   upsertSizeAnnotation,
   type FuzzyCADUncertaintyDocument,
@@ -48,6 +52,7 @@ export function useUncertaintyDocument(source: FuzzyCADUncertaintySource) {
     pathKeys: string[];
     confidence: AxisConfidenceMap;
     directions: AxisDirectionMap;
+    author?: string;
   }) {
     setUncertaintyDocument((previous) =>
       upsertSizeAnnotation(
@@ -97,6 +102,59 @@ export function useUncertaintyDocument(source: FuzzyCADUncertaintySource) {
     );
   }
 
+  function updateAnnotationAssignee(annotationId: string, assignee: string) {
+    setUncertaintyDocument((previous) =>
+      updateUncertaintyAnnotationAssignee(
+        {
+          ...previous,
+          source,
+        },
+        annotationId,
+        assignee,
+      ),
+    );
+  }
+
+  function resolveAnnotation(annotationId: string) {
+    setUncertaintyDocument((previous) =>
+      resolveUncertaintyAnnotation(
+        {
+          ...previous,
+          source,
+        },
+        annotationId,
+      ),
+    );
+  }
+
+  function reopenAnnotation(annotationId: string) {
+    setUncertaintyDocument((previous) =>
+      reopenUncertaintyAnnotation(
+        {
+          ...previous,
+          source,
+        },
+        annotationId,
+      ),
+    );
+  }
+
+  function selectAnnotationAlternativeOption(
+    annotationId: string,
+    optionId: string,
+  ) {
+    setUncertaintyDocument((previous) =>
+      selectAlternativeOption(
+        {
+          ...previous,
+          source,
+        },
+        annotationId,
+        optionId,
+      ),
+    );
+  }
+
   return {
     uncertaintyDocument,
     uncertaintyDocumentWithCurrentSource,
@@ -107,5 +165,9 @@ export function useUncertaintyDocument(source: FuzzyCADUncertaintySource) {
     removeSizeMarks,
     deleteAnnotation,
     updateAnnotationComment,
+    updateAnnotationAssignee,
+    resolveAnnotation,
+    reopenAnnotation,
+    selectAnnotationAlternativeOption,
   };
 }

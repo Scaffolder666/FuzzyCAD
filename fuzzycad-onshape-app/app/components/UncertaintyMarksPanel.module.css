@@ -51,6 +51,59 @@
   font-weight: 800;
 }
 
+.identityRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.identityLabel {
+  font-size: 10px;
+  font-weight: 800;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.identityInput {
+  flex: 1;
+  height: 26px;
+  padding: 0 8px;
+  border-radius: 8px;
+  border: 1px solid rgba(148, 163, 184, 0.42);
+  background: rgba(255, 255, 255, 0.85);
+  color: #334155;
+  font-size: 11px;
+  font-family: Arial, sans-serif;
+  outline: none;
+}
+
+.filterRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.filterChip {
+  height: 22px;
+  padding: 0 9px;
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.4);
+  background: rgba(255, 255, 255, 0.72);
+  color: #475569;
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.filterChipActive {
+  border-color: rgba(43, 108, 255, 0.55);
+  background: rgba(43, 108, 255, 0.12);
+  color: #1d4ed8;
+}
+
 .syncActions {
   display: grid;
   grid-template-columns: 1fr;
@@ -111,25 +164,62 @@
   font-size: 12px;
   font-weight: 900;
   color: #1e293b;
+  margin-bottom: 8px;
 }
 
-.cardTitleSelected {
-  color: #1d4ed8;
-}
+/* ---- kind pills (one per annotation type) ---- */
 
-.scopeBadge {
-  padding: 2px 7px;
+.kindPill {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 8px;
   border-radius: 999px;
-  background: rgba(226, 232, 240, 0.78);
-  color: #64748b;
   font-size: 9px;
   font-weight: 900;
   text-transform: uppercase;
+  letter-spacing: 0.03em;
 }
 
-.scopeBadgeSelected {
-  background: rgba(37, 99, 235, 0.12);
-  color: #1d4ed8;
+.kindPillSize {
+  background: rgba(217, 119, 6, 0.12);
+  color: #b45309;
+}
+
+.kindPillProposal {
+  background: rgba(13, 148, 136, 0.12);
+  color: #0f766e;
+}
+
+.kindPillAlternative {
+  background: rgba(124, 58, 237, 0.12);
+  color: #6d28d9;
+}
+
+.confidencePill {
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: rgba(217, 119, 6, 0.1);
+  color: #b45309;
+  font-size: 9px;
+  font-weight: 800;
+  text-transform: capitalize;
+}
+
+/* ---- size (needs-input) card ---- */
+
+.assigneeInput {
+  width: 100%;
+  box-sizing: border-box;
+  height: 26px;
+  padding: 0 8px;
+  margin-bottom: 8px;
+  border-radius: 8px;
+  border: 1px solid rgba(148, 163, 184, 0.42);
+  background: rgba(255, 255, 255, 0.85);
+  color: #334155;
+  font-size: 11px;
+  font-family: Arial, sans-serif;
+  outline: none;
 }
 
 .comment {
@@ -148,14 +238,75 @@
   font-family: Arial, sans-serif;
 }
 
+.metaRow {
+  font-size: 10.5px;
+  color: #64748b;
+  margin-bottom: 8px;
+}
+
+/* ---- proposal card ---- */
+
+.valueLine {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  font-family: "SFMono-Regular", Menlo, Consolas, monospace;
+  margin-bottom: 8px;
+}
+
+.valueOld {
+  color: #94a3b8;
+  text-decoration: line-through;
+}
+
+.valueArrow {
+  color: #94a3b8;
+}
+
+.valueNew {
+  color: #0f766e;
+  font-weight: 800;
+}
+
+/* ---- alternative card ---- */
+
+.optionToggle {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.optionButton {
+  flex: 1;
+  height: 26px;
+  border-radius: 8px;
+  border: 1px solid rgba(148, 163, 184, 0.42);
+  background: rgba(255, 255, 255, 0.85);
+  color: #475569;
+  cursor: pointer;
+  font-size: 10.5px;
+  font-weight: 700;
+}
+
+.optionButtonSelected {
+  border-color: rgba(124, 58, 237, 0.55);
+  background: rgba(124, 58, 237, 0.12);
+  color: #6d28d9;
+}
+
+/* ---- shared card actions ---- */
+
 .actions {
   display: flex;
   justify-content: flex-end;
   gap: 6px;
   margin-top: 8px;
+  flex-wrap: wrap;
 }
 
 .editButton,
+.resolveButton,
 .deleteButton {
   height: 26px;
   padding: 0 9px;
@@ -163,16 +314,96 @@
   cursor: pointer;
   font-size: 11px;
   font-weight: 800;
+  border: 1px solid transparent;
 }
 
 .editButton {
-  border: 1px solid rgba(43, 108, 255, 0.55);
+  border-color: rgba(43, 108, 255, 0.55);
   background: rgba(43, 108, 255, 0.08);
   color: #1d4ed8;
 }
 
+.resolveButton {
+  border-color: rgba(15, 118, 110, 0.5);
+  background: rgba(15, 118, 110, 0.08);
+  color: #0f766e;
+}
+
 .deleteButton {
-  border: 1px solid rgba(239, 68, 68, 0.55);
+  border-color: rgba(239, 68, 68, 0.55);
   background: rgba(254, 242, 242, 0.85);
   color: #dc2626;
+}
+
+/* ---- resolved history ---- */
+
+.resolvedSection {
+  margin-top: 14px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(148, 163, 184, 0.28);
+}
+
+.resolvedToggle {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  font-size: 11px;
+  font-weight: 800;
+  color: #64748b;
+}
+
+.resolvedList {
+  margin-top: 8px;
+  display: grid;
+  gap: 6px;
+}
+
+.resolvedEmpty {
+  font-size: 10.5px;
+  color: #94a3b8;
+}
+
+.resolvedRow {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 10.5px;
+  color: #64748b;
+}
+
+.resolvedCheck {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #94a3b8;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 8px;
+  flex: none;
+}
+
+.resolvedRowLabel {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.reopenButton {
+  height: 20px;
+  padding: 0 7px;
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.4);
+  background: rgba(255, 255, 255, 0.85);
+  color: #475569;
+  cursor: pointer;
+  font-size: 9px;
+  font-weight: 800;
 }
