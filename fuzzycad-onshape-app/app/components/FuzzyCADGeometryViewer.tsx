@@ -529,10 +529,17 @@ function getArrowGeometry(
 
   const pad = Math.max(summary.crossSectionSize * 0.9, 1e-5);
 
+  // Hard guarantee, independent of whatever produced externalLength: the
+  // indicator can never visually dwarf the object it's marking. Bounded by
+  // the object's own bounding-box diagonal, not an absolute unit.
+  const objectDiagonal = new THREE.Vector3(...summary.aabbSizeWorld).length();
+  const maxReach = Math.max(objectDiagonal * 0.9, 1e-5);
+  const reach = Math.min(pad + externalLength, maxReach);
+
   const start = insetOrigin;
   const end = surfacePoint
     .clone()
-    .add(axisVector.clone().multiplyScalar(sign * (pad + externalLength)));
+    .add(axisVector.clone().multiplyScalar(sign * reach));
 
   return {
     start: [start.x, start.y, start.z],
