@@ -1339,8 +1339,10 @@ function createSectionedRangeEnvelope({
       // world-unit constant — a fixed dash length would either disappear
       // (huge model) or smear every layer into one solid blob (tiny model,
       // the "square" artifact) once the part is far from whatever scale it
-      // was tuned against.
-      const dashSize = Math.max(measure.objectSize * 0.05, 1e-6);
+      // was tuned against. Kept small relative to the object so the dash
+      // pattern still traces recognizable silhouette detail instead of
+      // skipping over it.
+      const dashSize = Math.max(measure.objectSize * 0.012, 1e-6);
       const axis = localAxis.clone().normalize();
 
       // Repeat the part's own real near-cap silhouette, translated further
