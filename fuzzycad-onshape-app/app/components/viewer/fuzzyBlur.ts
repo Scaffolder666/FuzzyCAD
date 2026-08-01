@@ -1,4 +1,7 @@
 import * as THREE from "three";
+import { LineSegments2 } from "three/addons/lines/LineSegments2.js";
+import { LineSegmentsGeometry } from "three/addons/lines/LineSegmentsGeometry.js";
+import { LineMaterial } from "three/addons/lines/LineMaterial.js";
 import type {
   AxisConfidenceMap,
   AxisDirectionMap,
@@ -69,6 +72,10 @@ type RangeSectionProfile = {
   contourOpacity: number;
   connectorOpacity: number;
   connectorCount: number;
+  contourLineWidth: number;
+  connectorLineWidth: number;
+  dashSize: number;
+  gapSize: number;
 };
 
 type AxisConfig = {
@@ -363,9 +370,15 @@ function getRangeSectionProfile(level: ConfidenceLevel): RangeSectionProfile {
       // geometry rather than a generic shrinking cone.
       firstScale: 1,
       lastScale: 1,
-      contourOpacity: 0.78,
-      connectorOpacity: 0.44,
+      // Near-opaque + dashed: directionality comes from the dash pattern
+      // and stacked repeats, not from a translucent "ghost copy" look.
+      contourOpacity: 0.92,
+      connectorOpacity: 0.68,
       connectorCount: 6,
+      contourLineWidth: 2.4,
+      connectorLineWidth: 1.4,
+      dashSize: 6,
+      gapSize: 4,
     };
   }
 
@@ -376,9 +389,13 @@ function getRangeSectionProfile(level: ConfidenceLevel): RangeSectionProfile {
       minRangeRatio: 0.055,
       firstScale: 1,
       lastScale: 1,
-      contourOpacity: 0.58,
-      connectorOpacity: 0.32,
+      contourOpacity: 0.82,
+      connectorOpacity: 0.52,
       connectorCount: 4,
+      contourLineWidth: 1.8,
+      connectorLineWidth: 1.1,
+      dashSize: 5,
+      gapSize: 4.5,
     };
   }
 
@@ -391,6 +408,10 @@ function getRangeSectionProfile(level: ConfidenceLevel): RangeSectionProfile {
     contourOpacity: 0,
     connectorOpacity: 0,
     connectorCount: 0,
+    contourLineWidth: 0,
+    connectorLineWidth: 0,
+    dashSize: 1,
+    gapSize: 1,
   };
 }
 
@@ -798,13 +819,35 @@ function createOuterOutlineMaterial({
   return material;
 }
 
-function createRangeLineMaterial(opacity: number) {
-  const material = new THREE.LineBasicMaterial({
+/**
+ * Dashed, near-opaque fat line: the dash pattern (not transparency) is what
+ * signals "this is an indicator, not real material" — resolution is kept in
+ * sync with the canvas automatically by LineSegments2.onBeforeRender.
+ */
+function createRangeLineMaterial({
+  opacity,
+  linewidth,
+  dashSize,
+  gapSize,
+}: {
+  opacity: number;
+  linewidth: number;
+  dashSize: number;
+  gapSize: number;
+}) {
+  const material = new LineMaterial({
     color: 0x111827,
+    linewidth,
+    dashed: true,
+    dashSize,
+    gapSize,
+    dashScale: 1,
+    worldUnits: false,
     transparent: true,
     opacity,
     depthTest: false,
     depthWrite: false,
+    alphaToCoverage: true,
   });
 
   material.userData[FUZZY_VISUAL_CHILD] = true;
@@ -815,25 +858,29 @@ function createRangeLineMaterial(opacity: number) {
 function createLineSegmentsObject({
   positions,
   opacity,
+  linewidth,
+  dashSize,
+  gapSize,
   renderOrder,
 }: {
   positions: number[];
   opacity: number;
+  linewidth: number;
+  dashSize: number;
+  gapSize: number;
   renderOrder: number;
 }) {
   if (positions.length === 0) {
     return null;
   }
 
-  const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute(
-    "position",
-    new THREE.Float32BufferAttribute(positions, 3),
-  );
+  const geometry = new LineSegmentsGeometry();
+  geometry.setPositions(positions);
 
-  const material = createRangeLineMaterial(opacity);
-  const line = new THREE.LineSegments(geometry, material);
+  const material = createRangeLineMaterial({ opacity, linewidth, dashSize, gapSize });
+  const line = new LineSegments2(geometry, material);
 
+  line.computeLineDistances();
   line.renderOrder = renderOrder;
   line.frustumCulled = false;
   line.userData[FUZZY_VISUAL_CHILD] = true;
@@ -1447,6 +1494,9 @@ function createSectionedRangeEnvelope({
       const contourLines = createLineSegmentsObject({
         positions: geometryData.contourPositions,
         opacity: profile.contourOpacity,
+        linewidth: profile.contourLineWidth,
+        dashSize: profile.dashSize,
+        gapSize: profile.gapSize,
         renderOrder: 1710,
       });
 
@@ -1457,6 +1507,9 @@ function createSectionedRangeEnvelope({
       const connectorLines = createLineSegmentsObject({
         positions: geometryData.connectorPositions,
         opacity: profile.connectorOpacity,
+        linewidth: profile.connectorLineWidth,
+        dashSize: profile.dashSize * 0.7,
+        gapSize: profile.gapSize * 1.3,
         renderOrder: 1705,
       });
 
