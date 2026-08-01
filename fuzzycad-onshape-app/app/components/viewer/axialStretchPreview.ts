@@ -182,6 +182,9 @@ function cloneObjectForPreview(
     object.material = createInvisiblePreviewMaterial(previewColor);
     object.castShadow = false;
     object.receiveShadow = false;
+    // Preview-only geometry sitting in the live scene must not intercept
+    // pointer picks meant for real objects underneath/around it.
+    object.raycast = () => {};
   });
 
   // Important: do NOT add dashed overlays inside clone.traverse().
@@ -245,6 +248,7 @@ function addWideDashedOverlay(mesh: THREE.Mesh) {
   line.userData.fuzzycadPreviewLine = true;
   line.computeLineDistances();
   line.renderOrder = 999;
+  line.raycast = () => {};
 
   // Important: line is child of mesh, so it uses the mesh's local coordinate system.
   mesh.add(line);

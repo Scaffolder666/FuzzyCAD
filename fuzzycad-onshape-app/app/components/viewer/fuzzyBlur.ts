@@ -838,6 +838,7 @@ function createLineSegmentsObject({
   line.renderOrder = renderOrder;
   line.frustumCulled = false;
   line.userData[FUZZY_VISUAL_CHILD] = true;
+  line.raycast = () => {};
 
   return line;
 }
@@ -1266,6 +1267,9 @@ function createSelectedObjectLineOverlay({
     outlineMesh.renderOrder = 1550;
     outlineMesh.frustumCulled = false;
     outlineMesh.userData[FUZZY_VISUAL_CHILD] = true;
+    // Purely decorative shell, extends past the real geometry: must not steal
+    // pointer picks from nearby objects.
+    outlineMesh.raycast = () => {};
 
     overlayGroup.add(outlineMesh);
 
@@ -1283,6 +1287,7 @@ function createSelectedObjectLineOverlay({
     overlayMesh.renderOrder = 1600;
     overlayMesh.frustumCulled = false;
     overlayMesh.userData[FUZZY_VISUAL_CHILD] = true;
+    overlayMesh.raycast = () => {};
 
     overlayGroup.add(overlayMesh);
   });
