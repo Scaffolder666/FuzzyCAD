@@ -582,6 +582,93 @@ function UncertaintyArrow({
   );
 }
 
+function UncertaintyLegendOverlay() {
+  return (
+    <Html fullscreen style={{ pointerEvents: "none" }}>
+      <div
+        style={{
+          position: "absolute",
+          bottom: 90,
+          left: 14,
+          width: 230,
+          padding: "12px 12px 10px",
+          borderRadius: 14,
+          background: "rgba(255,255,255,0.9)",
+          border: "1px solid rgba(148,163,184,0.35)",
+          boxShadow: "0 12px 28px rgba(15,23,42,0.18)",
+          backdropFilter: "blur(10px)",
+          fontFamily: "Arial, sans-serif",
+          color: "#172033",
+        }}
+      >
+        <div
+          style={{
+            fontSize: 12,
+            fontWeight: 800,
+            marginBottom: 8,
+            color: "#1e293b",
+          }}
+        >
+          Confidence legend
+        </div>
+
+        <div
+          style={{
+            display: "grid",
+            rowGap: 8,
+            fontSize: 11,
+            color: "#334155",
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <div
+              style={{
+                width: 18,
+                height: 10,
+                borderRadius: 999,
+                background: "rgba(158, 220, 255, 0.65)",
+                border: "1px solid rgba(158, 220, 255, 0.95)",
+              }}
+            />
+            <span>Medium confidence: narrow light-blue shell</span>
+          </div>
+
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <div
+              style={{
+                width: 28,
+                height: 10,
+                borderRadius: 999,
+                background: "rgba(20, 85, 255, 0.72)",
+                border: "1px solid rgba(20, 85, 255, 0.98)",
+              }}
+            />
+            <span>Low confidence: wider dark-blue shell</span>
+          </div>
+
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <div
+              style={{
+                width: 0,
+                height: 0,
+                borderTop: "5px solid transparent",
+                borderBottom: "5px solid transparent",
+                borderLeft: "12px solid #1455ff",
+                marginLeft: 4,
+              }}
+            />
+            <span>Arrow: uncertainty direction</span>
+          </div>
+
+          <div style={{ fontSize: 10, color: "#64748b", marginTop: 2 }}>
+            No shell = high confidence
+          </div>
+        </div>
+      </div>
+    </Html>
+  );
+}
+
 function Model({
   url,
   placements,
@@ -1068,6 +1155,10 @@ function Model({
           label={arrow.label}
         />
       ))}
+
+      {visualConfidenceAnnotations.length > 0 || confidenceEditor ? (
+        <UncertaintyLegendOverlay />
+      ) : null}
 
       {handleConfig?.kind === "axial" ||
       handleConfig?.kind === "heightStretch" ? (
