@@ -471,7 +471,10 @@ function getArrowLength(
   level: ConfidenceLevel,
   summary: AxialStretchObjectSummary,
 ) {
-  const base = Math.max(summary.crossSectionSize * 2.2, 0.06);
+  // Purely proportional to the object's own cross-section — no absolute
+  // floor. A fixed-unit floor here would dominate on small parts/models and
+  // produce arrows many times larger than the object they're attached to.
+  const base = Math.max(summary.crossSectionSize * 2.2, 1e-5);
 
   return level === "low" ? base * 1.45 : base;
 }
@@ -495,9 +498,9 @@ function getArrowGeometry(
   const halfLengthAlongAxis =
     axis === "y"
       ? summary.axisLength / 2
-      : Math.max(summary.crossSectionSize * 1.2, 0.035);
+      : Math.max(summary.crossSectionSize * 1.2, 1e-5);
 
-  const pad = Math.max(summary.crossSectionSize * 0.9, 0.025);
+  const pad = Math.max(summary.crossSectionSize * 0.9, 1e-5);
   const insetDepth = halfLengthAlongAxis * 0.55;
 
   const start = center

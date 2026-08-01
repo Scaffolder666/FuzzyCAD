@@ -74,8 +74,6 @@ type RangeSectionProfile = {
   connectorCount: number;
   contourLineWidth: number;
   connectorLineWidth: number;
-  dashSize: number;
-  gapSize: number;
 };
 
 type AxisConfig = {
@@ -377,8 +375,6 @@ function getRangeSectionProfile(level: ConfidenceLevel): RangeSectionProfile {
       connectorCount: 6,
       contourLineWidth: 2.4,
       connectorLineWidth: 1.4,
-      dashSize: 6,
-      gapSize: 4,
     };
   }
 
@@ -394,8 +390,6 @@ function getRangeSectionProfile(level: ConfidenceLevel): RangeSectionProfile {
       connectorCount: 4,
       contourLineWidth: 1.8,
       connectorLineWidth: 1.1,
-      dashSize: 5,
-      gapSize: 4.5,
     };
   }
 
@@ -410,8 +404,6 @@ function getRangeSectionProfile(level: ConfidenceLevel): RangeSectionProfile {
     connectorCount: 0,
     contourLineWidth: 0,
     connectorLineWidth: 0,
-    dashSize: 1,
-    gapSize: 1,
   };
 }
 
@@ -1491,12 +1483,20 @@ function createSectionedRangeEnvelope({
         rangeDistance,
       });
 
+      // Dash sizes are derived from the object's own scale, never a fixed
+      // world-unit constant — a fixed dash length would either disappear
+      // (huge model) or smear every layer into one solid blob (tiny model,
+      // the "square" artifact) once the part is far from whatever scale it
+      // was tuned against.
+      const contourDashSize = Math.max(measure.objectSize * 0.05, 1e-6);
+      const connectorDashSize = Math.max(rangeDistance * 0.22, 1e-6);
+
       const contourLines = createLineSegmentsObject({
         positions: geometryData.contourPositions,
         opacity: profile.contourOpacity,
         linewidth: profile.contourLineWidth,
-        dashSize: profile.dashSize,
-        gapSize: profile.gapSize,
+        dashSize: contourDashSize,
+        gapSize: contourDashSize * 0.65,
         renderOrder: 1710,
       });
 
@@ -1508,8 +1508,8 @@ function createSectionedRangeEnvelope({
         positions: geometryData.connectorPositions,
         opacity: profile.connectorOpacity,
         linewidth: profile.connectorLineWidth,
-        dashSize: profile.dashSize * 0.7,
-        gapSize: profile.gapSize * 1.3,
+        dashSize: connectorDashSize,
+        gapSize: connectorDashSize * 0.85,
         renderOrder: 1705,
       });
 
