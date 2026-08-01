@@ -164,6 +164,9 @@ export default function FuzzyCADHome() {
     useState<RolePreviewPlan | null>(null);
   const [confirmedHeightPlan, setConfirmedHeightPlan] =
     useState<RolePreviewPlan | null>(null);
+  const [proposalPlan, setProposalPlan] = useState<RolePreviewPlan | null>(
+    null,
+  );
   const [manipulationValue, setManipulationValue] = useState(0);
 
   const [heightPreviewOpen, setHeightPreviewOpen] = useState(false);
@@ -208,6 +211,7 @@ export default function FuzzyCADHome() {
     uncertaintyDocument,
     uncertaintyDocumentWithCurrentSource,
     confidenceAnnotations,
+    proposalPreviews,
     resetUncertaintyDocument,
     upsertSizeMark,
     removeSizeMarks,
@@ -218,6 +222,7 @@ export default function FuzzyCADHome() {
     resolveAnnotation,
     reopenAnnotation,
     selectAnnotationAlternativeOption,
+    upsertProposal,
   } = useUncertaintyDocument(currentUncertaintySource);
 
   const { name: currentUserName, setName: setCurrentUserName } =
@@ -313,6 +318,7 @@ export default function FuzzyCADHome() {
   function resetSizeOperationState() {
     setPendingHeightRolePreview(null);
     setConfirmedHeightPlan(null);
+    setProposalPlan(null);
     setManipulationValue(0);
     setHeightPreviewOpen(false);
     closeSizeUncertaintyEditor();
@@ -650,6 +656,63 @@ export default function FuzzyCADHome() {
     updateAnnotationComment(annotationId, comment);
   }
 
+  function formatLengthMeters(value: number) {
+    return `${Math.round(value * 1000)} mm`;
+  }
+
+  function startSizeProposal() {
+    if (!selectedObjectSummary) {
+      return;
+    }
+
+    setActiveTool("extend");
+    resetSizeOperationState();
+    setLassoPathKeys([]);
+    setManipulationValue(0);
+    setProposalPlan({
+      stretchTargetPathKeys: [selectedObjectSummary.pathKey],
+      moveWithEndPathKeys: [],
+      fixedAnchorPathKeys: [],
+      excludedPathKeys: [],
+    });
+  }
+
+  function cancelSizeProposal() {
+    setProposalPlan(null);
+    setManipulationValue(0);
+    setActiveTool("select");
+  }
+
+  function applySizeProposal() {
+    const pathKey = proposalPlan?.stretchTargetPathKeys[0];
+    const summary = pathKey
+      ? objectSummaries.find((item) => item.pathKey === pathKey)
+      : null;
+
+    if (!pathKey || !summary) {
+      cancelSizeProposal();
+      return;
+    }
+
+    const deltaMeters = manipulationValue;
+    const previousLength = summary.axisLength;
+    const proposedLength = Math.max(previousLength + deltaMeters, 0);
+
+    upsertProposal({
+      pathKey,
+      dimension: "Length",
+      previousValueLabel: formatLengthMeters(previousLength),
+      proposedValueLabel: formatLengthMeters(proposedLength),
+      deltaMeters,
+      author:
+        currentUserName.trim().length > 0 ? currentUserName.trim() : undefined,
+    });
+
+    setProposalPlan(null);
+    setManipulationValue(0);
+    setActiveTool("select");
+  }
+
 async function saveProjectStateToOnshape() {
   if (!documentId || !workspaceId) {
     console.warn("Missing documentId or workspaceId");
@@ -805,8 +868,11 @@ if (result.ok && result.state) {
           activeTool={activeTool}
           rolePreviewPlan={pendingHeightRolePreview}
           confirmedHeightPlan={confirmedHeightPlan}
+          proposalPlan={proposalPlan}
+          proposalPreviews={proposalPreviews}
           enableManipulationHandles={
-            !heightPreviewOpen && Boolean(confirmedHeightPlan)
+            !heightPreviewOpen &&
+            (Boolean(confirmedHeightPlan) || Boolean(proposalPlan))
           }
           manipulationValue={manipulationValue}
           confidenceAnnotations={confidenceAnnotations}
@@ -849,6 +915,11 @@ if (result.ok && result.state) {
               return;
             }
 
+            if (tool === "extend") {
+              startSizeProposal();
+              return;
+            }
+
             setActiveTool(tool);
             resetSizeOperationState();
 
@@ -857,6 +928,28 @@ if (result.ok && result.state) {
             }
           }}
         />
+
+        {activeTool === "extend" && proposalPlan ? (
+          <div className={styles.manipulationReadout}>
+            <span className={styles.manipulationValue}>
+              {formatLengthMeters(manipulationValue)}
+            </span>
+            <button
+              type="button"
+              className={styles.manipulationResetButton}
+              onClick={cancelSizeProposal}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              className={styles.manipulationResetButton}
+              onClick={applySizeProposal}
+            >
+              Save proposal
+            </button>
+          </div>
+        ) : null}
 
         <UncertaintyMarksPanel
           document={uncertaintyDocumentWithCurrentSource}

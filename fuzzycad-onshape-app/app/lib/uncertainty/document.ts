@@ -48,12 +48,19 @@ export type SizeUncertaintyAnnotation = BaseAnnotationFields & {
   directions: AxisDirectionMap;
 };
 
-/** "Proposed change": someone already has a specific value in mind. */
+/**
+ * "Proposed change": someone already has a specific value in mind.
+ * v1 only covers a change along the object's own principal/height axis —
+ * deltaMeters is the signed offset applied by the same preview mechanics
+ * the "height" tool already uses, so the 3D view can render this proposal's
+ * ghost persistently, not just while actively dragging.
+ */
 export type ProposalUncertaintyAnnotation = BaseAnnotationFields & {
   type: "proposal";
   dimension: string;
   previousValueLabel: string;
   proposedValueLabel: string;
+  deltaMeters: number;
 };
 
 export type AlternativeOption = {
@@ -390,4 +397,109 @@ export function toFuzzyConfidenceAnnotations(
         directions: annotation.directions,
       })),
     );
+}
+
+export function makeProposalAnnotationId(pathKey: string) {
+  return `proposal:${pathKey}`;
+}
+
+function createSizeProposalAnnotation(input: {
+  pathKey: string;
+  dimension: string;
+  previousValueLabel: string;
+  proposedValueLabel: string;
+  deltaMeters: number;
+  comment?: string;
+  author?: string;
+  assignee?: string;
+  status?: AnnotationStatus;
+  createdAt?: string;
+  updatedAt?: string;
+}): ProposalUncertaintyAnnotation | null {
+  if (!input.pathKey) {
+    return null;
+  }
+
+  const now = new Date().toISOString();
+
+  return {
+    id: makeProposalAnnotationId(input.pathKey),
+    type: "proposal",
+    target: {
+      pathKeys: [input.pathKey],
+      referencePathKey: input.pathKey,
+      scope: "single",
+    },
+    dimension: input.dimension,
+    previousValueLabel: input.previousValueLabel,
+    proposedValueLabel: input.proposedValueLabel,
+    deltaMeters: input.deltaMeters,
+    comment: input.comment,
+    author: input.author,
+    assignee: input.assignee,
+    status: input.status ?? "open",
+    createdAt: input.createdAt ?? now,
+    updatedAt: input.updatedAt ?? now,
+  };
+}
+
+/** Currently only one open size proposal per object — a new save replaces it. */
+export function upsertSizeProposal(
+  document: FuzzyCADUncertaintyDocument,
+  input: {
+    pathKey: string;
+    dimension: string;
+    previousValueLabel: string;
+    proposedValueLabel: string;
+    deltaMeters: number;
+    author?: string;
+  },
+): FuzzyCADUncertaintyDocument {
+  const id = makeProposalAnnotationId(input.pathKey);
+  const existing = document.annotations.find((annotation) => annotation.id === id);
+
+  const nextAnnotation = createSizeProposalAnnotation({
+    pathKey: input.pathKey,
+    dimension: input.dimension,
+    previousValueLabel: input.previousValueLabel,
+    proposedValueLabel: input.proposedValueLabel,
+    deltaMeters: input.deltaMeters,
+    comment: existing?.comment,
+    author: existing?.author ?? input.author,
+    assignee: existing?.assignee,
+    status: "open",
+    createdAt: existing?.createdAt,
+  });
+
+  if (!nextAnnotation) {
+    return document;
+  }
+
+  return {
+    ...document,
+    annotations: [
+      ...document.annotations.filter((annotation) => annotation.id !== id),
+      nextAnnotation,
+    ],
+  };
+}
+
+export type ProposalPreview = {
+  pathKey: string;
+  deltaMeters: number;
+};
+
+/** Open size proposals, for the 3D viewer to render as a persistent ghost. */
+export function toProposalPreviews(
+  document: FuzzyCADUncertaintyDocument,
+): ProposalPreview[] {
+  return document.annotations
+    .filter(
+      (annotation): annotation is ProposalUncertaintyAnnotation =>
+        annotation.type === "proposal" && annotation.status === "open",
+    )
+    .map((annotation) => ({
+      pathKey: annotation.target.referencePathKey,
+      deltaMeters: annotation.deltaMeters,
+    }));
 }

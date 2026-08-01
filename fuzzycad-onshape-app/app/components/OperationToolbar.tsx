@@ -103,10 +103,9 @@ const tools: ToolItem[] = [
   },
   {
     id: "extend",
-    label: "Extend",
-    title: "Stretch assembly height",
-    icon: <SizeIcon />,
-    hidden: true,
+    label: "Propose",
+    title: "Drag to a specific length and save it as a proposed change",
+    icon: <ExtendIcon />,
   },
   {
     id: "angle",

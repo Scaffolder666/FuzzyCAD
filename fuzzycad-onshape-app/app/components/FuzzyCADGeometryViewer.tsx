@@ -59,6 +59,12 @@ export type RolePreviewPlan = {
   excludedPathKeys: string[];
 };
 
+/** A saved size-proposal's delta, structurally the same shape as document.ts's. */
+export type ProposalPreview = {
+  pathKey: string;
+  deltaMeters: number;
+};
+
 export type FuzzyConfidenceEditor = {
   pathKey: string;
   confidence: AxisConfidenceMap;
@@ -92,6 +98,10 @@ type FuzzyCADGeometryViewerProps = {
   rolePreviewPlan?: RolePreviewPlan | null;
   enableManipulationHandles?: boolean;
   confirmedHeightPlan?: AxialStretchRolePlan | null;
+  /** Single-object plan for the "Propose size" tool's active drag session. */
+  proposalPlan?: AxialStretchRolePlan | null;
+  /** Other saved (not currently being dragged) proposals, shown as static ghosts. */
+  proposalPreviews?: ProposalPreview[];
   onMeshGraph?: (nodes: MeshGraphNode[]) => void;
   onObjectSummaries?: (summaries: AxialStretchObjectSummary[]) => void;
   onSelectedNode?: (node: MeshGraphNode | null) => void;
@@ -681,6 +691,8 @@ function Model({
   manipulationValue,
   rolePreviewPlan,
   confirmedHeightPlan,
+  proposalPlan,
+  proposalPreviews,
   enableManipulationHandles = true,
   lassoPolygon,
 
@@ -703,6 +715,8 @@ function Model({
   manipulationValue?: number;
   rolePreviewPlan?: RolePreviewPlan | null;
   confirmedHeightPlan?: AxialStretchRolePlan | null;
+  proposalPlan?: AxialStretchRolePlan | null;
+  proposalPreviews?: ProposalPreview[];
   enableManipulationHandles?: boolean;
   lassoPolygon?: ScreenPoint[] | null;
   onMeshGraph?: (nodes: MeshGraphNode[]) => void;
@@ -753,6 +767,85 @@ function Model({
       confirmedHeightPlan,
     );
   }, [scene, objectSummaries, confirmedHeightPlan]);
+
+  // Active "Propose size" drag session (single object) — same preview
+  // mechanics as the height-stretch tool above, just a simpler plan.
+  const proposalPreviewSession = useMemo(() => {
+    if (!proposalPlan) {
+      return null;
+    }
+
+    return createAxialStretchPreviewSession(
+      scene,
+      objectSummaries,
+      proposalPlan,
+    );
+  }, [scene, objectSummaries, proposalPlan]);
+
+  useEffect(() => {
+    if (!proposalPreviewSession) {
+      return;
+    }
+
+    scene.add(proposalPreviewSession.group);
+    invalidate();
+
+    return () => {
+      disposeAxialStretchPreviewSession(proposalPreviewSession);
+      invalidate();
+    };
+  }, [scene, proposalPreviewSession, invalidate]);
+
+  // Every OTHER saved proposal (not the one currently being dragged) shows
+  // as a static ghost at its saved delta, so "proposed" stays visible on the
+  // geometry the same way an open size mark does.
+  const activeProposalPathKey = proposalPlan?.stretchTargetPathKeys[0] ?? null;
+
+  const persistentProposalPreviews = useMemo(
+    () =>
+      (proposalPreviews ?? []).filter(
+        (preview) => preview.pathKey !== activeProposalPathKey,
+      ),
+    [proposalPreviews, activeProposalPathKey],
+  );
+
+  useEffect(() => {
+    const sessions = persistentProposalPreviews
+      .map((preview) => {
+        const session = createAxialStretchPreviewSession(scene, objectSummaries, {
+          stretchTargetPathKeys: [preview.pathKey],
+          moveWithEndPathKeys: [],
+          fixedAnchorPathKeys: [],
+          excludedPathKeys: [],
+        });
+
+        if (!session) {
+          return null;
+        }
+
+        updateAxialStretchPreviewSession(session, preview.deltaMeters);
+        scene.add(session.group);
+
+        return session;
+      })
+      .filter(
+        (session): session is AxialStretchPreviewSession => session !== null,
+      );
+
+    if (sessions.length === 0) {
+      return;
+    }
+
+    invalidate();
+
+    return () => {
+      for (const session of sessions) {
+        disposeAxialStretchPreviewSession(session);
+      }
+
+      invalidate();
+    };
+  }, [scene, objectSummaries, persistentProposalPreviews, invalidate]);
 
   const visualConfidenceAnnotations = useMemo(() => {
     const base = confidenceAnnotations ?? [];
@@ -858,11 +951,25 @@ function Model({
     }
 
     if (
+      activeTool === "extend" &&
+      proposalPlan &&
+      proposalPreviewSession
+    ) {
+      const handle = getAxialStretchPreviewHandle(proposalPreviewSession);
+
+      return {
+        kind: "heightStretch",
+        baseWorld: handle.baseWorld,
+        axisWorld: handle.axisWorld,
+        length: handle.length,
+        session: proposalPreviewSession,
+      };
+    }
+
+    if (
       !activePathKeys ||
       activePathKeys.length === 0 ||
-      (activeTool !== "height" &&
-        activeTool !== "extend" &&
-        activeTool !== "angle")
+      (activeTool !== "height" && activeTool !== "angle")
     ) {
       return null;
     }
@@ -909,25 +1016,6 @@ function Model({
       };
     }
 
-    if (activeTool === "extend") {
-      const primary = activeSummaries[0];
-      const axis = new THREE.Vector3(...primary.principalAxisWorld);
-
-      if (axis.lengthSq() < 1e-12) {
-        axis.set(0, 1, 0);
-      } else {
-        axis.normalize();
-      }
-
-      return {
-        kind: "axial",
-        baseWorld: new THREE.Vector3(...primary.negativeEndWorld),
-        axisWorld: axis,
-        length: primary.axisLength,
-        objects,
-      };
-    }
-
     const primary = activeSummaries[0];
 
     return {
@@ -939,6 +1027,8 @@ function Model({
     activePathKeys,
     activeTool,
     confirmedHeightPlan,
+    proposalPlan,
+    proposalPreviewSession,
     enableManipulationHandles,
     heightPreviewSession,
     objectSummaries,
@@ -1202,6 +1292,8 @@ export default function FuzzyCADGeometryViewer({
   manipulationValue,
   rolePreviewPlan,
   confirmedHeightPlan,
+  proposalPlan,
+  proposalPreviews,
   enableManipulationHandles = true,
   onMeshGraph,
   onObjectSummaries,
@@ -1262,6 +1354,8 @@ export default function FuzzyCADGeometryViewer({
                   manipulationValue={manipulationValue}
                   rolePreviewPlan={rolePreviewPlan}
                   confirmedHeightPlan={confirmedHeightPlan}
+                  proposalPlan={proposalPlan}
+                  proposalPreviews={proposalPreviews}
                   enableManipulationHandles={enableManipulationHandles}
                   lassoPolygon={lassoPolygon}
                   onMeshGraph={onMeshGraph}
