@@ -1099,31 +1099,6 @@ function rankPrimaryAxis(
   );
 }
 
-/** Collapses "both" to a single side, for callers that only want one arrow. */
-export function selectPrimaryConfidenceAxis({
-  confidence,
-  directions,
-}: {
-  confidence: AxisConfidenceMap;
-  directions: AxisDirectionMap;
-}): {
-  axis: ConfidenceAxis;
-  direction: "positive" | "negative";
-  level: ConfidenceLevel;
-} | null {
-  const primary = rankPrimaryAxis(confidence, directions);
-
-  if (!primary) {
-    return null;
-  }
-
-  return {
-    axis: primary.axis,
-    direction: primary.direction === "both" ? "positive" : primary.direction,
-    level: primary.level,
-  };
-}
-
 function getPrimaryAxisConfigs({
   confidence,
   directions,

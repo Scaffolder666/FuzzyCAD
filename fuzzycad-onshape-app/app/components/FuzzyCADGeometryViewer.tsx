@@ -1,7 +1,7 @@
 "use client";
 
-import { Canvas, type ThreeEvent, useFrame, useThree } from "@react-three/fiber";
-import { Billboard, Bounds, Html, OrbitControls, useGLTF } from "@react-three/drei";
+import { Canvas, type ThreeEvent, useThree } from "@react-three/fiber";
+import { Bounds, Html, OrbitControls, useGLTF } from "@react-three/drei";
 import RoleBadge, { type RoleBadgeRole } from "./viewer/RoleBadge";
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
@@ -21,7 +21,6 @@ import type {
 } from "../lib/uncertainty/types";
 import {
   applyFuzzyConfidence,
-  selectPrimaryConfidenceAxis,
   type ConfidenceAxisFrame,
   type FuzzyConfidenceAnnotation,
 } from "./viewer/fuzzyBlur";
@@ -471,176 +470,49 @@ function getArrowLength(
   level: ConfidenceLevel,
   summary: AxialStretchObjectSummary,
 ) {
-  // Purely proportional to the object's own cross-section — no absolute
-  // floor. A fixed-unit floor here would dominate on small parts/models and
-  // produce arrows many times larger than the object they're attached to.
-  const base = Math.max(summary.crossSectionSize * 2.2, 1e-5);
+  const base = Math.max(summary.crossSectionSize * 2.2, 0.06);
 
   return level === "low" ? base * 1.45 : base;
 }
 
-/**
- * The bar starts well inside the object body (so it visibly grows out of
- * the part being marked, not floating past it with a gap) and ends past
- * the surface by the usual pad + uncertainty-length reach.
- */
-function getArrowGeometry(
+function getArrowStart(
   summary: AxialStretchObjectSummary,
   frame: ConfidenceAxisFrame,
   axis: ConfidenceAxis,
   direction: "positive" | "negative",
-  externalLength: number,
-): { start: [number, number, number]; end: [number, number, number] } {
+): [number, number, number] {
   const center = new THREE.Vector3(...summary.aabbCenterWorld);
   const axisVector = getAxisVectorFromFrame(frame, axis);
   const sign = direction === "positive" ? 1 : -1;
 
-  let surfacePoint: THREE.Vector3;
-  let insetOrigin: THREE.Vector3;
+  const halfLengthAlongAxis =
+    axis === "y"
+      ? summary.axisLength / 2
+      : Math.max(summary.crossSectionSize * 1.2, 0.035);
 
-  if (axis === "y") {
-    // The object's own principal axis: anchor on the real measured extreme
-    // point (summary.positiveEndWorld / negativeEndWorld), not
-    // center + axisLength/2. That formula silently assumes the point-cloud
-    // centroid sits exactly at the midpoint of the extent, which is false
-    // for any asymmetric part — the actual source of arrows landing well
-    // outside (or short of) the real end of the geometry.
-    const positiveEnd = new THREE.Vector3(...summary.positiveEndWorld);
-    const negativeEnd = new THREE.Vector3(...summary.negativeEndWorld);
+  const pad = Math.max(summary.crossSectionSize * 0.9, 0.025);
 
-    surfacePoint = sign > 0 ? positiveEnd : negativeEnd;
-    insetOrigin = positiveEnd
-      .clone()
-      .add(negativeEnd)
-      .multiplyScalar(0.5)
-      .lerp(surfacePoint, 0.55);
-  } else {
-    const halfLengthAlongAxis = Math.max(summary.crossSectionSize * 1.2, 1e-5);
-
-    surfacePoint = center
-      .clone()
-      .add(axisVector.clone().multiplyScalar(sign * halfLengthAlongAxis));
-    insetOrigin = center
-      .clone()
-      .add(
-        axisVector.clone().multiplyScalar(sign * halfLengthAlongAxis * 0.55),
-      );
-  }
-
-  const pad = Math.max(summary.crossSectionSize * 0.9, 1e-5);
-
-  // Hard guarantee, independent of whatever produced externalLength: the
-  // indicator can never visually dwarf the object it's marking. Bounded by
-  // the object's own bounding-box diagonal, not an absolute unit.
-  const objectDiagonal = new THREE.Vector3(...summary.aabbSizeWorld).length();
-  const maxReach = Math.max(objectDiagonal * 0.9, 1e-5);
-  const reach = Math.min(pad + externalLength, maxReach);
-
-  const start = insetOrigin;
-  const end = surfacePoint
+  const start = center
     .clone()
-    .add(axisVector.clone().multiplyScalar(sign * reach));
+    .add(axisVector.clone().multiplyScalar(sign * (halfLengthAlongAxis + pad)));
 
-  return {
-    start: [start.x, start.y, start.z],
-    end: [end.x, end.y, end.z],
-  };
+  return [start.x, start.y, start.z];
 }
 
-/**
- * Flat, always-camera-facing arrowhead. Rotated each frame to point along
- * the on-screen projection of `directionWorld`, so it reads as a 2D glyph
- * instead of a 3D cone that foreshortens as the view rotates.
- */
-/**
- * Flat, always-camera-facing "fat arrow" glyph: a thick bar with a
- * triangular head, rotated each frame to point along the on-screen
- * projection of start->end. Deliberately not a hairline + separate cone —
- * one solid 2D shape reads clearly regardless of view angle.
- */
-function DirectionBar2D({
-  start,
-  end,
-  color,
-  barWidth,
-  headLength,
-  headWidth,
-}: {
-  start: [number, number, number];
-  end: [number, number, number];
-  color: string;
-  barWidth: number;
-  headLength: number;
-  headWidth: number;
-}) {
-  const rotationRef = useRef<THREE.Group>(null);
-  const { camera } = useThree();
+function getArrowEnd(
+  start: [number, number, number],
+  frame: ConfidenceAxisFrame,
+  axis: ConfidenceAxis,
+  direction: "positive" | "negative",
+  length: number,
+): [number, number, number] {
+  const startVector = new THREE.Vector3(...start);
+  const axisVector = getAxisVectorFromFrame(frame, axis);
+  const sign = direction === "positive" ? 1 : -1;
 
-  const directionWorld = useMemo(
-    () =>
-      new THREE.Vector3(
-        end[0] - start[0],
-        end[1] - start[1],
-        end[2] - start[2],
-      ),
-    [start, end],
-  );
+  const end = startVector.add(axisVector.multiplyScalar(sign * length));
 
-  const length = useMemo(() => directionWorld.length(), [directionWorld]);
-
-  useFrame(() => {
-    const group = rotationRef.current;
-
-    if (!group) {
-      return;
-    }
-
-    const cameraRight = new THREE.Vector3().setFromMatrixColumn(
-      camera.matrixWorld,
-      0,
-    );
-    const cameraUp = new THREE.Vector3().setFromMatrixColumn(
-      camera.matrixWorld,
-      1,
-    );
-
-    const dx = directionWorld.dot(cameraRight);
-    const dy = directionWorld.dot(cameraUp);
-
-    group.rotation.z = Math.atan2(dy, dx);
-  });
-
-  const geometry = useMemo(() => {
-    const shaftLength = Math.max(length - headLength, 0);
-    const shape = new THREE.Shape();
-
-    shape.moveTo(0, -barWidth / 2);
-    shape.lineTo(shaftLength, -barWidth / 2);
-    shape.lineTo(shaftLength, -headWidth / 2);
-    shape.lineTo(length, 0);
-    shape.lineTo(shaftLength, headWidth / 2);
-    shape.lineTo(shaftLength, barWidth / 2);
-    shape.lineTo(0, barWidth / 2);
-    shape.closePath();
-
-    return new THREE.ShapeGeometry(shape);
-  }, [length, barWidth, headLength, headWidth]);
-
-  return (
-    <Billboard position={start}>
-      <group ref={rotationRef}>
-        <mesh geometry={geometry} renderOrder={2000} raycast={() => {}}>
-          <meshBasicMaterial
-            color={color}
-            side={THREE.DoubleSide}
-            depthTest={false}
-            transparent
-            opacity={0.95}
-          />
-        </mesh>
-      </group>
-    </Billboard>
-  );
+  return [end.x, end.y, end.z];
 }
 
 function UncertaintyArrow({
@@ -654,6 +526,21 @@ function UncertaintyArrow({
   color: string;
   label: string;
 }) {
+  const origin = useMemo(
+    () => new THREE.Vector3(start[0], start[1], start[2]),
+    [start],
+  );
+
+  const direction = useMemo(() => {
+    const dir = new THREE.Vector3(
+      end[0] - start[0],
+      end[1] - start[1],
+      end[2] - start[2],
+    );
+
+    return dir.normalize();
+  }, [start, end]);
+
   const length = useMemo(() => {
     return new THREE.Vector3(
       end[0] - start[0],
@@ -663,18 +550,12 @@ function UncertaintyArrow({
   }, [start, end]);
 
   const headLength = Math.min(length * 0.32, 0.08);
-  const headWidth = Math.min(headLength * 0.62, 0.045);
-  const barWidth = headWidth * 0.5;
+  const headWidth = Math.min(headLength * 0.55, 0.04);
 
   return (
     <>
-      <DirectionBar2D
-        start={start}
-        end={end}
-        color={color}
-        barWidth={barWidth}
-        headLength={headLength}
-        headWidth={headWidth}
+      <arrowHelper
+        args={[direction, origin, length, color, headLength, headWidth]}
       />
       <Html position={end} center distanceFactor={0.8} occlude={false}>
         <div
@@ -1050,41 +931,39 @@ function Model({
         continue;
       }
 
-      // One arrow per annotation: same axis/side picked for the envelope,
-      // so the two visuals never disagree about which direction is shown.
-      const primary = selectPrimaryConfidenceAxis({
-        confidence: annotation.confidence,
-        directions:
-          annotation.directions ?? { x: "both", y: "both", z: "both" },
-      });
-
-      if (!primary) {
-        continue;
-      }
-
       const frame =
         axisFramesByPathKey.get(summary.pathKey) ?? getObjectAxisFrame(summary);
 
-      const externalLength = getArrowLength(primary.level, summary);
-      const { start, end } = getArrowGeometry(
-        summary,
-        frame,
-        primary.axis,
-        primary.direction,
-        externalLength,
-      );
+      (["x", "y", "z"] as ConfidenceAxis[]).forEach((axis) => {
+        const level = annotation.confidence[axis];
 
-      arrows.push({
-        pathKey: annotation.pathKey,
-        axis: primary.axis,
-        level: primary.level,
-        direction: primary.direction,
-        start,
-        end,
-        color: getArrowColor(primary.level),
-        label: `${primary.axis.toUpperCase()}${
-          primary.direction === "positive" ? "+" : "−"
-        }`,
+        if (level === "high") {
+          return;
+        }
+
+        const axisDirection = annotation.directions?.[axis] ?? "both";
+
+        const arrowDirections: ("positive" | "negative")[] =
+          axisDirection === "both" ? ["positive", "negative"] : [axisDirection];
+
+        for (const direction of arrowDirections) {
+          const start = getArrowStart(summary, frame, axis, direction);
+          const length = getArrowLength(level, summary);
+          const end = getArrowEnd(start, frame, axis, direction, length);
+
+          arrows.push({
+            pathKey: annotation.pathKey,
+            axis,
+            level,
+            direction,
+            start,
+            end,
+            color: getArrowColor(level),
+            label: `${axis.toUpperCase()}${
+              direction === "positive" ? "+" : "−"
+            }`,
+          });
+        }
       });
     }
 
