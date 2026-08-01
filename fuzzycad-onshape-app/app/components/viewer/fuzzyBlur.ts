@@ -69,7 +69,6 @@ type RangeSectionProfile = {
   contourOpacity: number;
   connectorOpacity: number;
   connectorCount: number;
-  binCount: number;
 };
 
 type AxisConfig = {
@@ -359,12 +358,14 @@ function getRangeSectionProfile(level: ConfidenceLevel): RangeSectionProfile {
       sectionCount: 4,
       rangeRatio: 0.46,
       minRangeRatio: 0.085,
-      firstScale: 0.96,
-      lastScale: 0.74,
+      // No taper: every section repeats the part's own cap silhouette
+      // unscaled, so the envelope reads as an extension of the real
+      // geometry rather than a generic shrinking cone.
+      firstScale: 1,
+      lastScale: 1,
       contourOpacity: 0.78,
       connectorOpacity: 0.44,
       connectorCount: 6,
-      binCount: 32,
     };
   }
 
@@ -373,12 +374,11 @@ function getRangeSectionProfile(level: ConfidenceLevel): RangeSectionProfile {
       sectionCount: 2,
       rangeRatio: 0.26,
       minRangeRatio: 0.055,
-      firstScale: 0.97,
-      lastScale: 0.86,
+      firstScale: 1,
+      lastScale: 1,
       contourOpacity: 0.58,
       connectorOpacity: 0.32,
       connectorCount: 4,
-      binCount: 28,
     };
   }
 
@@ -391,7 +391,6 @@ function getRangeSectionProfile(level: ConfidenceLevel): RangeSectionProfile {
     contourOpacity: 0,
     connectorOpacity: 0,
     connectorCount: 0,
-    binCount: 24,
   };
 }
 
@@ -866,18 +865,63 @@ function pushSegment(
   positions.push(a.x, a.y, a.z, b.x, b.y, b.z);
 }
 
+type PlanarPoint = { x: number; y: number };
+
+/** Monotone-chain 2D convex hull, counter-clockwise, no duplicate closing point. */
+function computeConvexHull2D(points: PlanarPoint[]): PlanarPoint[] {
+  if (points.length < 3) {
+    return points;
+  }
+
+  const sorted = [...points].sort((a, b) => (a.x === b.x ? a.y - b.y : a.x - b.x));
+
+  const cross = (o: PlanarPoint, a: PlanarPoint, b: PlanarPoint) =>
+    (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+
+  const lower: PlanarPoint[] = [];
+
+  for (const point of sorted) {
+    while (
+      lower.length >= 2 &&
+      cross(lower[lower.length - 2], lower[lower.length - 1], point) <= 0
+    ) {
+      lower.pop();
+    }
+
+    lower.push(point);
+  }
+
+  const upper: PlanarPoint[] = [];
+
+  for (let index = sorted.length - 1; index >= 0; index -= 1) {
+    const point = sorted[index];
+
+    while (
+      upper.length >= 2 &&
+      cross(upper[upper.length - 2], upper[upper.length - 1], point) <= 0
+    ) {
+      upper.pop();
+    }
+
+    upper.push(point);
+  }
+
+  lower.pop();
+  upper.pop();
+
+  return lower.concat(upper);
+}
+
 function buildContourTemplate({
   points,
   centerLocal,
   axisLocal,
   sign,
-  binCount,
 }: {
   points: THREE.Vector3[];
   centerLocal: THREE.Vector3;
   axisLocal: THREE.Vector3;
   sign: number;
-  binCount: number;
 }): ContourTemplate | null {
   if (points.length === 0) {
     return null;
@@ -908,12 +952,7 @@ function buildContourTemplate({
   const sideMax = sign * capCoord;
   const sideWindow = Math.max(halfExtent * 0.42, 0.0001);
 
-  const bins: { radial: THREE.Vector3; radius: number }[] = Array.from(
-    { length: binCount },
-    () => ({ radial: new THREE.Vector3(), radius: -Infinity }),
-  );
-
-  const observedRadii: number[] = [];
+  const radialPoints: PlanarPoint[] = [];
 
   for (let index = 0; index < points.length; index += 1) {
     const point = points[index];
@@ -928,52 +967,29 @@ function buildContourTemplate({
     const radial = point.clone().sub(axialPoint);
     const x = radial.dot(u);
     const y = radial.dot(v);
-    const radius = Math.sqrt(x * x + y * y);
 
-    if (radius <= 0.00001) {
+    if (x * x + y * y <= 1e-10) {
       continue;
     }
 
-    let angle = Math.atan2(y, x);
-
-    if (angle < 0) {
-      angle += Math.PI * 2;
-    }
-
-    const binIndex = Math.min(
-      binCount - 1,
-      Math.floor((angle / (Math.PI * 2)) * binCount),
-    );
-
-    if (radius > bins[binIndex].radius) {
-      bins[binIndex] = {
-        radial: u.clone().multiplyScalar(x).add(v.clone().multiplyScalar(y)),
-        radius,
-      };
-    }
-
-    observedRadii.push(radius);
+    radialPoints.push({ x, y });
   }
 
-  const averageRadius =
-    observedRadii.length > 0
-      ? observedRadii.reduce((sum, radius) => sum + radius, 0) /
-        observedRadii.length
-      : Math.max(halfExtent * 0.08, 0.001);
+  // Trace the part's own silhouette at this end instead of falling back to
+  // a synthetic circle, so the envelope reads as an extension of the real
+  // geometry rather than a generic conical shape.
+  const hull = computeConvexHull2D(radialPoints);
 
-  const basePoints = bins.map((bin, index) => {
-    if (bin.radius > 0) {
-      return capCenter.clone().add(bin.radial);
-    }
+  if (hull.length < 3) {
+    return null;
+  }
 
-    const angle = (index / binCount) * Math.PI * 2;
-    const fallbackRadial = u
+  const basePoints = hull.map((point) =>
+    capCenter
       .clone()
-      .multiplyScalar(Math.cos(angle) * averageRadius)
-      .add(v.clone().multiplyScalar(Math.sin(angle) * averageRadius));
-
-    return capCenter.clone().add(fallbackRadial);
-  });
+      .add(u.clone().multiplyScalar(point.x))
+      .add(v.clone().multiplyScalar(point.y)),
+  );
 
   return {
     capCenter,
@@ -1144,6 +1160,80 @@ function findTopLevelObjectsByPathKeys(
   return objects;
 }
 
+/**
+ * Picks the single axis that should "own" the primary confidence
+ * visualization for an annotation: an explicitly-directed axis beats an
+ * axis still set to "both", and ties break on confidence strength.
+ * Shared by the envelope (keeps geometry) and the direction arrow (collapses
+ * "both" to one side) so both visuals agree on which axis is highlighted.
+ */
+function rankPrimaryAxis(
+  confidence: AxisConfidenceMap,
+  directions: AxisDirectionMap,
+): { axis: ConfidenceAxis; level: ConfidenceLevel; direction: ConfidenceDirection } | null {
+  const axisRanks: {
+    axis: ConfidenceAxis;
+    level: ConfidenceLevel;
+    direction: ConfidenceDirection;
+  }[] = [
+    { axis: "x", level: confidence.x, direction: directions.x ?? "both" },
+    { axis: "y", level: confidence.y, direction: directions.y ?? "both" },
+    { axis: "z", level: confidence.z, direction: directions.z ?? "both" },
+  ];
+
+  const activeAxisRanks = axisRanks.filter(
+    (item) => confidenceToStrength(item.level) > 0,
+  );
+
+  if (activeAxisRanks.length === 0) {
+    return null;
+  }
+
+  const specificallyDirectedRanks = activeAxisRanks.filter(
+    (item) => item.direction !== "both",
+  );
+
+  const candidateAxisRanks =
+    specificallyDirectedRanks.length > 0
+      ? specificallyDirectedRanks
+      : activeAxisRanks;
+
+  const maxStrength = Math.max(
+    ...candidateAxisRanks.map((item) => confidenceToStrength(item.level)),
+  );
+
+  return (
+    candidateAxisRanks.find(
+      (item) => confidenceToStrength(item.level) === maxStrength,
+    ) ?? null
+  );
+}
+
+/** Collapses "both" to a single side, for callers that only want one arrow. */
+export function selectPrimaryConfidenceAxis({
+  confidence,
+  directions,
+}: {
+  confidence: AxisConfidenceMap;
+  directions: AxisDirectionMap;
+}): {
+  axis: ConfidenceAxis;
+  direction: "positive" | "negative";
+  level: ConfidenceLevel;
+} | null {
+  const primary = rankPrimaryAxis(confidence, directions);
+
+  if (!primary) {
+    return null;
+  }
+
+  return {
+    axis: primary.axis,
+    direction: primary.direction === "both" ? "positive" : primary.direction,
+    level: primary.level,
+  };
+}
+
 function getPrimaryAxisConfigs({
   confidence,
   directions,
@@ -1155,54 +1245,21 @@ function getPrimaryAxisConfigs({
   axesWorld: Record<ConfidenceAxis, THREE.Vector3>;
   measure: DirectionalMeasure;
 }) {
-  const axisConfigs = [
-    {
-      axis: "x",
-      level: confidence.x,
-      direction: directions.x ?? "both",
-      worldAxis: axesWorld.x,
-      halfExtent: measure.halfExtents.x,
-    },
-    {
-      axis: "y",
-      level: confidence.y,
-      direction: directions.y ?? "both",
-      worldAxis: axesWorld.y,
-      halfExtent: measure.halfExtents.y,
-    },
-    {
-      axis: "z",
-      level: confidence.z,
-      direction: directions.z ?? "both",
-      worldAxis: axesWorld.z,
-      halfExtent: measure.halfExtents.z,
-    },
-  ] satisfies AxisConfig[];
+  const primary = rankPrimaryAxis(confidence, directions);
 
-  const activeAxisConfigs = axisConfigs.filter(
-    (item) => confidenceToStrength(item.level) > 0,
-  );
-
-  if (activeAxisConfigs.length === 0) {
+  if (!primary) {
     return [];
   }
 
-  const specificallyDirectedConfigs = activeAxisConfigs.filter(
-    (item) => item.direction !== "both",
-  );
-
-  const candidateAxisConfigs =
-    specificallyDirectedConfigs.length > 0
-      ? specificallyDirectedConfigs
-      : activeAxisConfigs;
-
-  const maxStrength = Math.max(
-    ...candidateAxisConfigs.map((item) => confidenceToStrength(item.level)),
-  );
-
-  return candidateAxisConfigs
-    .filter((item) => confidenceToStrength(item.level) === maxStrength)
-    .slice(0, 1);
+  return [
+    {
+      axis: primary.axis,
+      level: primary.level,
+      direction: primary.direction,
+      worldAxis: axesWorld[primary.axis],
+      halfExtent: measure.halfExtents[primary.axis],
+    },
+  ] satisfies AxisConfig[];
 }
 
 function createSelectedObjectLineOverlay({
@@ -1368,7 +1425,6 @@ function createSectionedRangeEnvelope({
         centerLocal,
         axisLocal: localAxis,
         sign,
-        binCount: profile.binCount,
       });
 
       if (!template) {

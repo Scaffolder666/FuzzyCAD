@@ -1,7 +1,7 @@
 "use client";
 
-import { Canvas, type ThreeEvent, useThree } from "@react-three/fiber";
-import { Bounds, Html, OrbitControls, useGLTF } from "@react-three/drei";
+import { Canvas, type ThreeEvent, useFrame, useThree } from "@react-three/fiber";
+import { Billboard, Bounds, Html, Line, OrbitControls, useGLTF } from "@react-three/drei";
 import RoleBadge, { type RoleBadgeRole } from "./viewer/RoleBadge";
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
@@ -21,6 +21,7 @@ import type {
 } from "../lib/uncertainty/types";
 import {
   applyFuzzyConfidence,
+  selectPrimaryConfidenceAxis,
   type ConfidenceAxisFrame,
   type FuzzyConfidenceAnnotation,
 } from "./viewer/fuzzyBlur";
@@ -515,6 +516,81 @@ function getArrowEnd(
   return [end.x, end.y, end.z];
 }
 
+/**
+ * Flat, always-camera-facing arrowhead. Rotated each frame to point along
+ * the on-screen projection of `directionWorld`, so it reads as a 2D glyph
+ * instead of a 3D cone that foreshortens as the view rotates.
+ */
+function ArrowHead2D({
+  position,
+  directionWorld,
+  color,
+  headLength,
+  headWidth,
+}: {
+  position: [number, number, number];
+  directionWorld: THREE.Vector3;
+  color: string;
+  headLength: number;
+  headWidth: number;
+}) {
+  const rotationRef = useRef<THREE.Group>(null);
+  const { camera } = useThree();
+
+  useFrame(() => {
+    const group = rotationRef.current;
+
+    if (!group) {
+      return;
+    }
+
+    const cameraRight = new THREE.Vector3().setFromMatrixColumn(
+      camera.matrixWorld,
+      0,
+    );
+    const cameraUp = new THREE.Vector3().setFromMatrixColumn(
+      camera.matrixWorld,
+      1,
+    );
+
+    const dx = directionWorld.dot(cameraRight);
+    const dy = directionWorld.dot(cameraUp);
+
+    group.rotation.z = Math.atan2(dy, dx);
+  });
+
+  const geometry = useMemo(() => {
+    const shape = new THREE.Shape();
+
+    shape.moveTo(headLength / 2, 0);
+    shape.lineTo(-headLength / 2, headWidth / 2);
+    shape.lineTo(-headLength / 2, -headWidth / 2);
+    shape.closePath();
+
+    return new THREE.ShapeGeometry(shape);
+  }, [headLength, headWidth]);
+
+  return (
+    <Billboard position={position}>
+      <group ref={rotationRef}>
+        <mesh
+          geometry={geometry}
+          renderOrder={2000}
+          raycast={() => {}}
+        >
+          <meshBasicMaterial
+            color={color}
+            side={THREE.DoubleSide}
+            depthTest={false}
+            transparent
+            opacity={0.95}
+          />
+        </mesh>
+      </group>
+    </Billboard>
+  );
+}
+
 function UncertaintyArrow({
   start,
   end,
@@ -526,36 +602,27 @@ function UncertaintyArrow({
   color: string;
   label: string;
 }) {
-  const origin = useMemo(
-    () => new THREE.Vector3(start[0], start[1], start[2]),
-    [start],
-  );
-
   const direction = useMemo(() => {
-    const dir = new THREE.Vector3(
-      end[0] - start[0],
-      end[1] - start[1],
-      end[2] - start[2],
-    );
-
-    return dir.normalize();
-  }, [start, end]);
-
-  const length = useMemo(() => {
     return new THREE.Vector3(
       end[0] - start[0],
       end[1] - start[1],
       end[2] - start[2],
-    ).length();
+    );
   }, [start, end]);
 
+  const length = useMemo(() => direction.length(), [direction]);
   const headLength = Math.min(length * 0.32, 0.08);
-  const headWidth = Math.min(headLength * 0.55, 0.04);
+  const headWidth = Math.min(headLength * 0.62, 0.045);
 
   return (
     <>
-      <arrowHelper
-        args={[direction, origin, length, color, headLength, headWidth]}
+      <Line points={[start, end]} color={color} lineWidth={2} />
+      <ArrowHead2D
+        position={end}
+        directionWorld={direction}
+        color={color}
+        headLength={headLength}
+        headWidth={headWidth}
       />
       <Html position={end} center distanceFactor={0.8} occlude={false}>
         <div
@@ -931,39 +998,42 @@ function Model({
         continue;
       }
 
+      // One arrow per annotation: same axis/side picked for the envelope,
+      // so the two visuals never disagree about which direction is shown.
+      const primary = selectPrimaryConfidenceAxis({
+        confidence: annotation.confidence,
+        directions:
+          annotation.directions ?? { x: "both", y: "both", z: "both" },
+      });
+
+      if (!primary) {
+        continue;
+      }
+
       const frame =
         axisFramesByPathKey.get(summary.pathKey) ?? getObjectAxisFrame(summary);
 
-      (["x", "y", "z"] as ConfidenceAxis[]).forEach((axis) => {
-        const level = annotation.confidence[axis];
+      const start = getArrowStart(summary, frame, primary.axis, primary.direction);
+      const length = getArrowLength(primary.level, summary);
+      const end = getArrowEnd(
+        start,
+        frame,
+        primary.axis,
+        primary.direction,
+        length,
+      );
 
-        if (level === "high") {
-          return;
-        }
-
-        const axisDirection = annotation.directions?.[axis] ?? "both";
-
-        const arrowDirections: ("positive" | "negative")[] =
-          axisDirection === "both" ? ["positive", "negative"] : [axisDirection];
-
-        for (const direction of arrowDirections) {
-          const start = getArrowStart(summary, frame, axis, direction);
-          const length = getArrowLength(level, summary);
-          const end = getArrowEnd(start, frame, axis, direction, length);
-
-          arrows.push({
-            pathKey: annotation.pathKey,
-            axis,
-            level,
-            direction,
-            start,
-            end,
-            color: getArrowColor(level),
-            label: `${axis.toUpperCase()}${
-              direction === "positive" ? "+" : "−"
-            }`,
-          });
-        }
+      arrows.push({
+        pathKey: annotation.pathKey,
+        axis: primary.axis,
+        level: primary.level,
+        direction: primary.direction,
+        start,
+        end,
+        color: getArrowColor(primary.level),
+        label: `${primary.axis.toUpperCase()}${
+          primary.direction === "positive" ? "+" : "−"
+        }`,
       });
     }
 
