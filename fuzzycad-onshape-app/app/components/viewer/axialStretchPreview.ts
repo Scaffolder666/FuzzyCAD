@@ -346,18 +346,29 @@ function createStretchPreview(
   };
 }
 
+/**
+ * `dragDelta` is the distance the handle was dragged along `handleAxisWorld`.
+ * The target only ever moves along its own axis, so we project the drag
+ * onto that axis: alignment = how parallel the handle's axis is to the
+ * target's real axis (1.0 when they're the same axis, smaller — scaled up
+ * to compensate — the more they diverge). With handleAxisWorld = world-down
+ * this is exactly the previous "Y-case only" behavior (dot with (0,-1,0) is
+ * -axisFromFixedToMoving.y, which is the same non-negative value the old
+ * Math.abs(...y) produced); with handleAxisWorld = the target's own axis
+ * (single-object case) alignment is 1 and the handle drags 1:1 along the
+ * object's real direction instead of always appearing to pull straight down.
+ */
 function getMovingDeltaForTarget(
   target: StretchPreview,
-  verticalDelta: number,
+  dragDelta: number,
+  handleAxisWorld: THREE.Vector3,
 ) {
-  // Y-case only.
-  // Positive value = extend downward from fixed upper side.
-  const yContribution = Math.max(
-    Math.abs(target.axisFromFixedToMoving.y),
+  const alignment = Math.max(
+    Math.abs(target.axisFromFixedToMoving.dot(handleAxisWorld)),
     0.08,
   );
 
-  const axialDelta = verticalDelta / yContribution;
+  const axialDelta = dragDelta / alignment;
 
   return target.axisFromFixedToMoving.clone().multiplyScalar(axialDelta);
 }
@@ -467,8 +478,12 @@ export function createAxialStretchPreviewSession(
   };
 }
 
-function updateStretchPreview(preview: StretchPreview, verticalDelta: number) {
-  const movingDelta = getMovingDeltaForTarget(preview, verticalDelta);
+function updateStretchPreview(
+  preview: StretchPreview,
+  dragDelta: number,
+  handleAxisWorld: THREE.Vector3,
+) {
+  const movingDelta = getMovingDeltaForTarget(preview, dragDelta, handleAxisWorld);
   const localPoint = new THREE.Vector3();
   const worldPoint = new THREE.Vector3();
   const offsetFromUpper = new THREE.Vector3();
@@ -519,7 +534,8 @@ function updateStretchPreview(preview: StretchPreview, verticalDelta: number) {
 
 function updateFollowPreviews(
   session: AxialStretchPreviewSession,
-  verticalDelta: number,
+  dragDelta: number,
+  handleAxisWorld: THREE.Vector3,
 ) {
   for (const follower of session.followPreviews) {
     const target = session.stretchPreviews[follower.targetIndex];
@@ -528,7 +544,7 @@ function updateFollowPreviews(
       continue;
     }
 
-    const movingDelta = getMovingDeltaForTarget(target, verticalDelta);
+    const movingDelta = getMovingDeltaForTarget(target, dragDelta, handleAxisWorld);
 
     // Align follower's original attachment anchor to the stretched leg's
     // new moving end. This avoids double-moving or drifting away.
@@ -544,13 +560,16 @@ function updateFollowPreviews(
 
 export function updateAxialStretchPreviewSession(
   session: AxialStretchPreviewSession,
-  verticalDelta: number,
+  dragDelta: number,
+  handleAxisWorld?: THREE.Vector3,
 ) {
+  const axisWorld = handleAxisWorld ?? getSessionPrimaryAxisWorld(session);
+
   for (const preview of session.stretchPreviews) {
-    updateStretchPreview(preview, verticalDelta);
+    updateStretchPreview(preview, dragDelta, axisWorld);
   }
 
-  updateFollowPreviews(session, verticalDelta);
+  updateFollowPreviews(session, dragDelta, axisWorld);
 }
 
 export function disposeAxialStretchPreviewSession(
@@ -584,6 +603,22 @@ export function disposeAxialStretchPreviewSession(
 
 }
 
+/**
+ * Coordinating several legs off one shared drag only makes sense as "pull
+ * this whole group down"; a single object has its own real axis and should
+ * drag along that instead of always visually pulling toward world-down
+ * regardless of how the object is actually oriented.
+ */
+export function getSessionPrimaryAxisWorld(
+  session: AxialStretchPreviewSession,
+): THREE.Vector3 {
+  if (session.stretchPreviews.length === 1) {
+    return session.stretchPreviews[0].axisFromFixedToMoving.clone();
+  }
+
+  return new THREE.Vector3(0, -1, 0);
+}
+
 export function getAxialStretchPreviewHandle(
   session: AxialStretchPreviewSession,
 ) {
@@ -604,7 +639,7 @@ export function getAxialStretchPreviewHandle(
 
   return {
     baseWorld: upper.clone().add(sideOffset),
-    axisWorld: new THREE.Vector3(0, -1, 0),
+    axisWorld: getSessionPrimaryAxisWorld(session),
     length: Math.max(upper.distanceTo(lower), 0.001),
   };
 }

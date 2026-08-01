@@ -326,7 +326,10 @@ export default function FuzzyCADHome() {
 
   function leaveUncertaintyEditingState() {
     setSelectedUncertaintyId(null);
-    closeSizeUncertaintyEditor();
+    // Also clears proposalPlan/confirmedHeightPlan/manipulationValue: leaving
+    // the current selection without an explicit Save/Cancel must not strand
+    // an in-progress drag preview on the geometry with no way back to it.
+    resetSizeOperationState();
     setActiveTool("select");
   }
 
