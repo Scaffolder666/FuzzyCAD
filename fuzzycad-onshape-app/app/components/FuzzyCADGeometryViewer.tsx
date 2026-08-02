@@ -1586,6 +1586,164 @@ function Model({
     });
   }, [distancePreviews, objectSummaries]);
 
+  // For every answered distance flag, show where the second object would
+  // actually need to move to satisfy the answer — reusing the exact same
+  // rigid-translate ghost preview engine the Move tool uses, since "the gap
+  // should be X" is fundamentally a proposed position for one of the parts,
+  // not just a number to read.
+  const distanceAnswerMoves = useMemo(() => {
+    return (distancePreviews ?? []).flatMap((preview) => {
+      if (preview.resolvedDistanceMeters === null) {
+        return [];
+      }
+
+      const summaryA = objectSummaries.find(
+        (item) => item.pathKey === preview.pathKeyA,
+      );
+      const summaryB = objectSummaries.find(
+        (item) => item.pathKey === preview.pathKeyB,
+      );
+
+      if (!summaryA || !summaryB) {
+        return [];
+      }
+
+      const { pointOnA, pointOnB, distanceMeters } = closestPointsBetweenAabbs(
+        summaryA.aabbCenterWorld,
+        summaryA.aabbSizeWorld,
+        summaryB.aabbCenterWorld,
+        summaryB.aabbSizeWorld,
+      );
+
+      if (distanceMeters < 1e-6) {
+        return [];
+      }
+
+      const axis = new THREE.Vector3(...pointOnB)
+        .sub(new THREE.Vector3(...pointOnA))
+        .divideScalar(distanceMeters);
+      const moveMeters = preview.resolvedDistanceMeters - distanceMeters;
+      const deltaWorld = axis.multiplyScalar(moveMeters);
+
+      if (deltaWorld.lengthSq() < 1e-12) {
+        return [];
+      }
+
+      const centerB = new THREE.Vector3(...summaryB.aabbCenterWorld);
+
+      return [
+        {
+          pathKey: preview.pathKeyB,
+          deltaWorld,
+          fromCenter: centerB,
+          toCenter: centerB.clone().add(deltaWorld),
+        },
+      ];
+    });
+  }, [distancePreviews, objectSummaries]);
+
+  const distanceAnswerLoopRef = useRef<
+    {
+      session: MoveTranslatePreviewSession;
+      deltaWorld: THREE.Vector3;
+      pathKeys: string[];
+    }[]
+  >([]);
+  const settledDistanceAnswerSessionsRef = useRef<
+    Set<MoveTranslatePreviewSession>
+  >(new Set());
+
+  useEffect(() => {
+    const entries = distanceAnswerMoves
+      .map((move) => {
+        const session = createMoveTranslatePreviewSession(scene, [
+          move.pathKey,
+        ]);
+
+        if (!session) {
+          return null;
+        }
+
+        scene.add(session.group);
+
+        return {
+          session,
+          deltaWorld: move.deltaWorld,
+          pathKeys: [move.pathKey],
+        };
+      })
+      .filter(
+        (
+          entry,
+        ): entry is {
+          session: MoveTranslatePreviewSession;
+          deltaWorld: THREE.Vector3;
+          pathKeys: string[];
+        } => entry !== null,
+      );
+
+    const settledSessions = settledDistanceAnswerSessionsRef.current;
+
+    distanceAnswerLoopRef.current = entries;
+    settledSessions.clear();
+
+    if (entries.length === 0) {
+      return;
+    }
+
+    invalidate();
+
+    return () => {
+      distanceAnswerLoopRef.current = [];
+      settledSessions.clear();
+
+      for (const entry of entries) {
+        disposeMoveTranslatePreviewSession(entry.session);
+      }
+
+      invalidate();
+    };
+  }, [scene, distanceAnswerMoves, invalidate]);
+
+  useFrame(({ clock }) => {
+    const entries = distanceAnswerLoopRef.current;
+
+    if (entries.length === 0) {
+      return;
+    }
+
+    const phase =
+      (clock.elapsedTime / PREVIEW_LOOP_PERIOD_SECONDS) * Math.PI * 2;
+    const loopT = (Math.sin(phase) + 1) / 2;
+
+    for (const entry of entries) {
+      const active = isPathKeysUnderInspection(
+        entry.pathKeys,
+        hoveredPathKey,
+        highlightedPathKey,
+        selectedPathKeys,
+      );
+
+      if (
+        !active &&
+        settledDistanceAnswerSessionsRef.current.has(entry.session)
+      ) {
+        continue;
+      }
+
+      updateMoveTranslatePreviewSession(
+        entry.session,
+        entry.deltaWorld.clone().multiplyScalar(active ? loopT : 1),
+      );
+
+      if (active) {
+        settledDistanceAnswerSessionsRef.current.delete(entry.session);
+      } else {
+        settledDistanceAnswerSessionsRef.current.add(entry.session);
+      }
+    }
+  });
+
   const visualConfidenceAnnotations = useMemo(() => {
     const base = confidenceAnnotations ?? [];
 
@@ -2301,6 +2459,17 @@ function Model({
           resolvedDistanceMeters={ruler.resolvedDistanceMeters}
           color={ruler.color}
           lineWidth={ruler.lineWidth}
+        />
+      ))}
+
+      {distanceAnswerMoves.map((move) => (
+        <DimensionRuler
+          key={`distance-move:${move.pathKey}`}
+          fromWorld={move.fromCenter}
+          toWorld={move.toCenter}
+          deltaMeters={move.toCenter.distanceTo(move.fromCenter)}
+          color={DISTANCE_ANSWERED_COLOR}
+          variant="arrow"
         />
       ))}
 
