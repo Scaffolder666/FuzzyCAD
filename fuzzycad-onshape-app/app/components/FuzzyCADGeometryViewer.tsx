@@ -54,6 +54,7 @@ import AxisTriadHandle from "./viewer/AxisTriadHandle";
 import MoveTriadHandle, { type MoveDelta } from "./viewer/MoveTriadHandle";
 import ScaleHandle from "./viewer/ScaleHandle";
 import RotateHandle from "./viewer/RotateHandle";
+import RotateProtractor from "./viewer/RotateProtractor";
 import {
   computeProposalTipSegments,
   type ProposalAxisIndex,
@@ -1840,6 +1841,41 @@ function Model({
     });
   }, [persistentRotatePreviews, objectSummaries]);
 
+  // A faint static protractor disc (ring + swept arc) at each saved rotate
+  // mark's pivot, so the axis and angle read in 3D even when it isn't being
+  // actively dragged — not animated (unlike the ghost), just a cheap
+  // always-on decoration since it's plain line geometry.
+  const persistentRotateFrames = useMemo(() => {
+    return persistentRotatePreviews.flatMap((preview) => {
+      const targetSummary = objectSummaries.find(
+        (item) => item.pathKey === preview.pathKey,
+      );
+      const axisSummary = objectSummaries.find(
+        (item) => item.pathKey === preview.axisPathKey,
+      );
+
+      if (!targetSummary || !axisSummary) {
+        return [];
+      }
+
+      const pivotWorld = new THREE.Vector3(...axisSummary.aabbCenterWorld);
+      const targetCenterWorld = new THREE.Vector3(
+        ...targetSummary.aabbCenterWorld,
+      );
+      const radius = Math.max(pivotWorld.distanceTo(targetCenterWorld), 0.05);
+
+      return [
+        {
+          key: preview.pathKey,
+          pivotWorld,
+          axisWorld: getRotateAxisUnitVector(preview.axisDirection),
+          radius,
+          angleRad: preview.angleRad,
+        },
+      ];
+    });
+  }, [persistentRotatePreviews, objectSummaries]);
+
   // "Distance" is a needs-input flag, not a proposal: the gap is measured
   // live from the two objects' current positions (no dragging, no ghost
   // preview session needed), so this is a plain derived value.
@@ -1932,11 +1968,17 @@ function Model({
       // opposite (moving A the other way changes the gap the same amount).
       const deltaBFull = axis.multiplyScalar(moveMeters);
 
+      // Both objects' ghosts belong to the same answer, so hovering/selecting
+      // EITHER one (or the pair's card) should loop BOTH in sync — not just
+      // whichever single object happens to be under the mouse.
+      const pairPathKeys = [preview.pathKeyA, preview.pathKeyB];
+
       const makeEntry = (pathKey: string, center: THREE.Vector3, delta: THREE.Vector3) => ({
         pathKey,
         deltaWorld: delta,
         fromCenter: center,
         toCenter: center.clone().add(delta),
+        pairPathKeys,
       });
 
       if (preview.moveMode === "moveA") {
@@ -1983,7 +2025,7 @@ function Model({
         return {
           session,
           deltaWorld: move.deltaWorld,
-          pathKeys: [move.pathKey],
+          pathKeys: move.pairPathKeys,
         };
       })
       .filter(
@@ -2799,18 +2841,38 @@ function Model({
       ))}
 
       {enableManipulationHandles && rotatePlan && activeRotateFrame ? (
-        <RotateHandle
-          pivotWorld={activeRotateFrame.pivotWorld}
-          axisWorld={activeRotateFrame.axisWorld}
-          referenceLength={activeRotateFrame.referenceLength}
-          degrees={THREE.MathUtils.radToDeg(rotateAngleRad)}
-          color={ROTATE_ACCENT_COLOR}
-          onChange={(degrees) =>
-            onRotateAngleChange?.(THREE.MathUtils.degToRad(degrees))
-          }
-          onDragStateChange={handleDragStateChange}
-        />
+        <>
+          <RotateProtractor
+            pivotWorld={activeRotateFrame.pivotWorld}
+            axisWorld={activeRotateFrame.axisWorld}
+            radius={activeRotateFrame.referenceLength}
+            angleRad={rotateAngleRad}
+            color={ROTATE_ACCENT_COLOR}
+          />
+          <RotateHandle
+            pivotWorld={activeRotateFrame.pivotWorld}
+            axisWorld={activeRotateFrame.axisWorld}
+            referenceLength={activeRotateFrame.referenceLength}
+            degrees={THREE.MathUtils.radToDeg(rotateAngleRad)}
+            color={ROTATE_ACCENT_COLOR}
+            onChange={(degrees) =>
+              onRotateAngleChange?.(THREE.MathUtils.degToRad(degrees))
+            }
+            onDragStateChange={handleDragStateChange}
+          />
+        </>
       ) : null}
+
+      {persistentRotateFrames.map((frame) => (
+        <RotateProtractor
+          key={frame.key}
+          pivotWorld={frame.pivotWorld}
+          axisWorld={frame.axisWorld}
+          radius={frame.radius}
+          angleRad={frame.angleRad}
+          color={ROTATE_ACCENT_COLOR_MUTED}
+        />
+      ))}
 
       {persistentRotateBadges.map((badge) => (
         <Html
