@@ -544,6 +544,50 @@ function hideOriginalMaterials(object: THREE.Object3D) {
   });
 }
 
+/**
+ * Like hideOriginalMaterials, but leaves a faint, tinted, semi-transparent
+ * fill instead of hiding it completely — a wireframe-only marker reads as
+ * "just an outline" with nothing solid inside; a hint of tinted volume
+ * keeps it reading as "this real object", not just lines in space.
+ */
+function applyTintedMaterials(
+  object: THREE.Object3D,
+  colorHex: number,
+  opacity: number,
+) {
+  object.traverse((child) => {
+    if (!(child instanceof THREE.Mesh)) {
+      return;
+    }
+
+    if (child.userData?.[FUZZY_VISUAL_CHILD]) {
+      return;
+    }
+
+    if (!child.userData[FUZZY_ORIGINAL_MATERIALS]) {
+      child.userData[FUZZY_ORIGINAL_MATERIALS] = getMeshMaterials(child);
+    }
+
+    if (typeof child.userData[FUZZY_ORIGINAL_RENDER_ORDER] !== "number") {
+      child.userData[FUZZY_ORIGINAL_RENDER_ORDER] = child.renderOrder;
+    }
+
+    const tinted = new THREE.MeshBasicMaterial({
+      color: colorHex,
+      transparent: true,
+      opacity,
+      depthWrite: false,
+      depthTest: true,
+      side: THREE.DoubleSide,
+    });
+
+    tinted.userData[FUZZY_ACTIVE_MATERIAL] = true;
+
+    child.material = tinted;
+    child.renderOrder = 1400;
+  });
+}
+
 function collectObjectWorldPoints(object: THREE.Object3D) {
   const points: THREE.Vector3[] = [];
   const worldPoint = new THREE.Vector3();
@@ -1586,7 +1630,7 @@ export function applyFuzzyConfidence(
     const proposalTarget = proposalByPathKey.get(pathKey);
 
     if (proposalTarget) {
-      hideOriginalMaterials(object);
+      applyTintedMaterials(object, PROPOSAL_MARKER_COLOR, 0.16);
 
       const overlay = createWireframeMarkerOverlay(object, PROPOSAL_MARKER_COLOR);
 
@@ -1603,7 +1647,7 @@ export function applyFuzzyConfidence(
       continue;
     }
 
-    hideOriginalMaterials(object);
+    applyTintedMaterials(object, MOVE_MARKER_COLOR, 0.16);
 
     const overlay = createWireframeMarkerOverlay(object, MOVE_MARKER_COLOR);
 
