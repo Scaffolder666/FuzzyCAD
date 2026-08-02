@@ -8,4 +8,5 @@ export type OperationTool =
   | "move"
   | "scale"
   | "rotate"
-  | "rotateAxis";
+  | "rotateAxis"
+  | "moveFace";

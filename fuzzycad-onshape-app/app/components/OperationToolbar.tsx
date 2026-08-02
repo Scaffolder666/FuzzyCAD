@@ -99,6 +99,18 @@ function MoveIcon() {
   );
 }
 
+function MoveFaceIcon() {
+  return (
+    <svg viewBox="0 0 32 32" aria-hidden="true">
+      <path d="M4 12L14 7L28 12L18 17Z" />
+      <path d="M10 20L28 12" strokeDasharray="2.5 2.5" />
+      <path d="M4 12L10 20" strokeDasharray="2.5 2.5" />
+      <path d="M9 16L21 21" />
+      <path d="M16 20L21 21L19 16" />
+    </svg>
+  );
+}
+
 function ScaleIcon() {
   return (
     <svg viewBox="0 0 32 32" aria-hidden="true">
@@ -187,6 +199,20 @@ const toolGroups: ToolGroup[] = [
         label: "Move",
         title: "Drag this part to a new position and save the change",
         icon: <MoveIcon />,
+        variants: [
+          {
+            id: "move",
+            label: "Move",
+            title: "Drag this part to a new position and save the change",
+            icon: <MoveIcon />,
+          },
+          {
+            id: "moveFace",
+            label: "Along face",
+            title: "Click a face to slide this part along — it can't lift off or sink into it",
+            icon: <MoveFaceIcon />,
+          },
+        ],
       },
       {
         id: "scale",

@@ -52,6 +52,7 @@ import AngleHandle from "./viewer/AngleHandle";
 import DimensionRuler from "./viewer/DimensionRuler";
 import AxisTriadHandle from "./viewer/AxisTriadHandle";
 import MoveTriadHandle, { type MoveDelta } from "./viewer/MoveTriadHandle";
+import MovePlaneHandle from "./viewer/MovePlaneHandle";
 import ScaleHandle from "./viewer/ScaleHandle";
 import RotateHandle from "./viewer/RotateHandle";
 import RotateProtractor from "./viewer/RotateProtractor";
@@ -234,6 +235,8 @@ type FuzzyCADGeometryViewerProps = {
   movePreviews?: MovePreview[];
   moveDelta?: MoveDelta;
   onMoveDeltaChange?: (delta: MoveDelta) => void;
+  /** Set while the "Move (along face)" tool has a picked constraint face — renders MovePlaneHandle instead of the free 3-axis MoveTriadHandle. */
+  moveConstraintNormal?: [number, number, number] | null;
   /** Single-object plan for the "Scale" tool's active drag session. */
   scalePlan?: ScaleRolePlan | null;
   /** Other saved (not currently being dragged) scale proposals, shown as static ghosts. */
@@ -262,6 +265,8 @@ type FuzzyCADGeometryViewerProps = {
   onSelectedPathKey?: (pathKey: string | null) => void;
   /** World-space point of the last click on real geometry — used by tools that need a precise 3D pick (e.g. Rotate's custom-axis mode) rather than just an object's path key. */
   onSelectedWorldPoint?: (point: THREE.Vector3 | null) => void;
+  /** World-space normal of the face under the last click — used by tools that constrain movement to a picked face (e.g. Move's "along face" mode). */
+  onSelectedWorldNormal?: (normal: THREE.Vector3 | null) => void;
   onObjectLassoSelection?: (pathKeys: string[]) => void;
   onManipulationChange?: (value: number) => void;
 };
@@ -955,6 +960,7 @@ function Model({
   movePreviews,
   moveDelta = { x: 0, y: 0, z: 0 },
   onMoveDeltaChange,
+  moveConstraintNormal,
   scalePlan,
   scalePreviews,
   scaleFactor = 1,
@@ -978,6 +984,7 @@ function Model({
   onSelectedNode,
   onSelectedPathKey,
   onSelectedWorldPoint,
+  onSelectedWorldNormal,
   onObjectLassoSelection,
   onManipulationChange,
   onManipulationDragStateChange,
@@ -1003,6 +1010,7 @@ function Model({
   movePreviews?: MovePreview[];
   moveDelta?: MoveDelta;
   onMoveDeltaChange?: (delta: MoveDelta) => void;
+  moveConstraintNormal?: [number, number, number] | null;
   scalePlan?: ScaleRolePlan | null;
   scalePreviews?: ScalePreview[];
   scaleFactor?: number;
@@ -1026,6 +1034,7 @@ function Model({
   onSelectedNode?: (node: MeshGraphNode | null) => void;
   onSelectedPathKey?: (pathKey: string | null) => void;
   onSelectedWorldPoint?: (point: THREE.Vector3 | null) => void;
+  onSelectedWorldNormal?: (normal: THREE.Vector3 | null) => void;
   onObjectLassoSelection?: (pathKeys: string[]) => void;
   onManipulationChange?: (value: number) => void;
   onManipulationDragStateChange?: (dragging: boolean) => void;
@@ -2766,9 +2775,25 @@ function Model({
     const selectedPathKey = findFuzzyPathKey(selectedObject);
 
     onSelectedNode?.(selectedNode);
-    // Fires before onSelectedPathKey so a handler reacting to the path key
-    // can synchronously read the matching world point from this same click.
+    // Both fire before onSelectedPathKey so a handler reacting to the path
+    // key can synchronously read the matching world point/normal from this
+    // same click.
     onSelectedWorldPoint?.(event.point.clone());
+
+    if (event.face) {
+      const normalMatrix = new THREE.Matrix3().getNormalMatrix(
+        event.object.matrixWorld,
+      );
+      const worldNormal = event.face.normal
+        .clone()
+        .applyMatrix3(normalMatrix)
+        .normalize();
+
+      onSelectedWorldNormal?.(worldNormal);
+    } else {
+      onSelectedWorldNormal?.(null);
+    }
+
     onSelectedPathKey?.(selectedPathKey);
   }
 
@@ -2899,16 +2924,30 @@ function Model({
       ))}
 
       {enableManipulationHandles && movePlan && activeMoveSummary ? (
-        <MoveTriadHandle
-          centerWorld={new THREE.Vector3(...activeMoveSummary.aabbCenterWorld)}
-          armLength={Math.max(
-            Math.max(...activeMoveSummary.aabbSizeWorld) * 0.9,
-            1e-4,
-          )}
-          deltaWorld={moveDelta}
-          onDeltaChange={(delta) => onMoveDeltaChange?.(delta)}
-          onDragStateChange={handleDragStateChange}
-        />
+        moveConstraintNormal ? (
+          <MovePlaneHandle
+            centerWorld={new THREE.Vector3(...activeMoveSummary.aabbCenterWorld)}
+            armLength={Math.max(
+              Math.max(...activeMoveSummary.aabbSizeWorld) * 0.9,
+              1e-4,
+            )}
+            normalWorld={new THREE.Vector3(...moveConstraintNormal)}
+            deltaWorld={moveDelta}
+            onDeltaChange={(delta) => onMoveDeltaChange?.(delta)}
+            onDragStateChange={handleDragStateChange}
+          />
+        ) : (
+          <MoveTriadHandle
+            centerWorld={new THREE.Vector3(...activeMoveSummary.aabbCenterWorld)}
+            armLength={Math.max(
+              Math.max(...activeMoveSummary.aabbSizeWorld) * 0.9,
+              1e-4,
+            )}
+            deltaWorld={moveDelta}
+            onDeltaChange={(delta) => onMoveDeltaChange?.(delta)}
+            onDragStateChange={handleDragStateChange}
+          />
+        )
       ) : null}
 
       {movePlan && activeMoveSummary
@@ -3106,6 +3145,7 @@ export default function FuzzyCADGeometryViewer({
   movePreviews,
   moveDelta,
   onMoveDeltaChange,
+  moveConstraintNormal,
   scalePlan,
   scalePreviews,
   scaleFactor,
@@ -3126,6 +3166,7 @@ export default function FuzzyCADGeometryViewer({
   onSelectedNode,
   onSelectedPathKey,
   onSelectedWorldPoint,
+  onSelectedWorldNormal,
   onObjectLassoSelection,
   onManipulationChange,
 }: FuzzyCADGeometryViewerProps) {
@@ -3211,6 +3252,7 @@ export default function FuzzyCADGeometryViewer({
                   movePreviews={movePreviews}
                   moveDelta={moveDelta}
                   onMoveDeltaChange={onMoveDeltaChange}
+                  moveConstraintNormal={moveConstraintNormal}
                   scalePlan={scalePlan}
                   scalePreviews={scalePreviews}
                   scaleFactor={scaleFactor}
@@ -3233,6 +3275,7 @@ export default function FuzzyCADGeometryViewer({
                   onSelectedNode={onSelectedNode}
                   onSelectedPathKey={onSelectedPathKey}
                   onSelectedWorldPoint={onSelectedWorldPoint}
+                  onSelectedWorldNormal={onSelectedWorldNormal}
                   onObjectLassoSelection={onObjectLassoSelection}
                   onManipulationChange={onManipulationChange}
                   onManipulationDragStateChange={setManipulationDragging}

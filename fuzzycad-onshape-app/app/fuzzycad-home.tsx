@@ -196,6 +196,15 @@ export default function FuzzyCADHome() {
     followPathKeys: string[];
   } | null>(null);
   const [moveDelta, setMoveDelta] = useState<MoveDelta>(ZERO_MOVE_DELTA);
+  // "Move (along face)": the pre-selected object slides along a face picked
+  // in the 3D view instead of moving freely — captures just the face's
+  // world normal, since the plane also needs a point but the object's own
+  // current position already sits on (or near) it.
+  const [moveFacePicking, setMoveFacePicking] = useState(false);
+  const [moveConstraintNormal, setMoveConstraintNormal] = useState<
+    [number, number, number] | null
+  >(null);
+  const lastWorldNormalRef = useRef<[number, number, number] | null>(null);
   const [moveCandidateOpen, setMoveCandidateOpen] = useState(false);
   const [moveCandidatePathKeys, setMoveCandidatePathKeys] = useState<
     string[]
@@ -443,6 +452,8 @@ export default function FuzzyCADHome() {
     setHeightPreviewOpen(false);
     setActiveMovePlan(null);
     setMoveDelta(ZERO_MOVE_DELTA);
+    setMoveFacePicking(false);
+    setMoveConstraintNormal(null);
     setMoveCandidateOpen(false);
     setMoveCandidatePathKeys([]);
     setActiveScalePlan(null);
@@ -962,7 +973,45 @@ export default function FuzzyCADHome() {
   function cancelMove() {
     setActiveMovePlan(null);
     setMoveDelta(ZERO_MOVE_DELTA);
+    setMoveFacePicking(false);
+    setMoveConstraintNormal(null);
     setActiveTool("select");
+  }
+
+  function startMoveFace() {
+    if (!selectedObjectSummary) {
+      return;
+    }
+
+    setActiveTool("moveFace");
+    resetSizeOperationState();
+    setLassoPathKeys([]);
+    setMoveFacePicking(true);
+  }
+
+  /** Click routing while "Move (along face)" is waiting for its constraint
+   * face: any click on geometry (the moved part itself, or another part
+   * entirely) captures that face's world normal and starts the drag —
+   * skips the mate-neighbor prompt regular Move shows, since sliding along
+   * a face is inherently a single-object move. */
+  function handleMoveFacePick() {
+    if (!selectedObjectSummary || !moveFacePicking) {
+      return;
+    }
+
+    const normal = lastWorldNormalRef.current;
+
+    if (!normal) {
+      return;
+    }
+
+    setActiveMovePlan({
+      pathKey: selectedObjectSummary.pathKey,
+      followPathKeys: [],
+    });
+    setMoveDelta(ZERO_MOVE_DELTA);
+    setMoveConstraintNormal(normal);
+    setMoveFacePicking(false);
   }
 
   function applyMove() {
@@ -1409,12 +1458,21 @@ if (result.ok && result.state) {
       return;
     }
 
+    if (activeTool === "moveFace" && moveFacePicking) {
+      handleMoveFacePick();
+      return;
+    }
+
     setHighlightedPathKey(pathKey);
     leaveUncertaintyEditingState();
   }
 
   function handleViewerSelectedWorldPoint(point: { x: number; y: number; z: number } | null) {
     lastWorldPointRef.current = point ? [point.x, point.y, point.z] : null;
+  }
+
+  function handleViewerSelectedWorldNormal(normal: { x: number; y: number; z: number } | null) {
+    lastWorldNormalRef.current = normal ? [normal.x, normal.y, normal.z] : null;
   }
 
   function handleAssemblyChange(assemblyId: string) {
@@ -1473,6 +1531,7 @@ if (result.ok && result.state) {
           movePreviews={movePreviews}
           moveDelta={moveDelta}
           onMoveDeltaChange={setMoveDelta}
+          moveConstraintNormal={moveConstraintNormal}
           scalePlan={activeScalePlan}
           scalePreviews={scalePreviews}
           scaleFactor={scaleFactor}
@@ -1523,6 +1582,7 @@ if (result.ok && result.state) {
           onSelectedNode={setSelectedMeshNode}
           onSelectedPathKey={handleViewerSelectedPathKey}
           onSelectedWorldPoint={handleViewerSelectedWorldPoint}
+          onSelectedWorldNormal={handleViewerSelectedWorldNormal}
           onObjectLassoSelection={(pathKeys) => {
             setLassoPathKeys(pathKeys);
             setHighlightedPathKey(pathKeys[0] ?? null);
@@ -1546,6 +1606,11 @@ if (result.ok && result.state) {
 
             if (tool === "move") {
               startMove();
+              return;
+            }
+
+            if (tool === "moveFace") {
+              startMoveFace();
               return;
             }
 
@@ -1606,7 +1671,23 @@ if (result.ok && result.state) {
           </div>
         ) : null}
 
-        {activeTool === "move" && activeMovePlan ? (
+        {activeTool === "moveFace" && moveFacePicking ? (
+          <div className={styles.manipulationReadout}>
+            <span className={styles.manipulationValue}>
+              Click a face to slide along...
+            </span>
+            <button
+              type="button"
+              className={styles.manipulationResetButton}
+              onClick={cancelMove}
+            >
+              Cancel
+            </button>
+          </div>
+        ) : null}
+
+        {(activeTool === "move" || activeTool === "moveFace") &&
+        activeMovePlan ? (
           <div className={styles.manipulationReadout}>
             <span className={styles.manipulationValue}>
               Move: {formatLengthMeters(moveDelta.x)} /{" "}
