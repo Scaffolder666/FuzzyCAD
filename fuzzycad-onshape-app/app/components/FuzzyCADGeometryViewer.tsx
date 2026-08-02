@@ -138,20 +138,9 @@ export type ScalePreview = {
 export type DistancePreview = {
   pathKeyA: string;
   pathKeyB: string;
-  confidence: ConfidenceLevel;
-  direction: ConfidenceDirection;
+  confidence: ConfidenceLevel | null;
+  direction: ConfidenceDirection | null;
   measuredDistanceMeters: number;
-};
-
-/**
- * The in-progress "Distance" pick: both objects chosen, confidence/direction
- * being set in the bottom readout bar before saving — drawn with a neutral
- * color until the user commits, so it doesn't imply a confidence level that
- * hasn't actually been chosen yet.
- */
-export type DistanceDraft = {
-  pathKeyA: string;
-  pathKeyB: string;
 };
 
 export type FuzzyConfidenceEditor = {
@@ -209,8 +198,6 @@ type FuzzyCADGeometryViewerProps = {
   scalePreviews?: ScalePreview[];
   scaleFactor?: number;
   onScaleFactorChange?: (factor: number) => void;
-  /** Both objects picked for the "Distance" tool, before it's saved. */
-  distanceDraft?: DistanceDraft | null;
   /** Saved distance flags, shown as persistent rulers. */
   distancePreviews?: DistancePreview[];
   /** Path key currently under the mouse in the 3D view, for linking to the marks panel. */
@@ -358,16 +345,17 @@ const MOVE_ACCENT_COLOR_MUTED = "#c4b5fd";
 const SCALE_ACCENT_COLOR = "#0d9488";
 const SCALE_ACCENT_COLOR_MUTED = "#99f6e4";
 const DISTANCE_ACCENT_COLOR = "#0ea5e9";
-const DISTANCE_DRAFT_COLOR = "#64748b";
 
 // Thicker line = a wider "I'm not sure" range, not a value change — so a
 // low-confidence flag visually reads as less certain, same idea as Size's
 // range envelope but expressed as line weight instead of a swept band.
+// No confidence set yet falls back to the medium weight.
 const DISTANCE_CONFIDENCE_WIDTH: Record<ConfidenceLevel, number> = {
   high: 1.5,
   medium: 2.5,
   low: 4,
 };
+const DISTANCE_DEFAULT_WIDTH = DISTANCE_CONFIDENCE_WIDTH.medium;
 
 // How long one full there-and-back cycle of a saved-preview loop animation
 // (move ghosts, propose/stretch ghosts) takes, in seconds.
@@ -866,7 +854,6 @@ function Model({
   scalePreviews,
   scaleFactor = 1,
   onScaleFactorChange,
-  distanceDraft,
   distancePreviews,
   hoveredPathKey,
   onHoveredPathKeyChange,
@@ -908,7 +895,6 @@ function Model({
   scalePreviews?: ScalePreview[];
   scaleFactor?: number;
   onScaleFactorChange?: (factor: number) => void;
-  distanceDraft?: DistanceDraft | null;
   distancePreviews?: DistancePreview[];
   hoveredPathKey?: string | null;
   onHoveredPathKeyChange?: (pathKey: string | null) => void;
@@ -1578,41 +1564,13 @@ function Model({
           from: new THREE.Vector3(...pointOnA),
           to: new THREE.Vector3(...pointOnB),
           distanceMeters,
-          lineWidth: DISTANCE_CONFIDENCE_WIDTH[preview.confidence],
+          lineWidth: preview.confidence
+            ? DISTANCE_CONFIDENCE_WIDTH[preview.confidence]
+            : DISTANCE_DEFAULT_WIDTH,
         },
       ];
     });
   }, [distancePreviews, objectSummaries]);
-
-  const activeDistanceRuler = useMemo(() => {
-    if (!distanceDraft) {
-      return null;
-    }
-
-    const summaryA = objectSummaries.find(
-      (item) => item.pathKey === distanceDraft.pathKeyA,
-    );
-    const summaryB = objectSummaries.find(
-      (item) => item.pathKey === distanceDraft.pathKeyB,
-    );
-
-    if (!summaryA || !summaryB) {
-      return null;
-    }
-
-    const { pointOnA, pointOnB, distanceMeters } = closestPointsBetweenAabbs(
-      summaryA.aabbCenterWorld,
-      summaryA.aabbSizeWorld,
-      summaryB.aabbCenterWorld,
-      summaryB.aabbSizeWorld,
-    );
-
-    return {
-      from: new THREE.Vector3(...pointOnA),
-      to: new THREE.Vector3(...pointOnB),
-      distanceMeters,
-    };
-  }, [distanceDraft, objectSummaries]);
 
   const visualConfidenceAnnotations = useMemo(() => {
     const base = confidenceAnnotations ?? [];
@@ -2331,17 +2289,6 @@ function Model({
         />
       ))}
 
-      {activeDistanceRuler ? (
-        <ClearanceRuler
-          fromWorld={activeDistanceRuler.from}
-          toWorld={activeDistanceRuler.to}
-          distanceMeters={activeDistanceRuler.distanceMeters}
-          color={DISTANCE_DRAFT_COLOR}
-          lineWidth={2.5}
-          label="measuring"
-        />
-      ) : null}
-
       {handleConfig?.kind === "angle" ? (
         <AngleHandle
           pivotWorld={handleConfig.pivotWorld}
@@ -2383,7 +2330,6 @@ export default function FuzzyCADGeometryViewer({
   scalePreviews,
   scaleFactor,
   onScaleFactorChange,
-  distanceDraft,
   distancePreviews,
   hoveredPathKey,
   onHoveredPathKeyChange,
@@ -2482,7 +2428,6 @@ export default function FuzzyCADGeometryViewer({
                   scalePreviews={scalePreviews}
                   scaleFactor={scaleFactor}
                   onScaleFactorChange={onScaleFactorChange}
-                  distanceDraft={distanceDraft}
                   distancePreviews={distancePreviews}
                   hoveredPathKey={hoveredPathKey}
                   onHoveredPathKeyChange={onHoveredPathKeyChange}

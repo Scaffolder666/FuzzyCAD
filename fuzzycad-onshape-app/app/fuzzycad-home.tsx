@@ -202,21 +202,14 @@ export default function FuzzyCADHome() {
   } | null>(null);
   const [scaleFactor, setScaleFactor] = useState(1);
 
-  // "Distance" tool: click one part, then a second, to flag the gap
-  // between them. distanceFirstPathKey holds the first pick while waiting
-  // for the second; once both are in, distanceDraftPathKeys holds the pair
-  // and the bottom readout bar shows the confidence/direction controls.
+  // "Distance" tool: click one part, then a second, to flag the gap between
+  // them. The flag saves itself the moment both are picked — it's a
+  // request waiting on someone else's answer, not a value the marker
+  // proposes, so there's nothing else for them to configure here. Stays on
+  // the Distance tool afterward so several pairs can be flagged in a row.
   const [distanceFirstPathKey, setDistanceFirstPathKey] = useState<
     string | null
   >(null);
-  const [distanceDraftPathKeys, setDistanceDraftPathKeys] = useState<
-    [string, string] | null
-  >(null);
-  const [distanceMeasuredMeters, setDistanceMeasuredMeters] = useState(0);
-  const [distanceConfidenceDraft, setDistanceConfidenceDraft] =
-    useState<ConfidenceLevel>("medium");
-  const [distanceDirectionDraft, setDistanceDirectionDraft] =
-    useState<ConfidenceDirection>("both");
 
   const [heightPreviewOpen, setHeightPreviewOpen] = useState(false);
   const [pendingHeightAxis, setPendingHeightAxis] =
@@ -277,6 +270,7 @@ export default function FuzzyCADHome() {
     upsertMoveMark,
     upsertScaleMark,
     upsertDistanceMark,
+    setDistanceConfidenceMark,
     answerDistanceMark,
   } = useUncertaintyDocument(currentUncertaintySource);
 
@@ -348,10 +342,6 @@ export default function FuzzyCADHome() {
       return heightCandidatePathKeys;
     }
 
-    if (distanceDraftPathKeys) {
-      return distanceDraftPathKeys;
-    }
-
     if (distanceFirstPathKey) {
       return [distanceFirstPathKey];
     }
@@ -361,7 +351,6 @@ export default function FuzzyCADHome() {
     heightCandidateOpen,
     heightConfidenceOpen,
     heightCandidatePathKeys,
-    distanceDraftPathKeys,
     distanceFirstPathKey,
     lassoPathKeys,
   ]);
@@ -403,9 +392,6 @@ export default function FuzzyCADHome() {
     setActiveScalePlan(null);
     setScaleFactor(1);
     setDistanceFirstPathKey(null);
-    setDistanceDraftPathKeys(null);
-    setDistanceConfidenceDraft("medium");
-    setDistanceDirectionDraft("both");
     closeSizeUncertaintyEditor();
   }
 
@@ -988,8 +974,9 @@ export default function FuzzyCADHome() {
   }
 
   /** Click routing while the Distance tool is active: first click picks
-   * object A, second click (a different object) picks B and opens the
-   * confidence/direction editor in the bottom readout bar. */
+   * object A, second click (a different object) picks B, measures the gap,
+   * and saves the flag immediately — then resets to pick the next pair
+   * without leaving the tool, so several can be flagged in a row. */
   function handleDistancePick(pathKey: string | null) {
     if (!pathKey) {
       return;
@@ -1006,10 +993,13 @@ export default function FuzzyCADHome() {
       return;
     }
 
+    const pathKeyA = distanceFirstPathKey;
     const summaryA = objectSummaries.find(
-      (summary) => summary.pathKey === distanceFirstPathKey,
+      (summary) => summary.pathKey === pathKeyA,
     );
     const summaryB = objectSummaries.find((summary) => summary.pathKey === pathKey);
+
+    setDistanceFirstPathKey(null);
 
     if (!summaryA || !summaryB) {
       return;
@@ -1022,35 +1012,15 @@ export default function FuzzyCADHome() {
       summaryB.aabbSizeWorld,
     );
 
-    setDistanceDraftPathKeys([distanceFirstPathKey, pathKey]);
-    setDistanceMeasuredMeters(distanceMeters);
-    setDistanceConfidenceDraft("medium");
-    setDistanceDirectionDraft("both");
-    setDistanceFirstPathKey(null);
+    upsertDistanceMark({
+      pathKeyA,
+      pathKeyB: pathKey,
+      measuredDistanceMeters: distanceMeters,
+    });
   }
 
   function cancelDistance() {
     setDistanceFirstPathKey(null);
-    setDistanceDraftPathKeys(null);
-    setActiveTool("select");
-  }
-
-  function applyDistance() {
-    if (!distanceDraftPathKeys) {
-      return;
-    }
-
-    const [pathKeyA, pathKeyB] = distanceDraftPathKeys;
-
-    upsertDistanceMark({
-      pathKeyA,
-      pathKeyB,
-      measuredDistanceMeters: distanceMeasuredMeters,
-      confidence: distanceConfidenceDraft,
-      direction: distanceDirectionDraft,
-    });
-
-    setDistanceDraftPathKeys(null);
     setActiveTool("select");
   }
 
@@ -1228,14 +1198,6 @@ if (result.ok && result.state) {
           scalePreviews={scalePreviews}
           scaleFactor={scaleFactor}
           onScaleFactorChange={setScaleFactor}
-          distanceDraft={
-            distanceDraftPathKeys
-              ? {
-                  pathKeyA: distanceDraftPathKeys[0],
-                  pathKeyB: distanceDraftPathKeys[1],
-                }
-              : null
-          }
           distancePreviews={distancePreviews}
           hoveredPathKey={hoveredPathKey}
           onHoveredPathKeyChange={setHoveredPathKey}
@@ -1394,75 +1356,19 @@ if (result.ok && result.state) {
           </div>
         ) : null}
 
-        {activeTool === "distance" && !distanceDraftPathKeys ? (
+        {activeTool === "distance" ? (
           <div className={styles.manipulationReadout}>
             <span className={styles.manipulationValue}>
               {distanceFirstPathKey
                 ? "Click a second part..."
-                : "Click a part to start measuring"}
+                : "Click a part to flag a gap"}
             </span>
             <button
               type="button"
               className={styles.manipulationResetButton}
               onClick={cancelDistance}
             >
-              Cancel
-            </button>
-          </div>
-        ) : null}
-
-        {activeTool === "distance" && distanceDraftPathKeys ? (
-          <div className={styles.manipulationReadout}>
-            <span className={styles.manipulationValue}>
-              {(distanceMeasuredMeters * 1000).toFixed(1)} mm
-            </span>
-            {(["high", "medium", "low"] as const).map((level) => (
-              <button
-                key={level}
-                type="button"
-                className={`${styles.manipulationResetButton} ${
-                  distanceConfidenceDraft === level
-                    ? styles.manipulationToggleActive
-                    : ""
-                }`}
-                onClick={() => setDistanceConfidenceDraft(level)}
-              >
-                {level}
-              </button>
-            ))}
-            {(
-              [
-                { value: "positive", label: "too close" },
-                { value: "negative", label: "too far" },
-                { value: "both", label: "not sure" },
-              ] as const
-            ).map((option) => (
-              <button
-                key={option.value}
-                type="button"
-                className={`${styles.manipulationResetButton} ${
-                  distanceDirectionDraft === option.value
-                    ? styles.manipulationToggleActive
-                    : ""
-                }`}
-                onClick={() => setDistanceDirectionDraft(option.value)}
-              >
-                {option.label}
-              </button>
-            ))}
-            <button
-              type="button"
-              className={styles.manipulationResetButton}
-              onClick={cancelDistance}
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              className={styles.manipulationResetButton}
-              onClick={applyDistance}
-            >
-              Save flag
+              Done
             </button>
           </div>
         ) : null}
@@ -1481,6 +1387,7 @@ if (result.ok && result.state) {
           onAnswerDistance={(annotationId, distanceMm) =>
             answerDistanceMark(annotationId, distanceMm / 1000)
           }
+          onSetDistanceConfidence={setDistanceConfidenceMark}
           onSaveToOnshape={() => void saveProjectStateToOnshape()}
         />
 

@@ -113,20 +113,20 @@ export type ScaleUncertaintyAnnotation = BaseAnnotationFields & {
 };
 
 /**
- * "Distance": flags a gap between two parts as worth checking, without
- * proposing an exact fix — the same "needs input" model as Size (a
- * confidence level + a lean direction, not a hard number), just applied to
- * the space between two objects instead of one object's own dimension.
- * `resolvedDistanceMeters` lets someone with the relevant domain knowledge
- * answer the question directly on the mark itself, instead of only being
- * able to mark it resolved with no record of what the real value is.
+ * "Distance": flags a gap between two parts as worth checking, and is
+ * fundamentally a *request* — the primary thing it's waiting on is someone
+ * with the relevant domain knowledge answering with the actual required
+ * distance (`resolvedDistanceMeters`), not on the marker guessing a value
+ * themselves. Confidence + direction (the same fuzzy-range model Size uses)
+ * are optional secondary color, addable after the fact, not required to
+ * create the flag.
  */
 export type DistanceUncertaintyAnnotation = BaseAnnotationFields & {
   type: "distance";
   otherPathKey: string;
   measuredDistanceMeters: number;
-  confidence: ConfidenceLevel;
-  direction: ConfidenceDirection;
+  confidence: ConfidenceLevel | null;
+  direction: ConfidenceDirection | null;
   resolvedDistanceMeters: number | null;
 };
 
@@ -772,8 +772,8 @@ function createDistanceAnnotation(input: {
   pathKeyA: string;
   pathKeyB: string;
   measuredDistanceMeters: number;
-  confidence: ConfidenceLevel;
-  direction: ConfidenceDirection;
+  confidence?: ConfidenceLevel | null;
+  direction?: ConfidenceDirection | null;
   resolvedDistanceMeters?: number | null;
   comment?: string;
   author?: string;
@@ -798,8 +798,8 @@ function createDistanceAnnotation(input: {
     },
     otherPathKey: input.pathKeyB,
     measuredDistanceMeters: input.measuredDistanceMeters,
-    confidence: input.confidence,
-    direction: input.direction,
+    confidence: input.confidence ?? null,
+    direction: input.direction ?? null,
     resolvedDistanceMeters: input.resolvedDistanceMeters ?? null,
     comment: input.comment,
     author: input.author,
@@ -810,29 +810,31 @@ function createDistanceAnnotation(input: {
   };
 }
 
-/** One open distance flag per unordered pair of objects — a new save replaces it. */
+/**
+ * One open distance flag per unordered pair of objects. Confidence/
+ * direction are optional — picking the two objects is enough to create the
+ * flag; they can be added afterward from the mark itself.
+ */
 export function upsertDistance(
   document: FuzzyCADUncertaintyDocument,
   input: {
     pathKeyA: string;
     pathKeyB: string;
     measuredDistanceMeters: number;
-    confidence: ConfidenceLevel;
-    direction: ConfidenceDirection;
     author?: string;
   },
 ): FuzzyCADUncertaintyDocument {
   const id = makeDistanceAnnotationId(input.pathKeyA, input.pathKeyB);
   const existing = document.annotations.find((annotation) => annotation.id === id);
+  const existingDistance = existing?.type === "distance" ? existing : null;
 
   const nextAnnotation = createDistanceAnnotation({
     pathKeyA: input.pathKeyA,
     pathKeyB: input.pathKeyB,
     measuredDistanceMeters: input.measuredDistanceMeters,
-    confidence: input.confidence,
-    direction: input.direction,
-    resolvedDistanceMeters:
-      existing?.type === "distance" ? existing.resolvedDistanceMeters : null,
+    confidence: existingDistance?.confidence,
+    direction: existingDistance?.direction,
+    resolvedDistanceMeters: existingDistance?.resolvedDistanceMeters,
     comment: existing?.comment,
     author: existing?.author ?? input.author,
     assignee: existing?.assignee,
@@ -850,6 +852,35 @@ export function upsertDistance(
       ...document.annotations.filter((annotation) => annotation.id !== id),
       nextAnnotation,
     ],
+  };
+}
+
+/**
+ * Add or change the optional confidence + direction on an existing distance
+ * flag — secondary color, not required to create or answer the flag.
+ */
+export function setDistanceConfidence(
+  document: FuzzyCADUncertaintyDocument,
+  annotationId: string,
+  confidence: ConfidenceLevel,
+  direction: ConfidenceDirection,
+): FuzzyCADUncertaintyDocument {
+  const now = new Date().toISOString();
+
+  return {
+    ...document,
+    annotations: document.annotations.map((annotation) => {
+      if (annotation.id !== annotationId || annotation.type !== "distance") {
+        return annotation;
+      }
+
+      return {
+        ...annotation,
+        confidence,
+        direction,
+        updatedAt: now,
+      };
+    }),
   };
 }
 
@@ -885,8 +916,8 @@ export function setDistanceAnswer(
 export type DistancePreview = {
   pathKeyA: string;
   pathKeyB: string;
-  confidence: ConfidenceLevel;
-  direction: ConfidenceDirection;
+  confidence: ConfidenceLevel | null;
+  direction: ConfidenceDirection | null;
   measuredDistanceMeters: number;
 };
 

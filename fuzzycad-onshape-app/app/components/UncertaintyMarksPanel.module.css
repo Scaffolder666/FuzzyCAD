@@ -197,33 +197,33 @@
 .answerRow {
   display: flex;
   gap: 6px;
-  margin-top: 8px;
 }
 
 .answerInput {
   flex: 1;
   min-width: 0;
-  height: 26px;
+  height: 30px;
   box-sizing: border-box;
-  padding: 0 8px;
+  padding: 0 9px;
   border-radius: 8px;
-  border: 1px solid rgba(148, 163, 184, 0.42);
-  background: rgba(255, 255, 255, 0.85);
-  color: #334155;
-  font-size: 11px;
+  border: 1.5px solid rgba(14, 165, 233, 0.5);
+  background: rgba(255, 255, 255, 0.95);
+  color: #0f172a;
+  font-size: 13px;
+  font-weight: 600;
   outline: none;
 }
 
 .answerButton {
-  height: 26px;
-  padding: 0 9px;
+  height: 30px;
+  padding: 0 12px;
   border-radius: 8px;
   cursor: pointer;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 800;
-  border: 1px solid rgba(14, 165, 233, 0.55);
-  background: rgba(14, 165, 233, 0.08);
-  color: #0369a1;
+  border: 1px solid rgba(14, 165, 233, 0.6);
+  background: #0ea5e9;
+  color: #ffffff;
   white-space: nowrap;
 }
 
@@ -235,6 +235,79 @@
   font-size: 9px;
   font-weight: 800;
   text-transform: capitalize;
+}
+
+/* ---- distance card ---- */
+
+.confidenceToggle {
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px dashed rgba(148, 163, 184, 0.55);
+  background: transparent;
+  color: #64748b;
+  font-size: 9px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.confidenceInlinePanel {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-bottom: 8px;
+}
+
+.confidenceInlineButton {
+  height: 24px;
+  padding: 0 8px;
+  border-radius: 7px;
+  border: 1px solid rgba(148, 163, 184, 0.42);
+  background: rgba(255, 255, 255, 0.85);
+  color: #475569;
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: capitalize;
+}
+
+.confidenceInlineButtonActive {
+  border-color: rgba(14, 165, 233, 0.55);
+  background: rgba(14, 165, 233, 0.14);
+  color: #0369a1;
+}
+
+.distanceQuestionBox {
+  margin-bottom: 8px;
+  padding: 8px;
+  border-radius: 10px;
+  border: 1.5px solid rgba(14, 165, 233, 0.4);
+  background: rgba(14, 165, 233, 0.06);
+}
+
+.distanceQuestionLabel {
+  font-size: 11px;
+  font-weight: 700;
+  color: #0369a1;
+  margin-bottom: 6px;
+}
+
+.distanceAnsweredBox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  padding: 6px 8px;
+  border-radius: 10px;
+  border: 1.5px solid rgba(15, 118, 110, 0.35);
+  background: rgba(15, 118, 110, 0.08);
+}
+
+.distanceAnsweredLabel {
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #0f766e;
 }
 
 /* ---- size (needs-input) card ---- */

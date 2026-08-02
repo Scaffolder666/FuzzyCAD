@@ -11,7 +11,11 @@ import type {
   ScaleUncertaintyAnnotation,
   SizeUncertaintyAnnotation,
 } from "../lib/uncertainty/document";
-import type { ConfidenceAxis, ConfidenceLevel } from "../lib/uncertainty/types";
+import type {
+  ConfidenceAxis,
+  ConfidenceDirection,
+  ConfidenceLevel,
+} from "../lib/uncertainty/types";
 import styles from "./UncertaintyMarksPanel.module.css";
 
 type FilterKey = "size" | "proposal" | "alternative";
@@ -29,6 +33,11 @@ type UncertaintyMarksPanelProps = {
   onReopenAnnotation: (annotationId: string) => void;
   onSelectAlternativeOption: (annotationId: string, optionId: string) => void;
   onAnswerDistance: (annotationId: string, distanceMm: number) => void;
+  onSetDistanceConfidence: (
+    annotationId: string,
+    confidence: ConfidenceLevel,
+    direction: ConfidenceDirection,
+  ) => void;
   onSaveToOnshape: () => void;
 };
 
@@ -183,7 +192,7 @@ function SizeCard({
 }
 
 const DISTANCE_DIRECTION_LABEL: Record<
-  DistanceUncertaintyAnnotation["direction"],
+  NonNullable<DistanceUncertaintyAnnotation["direction"]>,
   string
 > = {
   positive: "might be too close",
@@ -199,6 +208,7 @@ function DistanceCard({
   onDelete,
   onCommentChange,
   onAnswer,
+  onSetConfidence,
 }: {
   annotation: DistanceUncertaintyAnnotation;
   selected: boolean;
@@ -207,8 +217,10 @@ function DistanceCard({
   onDelete: () => void;
   onCommentChange: (comment: string) => void;
   onAnswer: (distanceMm: number) => void;
+  onSetConfidence: (confidence: ConfidenceLevel, direction: NonNullable<DistanceUncertaintyAnnotation["direction"]>) => void;
 }) {
   const [answerDraft, setAnswerDraft] = useState("");
+  const [confidenceOpen, setConfidenceOpen] = useState(false);
   const measuredMm = annotation.measuredDistanceMeters * 1000;
   const resolvedMm =
     annotation.resolvedDistanceMeters !== null
@@ -226,9 +238,22 @@ function DistanceCard({
         <span className={`${styles.kindPill} ${styles.kindPillDistance}`}>
           Needs input
         </span>
-        <span className={styles.confidencePill}>
-          {annotation.confidence} · {DISTANCE_DIRECTION_LABEL[annotation.direction]}
-        </span>
+        {annotation.confidence && annotation.direction ? (
+          <span className={styles.confidencePill}>
+            {annotation.confidence} · {DISTANCE_DIRECTION_LABEL[annotation.direction]}
+          </span>
+        ) : (
+          <button
+            type="button"
+            className={styles.confidenceToggle}
+            onClick={(event) => {
+              event.stopPropagation();
+              setConfidenceOpen((previous) => !previous);
+            }}
+          >
+            + Confidence
+          </button>
+        )}
       </div>
 
       <div className={styles.cardTitle}>
@@ -236,18 +261,109 @@ function DistanceCard({
       </div>
 
       <div className={styles.valueLine}>
-        <span>measured {measuredMm.toFixed(1)} mm</span>
+        <span>currently measures {measuredMm.toFixed(1)} mm</span>
       </div>
 
-      {resolvedMm !== null ? (
-        <div className={styles.valueLine}>
-          <span className={styles.valueNew}>answered: {resolvedMm.toFixed(1)} mm</span>
+      {confidenceOpen ? (
+        <div
+          className={styles.confidenceInlinePanel}
+          onClick={(event) => event.stopPropagation()}
+        >
+          {(["high", "medium", "low"] as const).map((level) => (
+            <button
+              key={level}
+              type="button"
+              className={`${styles.confidenceInlineButton} ${
+                annotation.confidence === level
+                  ? styles.confidenceInlineButtonActive
+                  : ""
+              }`}
+              onClick={() =>
+                onSetConfidence(level, annotation.direction ?? "both")
+              }
+            >
+              {level}
+            </button>
+          ))}
+          {(
+            [
+              { value: "positive", label: "too close" },
+              { value: "negative", label: "too far" },
+              { value: "both", label: "not sure" },
+            ] as const
+          ).map((option) => (
+            <button
+              key={option.value}
+              type="button"
+              className={`${styles.confidenceInlineButton} ${
+                annotation.direction === option.value
+                  ? styles.confidenceInlineButtonActive
+                  : ""
+              }`}
+              onClick={() =>
+                onSetConfidence(annotation.confidence ?? "medium", option.value)
+              }
+            >
+              {option.label}
+            </button>
+          ))}
         </div>
       ) : null}
 
       {annotation.author ? (
         <div className={styles.metaRow}>flagged by {annotation.author}</div>
       ) : null}
+
+      {resolvedMm !== null ? (
+        <div className={styles.distanceAnsweredBox}>
+          <span className={styles.distanceAnsweredLabel}>Answered</span>
+          <span className={styles.valueNew}>{resolvedMm.toFixed(1)} mm</span>
+        </div>
+      ) : (
+        <div
+          className={styles.distanceQuestionBox}
+          onClick={(event) => event.stopPropagation()}
+        >
+          <div className={styles.distanceQuestionLabel}>
+            What should this distance actually be?
+          </div>
+          <div className={styles.answerRow}>
+            <input
+              type="number"
+              inputMode="decimal"
+              className={styles.answerInput}
+              placeholder="mm"
+              value={answerDraft}
+              onChange={(event) => setAnswerDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.currentTarget.blur();
+                  const parsed = parseFloat(answerDraft);
+
+                  if (!Number.isNaN(parsed)) {
+                    onAnswer(parsed);
+                    setAnswerDraft("");
+                  }
+                }
+              }}
+            />
+            <button
+              type="button"
+              className={styles.answerButton}
+              onClick={() => {
+                const parsed = parseFloat(answerDraft);
+
+                if (!Number.isNaN(parsed)) {
+                  onAnswer(parsed);
+                  setAnswerDraft("");
+                }
+              }}
+            >
+              Submit
+            </button>
+          </div>
+        </div>
+      )}
 
       <textarea
         className={styles.comment}
@@ -256,31 +372,6 @@ function DistanceCard({
         onClick={(event) => event.stopPropagation()}
         onChange={(event) => onCommentChange(event.target.value)}
       />
-
-      <div className={styles.answerRow} onClick={(event) => event.stopPropagation()}>
-        <input
-          type="number"
-          inputMode="decimal"
-          className={styles.answerInput}
-          placeholder="actual mm"
-          value={answerDraft}
-          onChange={(event) => setAnswerDraft(event.target.value)}
-        />
-        <button
-          type="button"
-          className={styles.answerButton}
-          onClick={() => {
-            const parsed = parseFloat(answerDraft);
-
-            if (!Number.isNaN(parsed)) {
-              onAnswer(parsed);
-              setAnswerDraft("");
-            }
-          }}
-        >
-          Save answer
-        </button>
-      </div>
 
       <div className={styles.actions}>
         <button
@@ -635,6 +726,7 @@ export default function UncertaintyMarksPanel({
   onReopenAnnotation,
   onSelectAlternativeOption,
   onAnswerDistance,
+  onSetDistanceConfidence,
   onSaveToOnshape,
 }: UncertaintyMarksPanelProps) {
   const [activeFilter, setActiveFilter] = useState<FilterKey | null>(null);
@@ -802,6 +894,9 @@ export default function UncertaintyMarksPanel({
                   }
                   onAnswer={(distanceMm) =>
                     onAnswerDistance(annotation.id, distanceMm)
+                  }
+                  onSetConfidence={(confidence, direction) =>
+                    onSetDistanceConfidence(annotation.id, confidence, direction)
                   }
                 />
               );
