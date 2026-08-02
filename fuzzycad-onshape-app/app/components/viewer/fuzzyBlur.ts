@@ -1430,6 +1430,9 @@ function createSectionedRangeEnvelope({
 /** Marker color for proposal-target objects — distinct from Size marks' near-black hatching. */
 const PROPOSAL_MARKER_COLOR = 0xea580c;
 
+/** Marker color for move-target objects — distinct from Proposal's orange, so a moved part doesn't read as a length change. */
+const MOVE_MARKER_COLOR = 0x7c3aed;
+
 /**
  * Maps a proposal's local axis (0=length/1=width/2=height) onto the
  * confidence shader's x/y/z labels. axisIndex 0 is always the object's
@@ -1547,7 +1550,7 @@ function createMoveMarkerOverlay({
       directions: buildMoveDirectionMap(deltaWorld),
     },
     axisFrame: undefined,
-    colorHex: PROPOSAL_MARKER_COLOR,
+    colorHex: MOVE_MARKER_COLOR,
   });
 }
 

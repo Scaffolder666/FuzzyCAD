@@ -16,10 +16,13 @@ const PX_PER_MM = 1.5;
 const TRACK_WIDTH = 260;
 const TRACK_HALF = TRACK_WIDTH / 2;
 
+// Orange-family palette (ties back to the Propose/proposal accent color
+// used for its marker and ruler) — deliberately not a red/green/blue world-
+// axis palette, so this never reads as the Move tool's gizmo.
 const AXIS_COLOR: Record<ProposalAxisIndex, string> = {
-  0: "#e0457b",
-  1: "#22a55e",
-  2: "#2b6cff",
+  0: "#c2410c",
+  1: "#ea580c",
+  2: "#f59e0b",
 };
 
 export const AXIS_LABEL: Record<ProposalAxisIndex, string> = {

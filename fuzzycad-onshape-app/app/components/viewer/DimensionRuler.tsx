@@ -12,20 +12,29 @@ type DimensionRulerProps = {
   /** Signed distance from `fromWorld` to `toWorld`, for the label text. */
   deltaMeters: number;
   color?: string;
+  /**
+   * "caliper" (default): SketchUp-style dimension line — extension ticks
+   * at both ends plus an offset measurement line, for a specific edge/
+   * dimension being changed (the Propose tool).
+   * "arrow": a single directional line with an arrowhead pointing at the
+   * new position, for a displacement/trajectory rather than a measured
+   * edge (the Move tool) — so the two read as visually distinct kinds of
+   * change, not the same ruler in a different color.
+   */
+  variant?: "caliper" | "arrow";
 };
 
-/**
- * SketchUp-style dimension line: short extension ticks at the original and
- * proposed tip, a dashed measurement line connecting them off to the side,
- * and a numeric label — so the proposed length change reads as an explicit
- * measurement instead of an implied "ghost" shape.
- */
-export default function DimensionRuler({
+function CaliperRuler({
   fromWorld,
   toWorld,
   deltaMeters,
-  color = "#ea580c",
-}: DimensionRulerProps) {
+  color,
+}: {
+  fromWorld: THREE.Vector3;
+  toWorld: THREE.Vector3;
+  deltaMeters: number;
+  color: string;
+}) {
   const { extensionTickA, extensionTickB, dimensionLine, labelPosition } =
     useMemo(() => {
       const span = fromWorld.distanceTo(toWorld);
@@ -58,13 +67,6 @@ export default function DimensionRuler({
       };
     }, [fromWorld, toWorld]);
 
-  if (fromWorld.distanceToSquared(toWorld) < 1e-10) {
-    return null;
-  }
-
-  const deltaMm = deltaMeters * 1000;
-  const sign = deltaMm >= 0 ? "+" : "−";
-
   return (
     <>
       <Line
@@ -91,29 +93,116 @@ export default function DimensionRuler({
         transparent
         opacity={0.95}
       />
-      <Html
-        position={labelPosition}
-        center
-        zIndexRange={[40, 0]}
-        style={{ pointerEvents: "none" }}
-      >
-        <div
-          style={{
-            padding: "3px 8px",
-            borderRadius: 999,
-            background: "rgba(255,255,255,0.95)",
-            border: `1.5px solid ${color}`,
-            color,
-            fontSize: 12,
-            fontWeight: 700,
-            fontFamily: "monospace",
-            whiteSpace: "nowrap",
-          }}
-        >
-          {sign}
-          {Math.abs(deltaMm).toFixed(1)} mm
-        </div>
-      </Html>
+      <RulerLabel position={labelPosition} deltaMeters={deltaMeters} color={color} />
     </>
+  );
+}
+
+function ArrowRuler({
+  fromWorld,
+  toWorld,
+  deltaMeters,
+  color,
+}: {
+  fromWorld: THREE.Vector3;
+  toWorld: THREE.Vector3;
+  deltaMeters: number;
+  color: string;
+}) {
+  const { direction, length, headLength, headWidth, labelPosition } =
+    useMemo(() => {
+      const span = toWorld.clone().sub(fromWorld);
+      const length = Math.max(span.length(), 1e-6);
+      const direction = span.clone().normalize();
+      const headLength = Math.min(length * 0.28, 0.05);
+      const headWidth = Math.min(headLength * 0.6, 0.03);
+
+      return {
+        direction,
+        length,
+        headLength,
+        headWidth,
+        labelPosition: fromWorld.clone().lerp(toWorld, 0.5),
+      };
+    }, [fromWorld, toWorld]);
+
+  return (
+    <>
+      <arrowHelper
+        args={[direction, fromWorld, length, color, headLength, headWidth]}
+      />
+      <RulerLabel position={labelPosition} deltaMeters={deltaMeters} color={color} />
+    </>
+  );
+}
+
+function RulerLabel({
+  position,
+  deltaMeters,
+  color,
+}: {
+  position: THREE.Vector3;
+  deltaMeters: number;
+  color: string;
+}) {
+  const deltaMm = deltaMeters * 1000;
+  const sign = deltaMm >= 0 ? "+" : "−";
+
+  return (
+    <Html
+      position={position}
+      center
+      zIndexRange={[40, 0]}
+      style={{ pointerEvents: "none" }}
+    >
+      <div
+        style={{
+          padding: "3px 8px",
+          borderRadius: 999,
+          background: "rgba(255,255,255,0.95)",
+          border: `1.5px solid ${color}`,
+          color,
+          fontSize: 12,
+          fontWeight: 700,
+          fontFamily: "monospace",
+          whiteSpace: "nowrap",
+        }}
+      >
+        {sign}
+        {Math.abs(deltaMm).toFixed(1)} mm
+      </div>
+    </Html>
+  );
+}
+
+export default function DimensionRuler({
+  fromWorld,
+  toWorld,
+  deltaMeters,
+  color = "#ea580c",
+  variant = "caliper",
+}: DimensionRulerProps) {
+  if (fromWorld.distanceToSquared(toWorld) < 1e-10) {
+    return null;
+  }
+
+  if (variant === "arrow") {
+    return (
+      <ArrowRuler
+        fromWorld={fromWorld}
+        toWorld={toWorld}
+        deltaMeters={deltaMeters}
+        color={color}
+      />
+    );
+  }
+
+  return (
+    <CaliperRuler
+      fromWorld={fromWorld}
+      toWorld={toWorld}
+      deltaMeters={deltaMeters}
+      color={color}
+    />
   );
 }

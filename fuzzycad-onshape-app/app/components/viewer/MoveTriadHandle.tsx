@@ -20,9 +20,12 @@ const WORLD_AXES: {
   color: string;
   vector: THREE.Vector3;
 }[] = [
-  { key: "x", label: "X", color: "#e0457b", vector: new THREE.Vector3(1, 0, 0) },
-  { key: "y", label: "Y", color: "#22a55e", vector: new THREE.Vector3(0, 1, 0) },
-  { key: "z", label: "Z", color: "#2b6cff", vector: new THREE.Vector3(0, 0, 1) },
+  // Standard world-axis RGB convention (SketchUp/Tinkercad/etc.) — distinct
+  // from AxisTriadHandle's orange-family palette, so a move gizmo never
+  // looks like a Propose gizmo in a different color.
+  { key: "x", label: "X", color: "#ef4444", vector: new THREE.Vector3(1, 0, 0) },
+  { key: "y", label: "Y", color: "#22c55e", vector: new THREE.Vector3(0, 1, 0) },
+  { key: "z", label: "Z", color: "#3b82f6", vector: new THREE.Vector3(0, 0, 1) },
 ];
 
 type MoveTriadHandleProps = {

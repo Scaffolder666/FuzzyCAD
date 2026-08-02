@@ -252,6 +252,13 @@ function getBadgePosition(
   return [anchor[0] + side * baseOffset, anchor[1] + verticalOffset, anchor[2]];
 }
 
+// Distinct accent colors per proposal-family tool, so a ruler/marker reads
+// as "this is a length change" vs "this is a move" at a glance instead of
+// looking like the same annotation type in the same color.
+const PROPOSAL_ACCENT_COLOR_MUTED = "#fdba74";
+const MOVE_ACCENT_COLOR = "#7c3aed";
+const MOVE_ACCENT_COLOR_MUTED = "#c4b5fd";
+
 const CONFIDENCE_ORDER: ConfidenceLevel[] = ["high", "medium", "low"];
 
 function getNextConfidenceLevel(level: ConfidenceLevel) {
@@ -1585,7 +1592,7 @@ function Model({
           fromWorld={ruler.from}
           toWorld={ruler.to}
           deltaMeters={ruler.deltaMeters}
-          color="#94a3b8"
+          color={PROPOSAL_ACCENT_COLOR_MUTED}
         />
       ))}
 
@@ -1616,6 +1623,8 @@ function Model({
                 fromWorld={from}
                 toWorld={to}
                 deltaMeters={to.distanceTo(from)}
+                color={MOVE_ACCENT_COLOR}
+                variant="arrow"
               />
             );
           })()
@@ -1627,7 +1636,8 @@ function Model({
           fromWorld={ruler.from}
           toWorld={ruler.to}
           deltaMeters={ruler.deltaMeters}
-          color="#94a3b8"
+          color={MOVE_ACCENT_COLOR_MUTED}
+          variant="arrow"
         />
       ))}
 

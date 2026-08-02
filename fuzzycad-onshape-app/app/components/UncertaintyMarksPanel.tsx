@@ -278,7 +278,7 @@ function MoveCard({
       onClick={onSelect}
     >
       <div className={styles.cardHeader}>
-        <span className={`${styles.kindPill} ${styles.kindPillProposal}`}>
+        <span className={`${styles.kindPill} ${styles.kindPillMove}`}>
           Proposed move
         </span>
       </div>
