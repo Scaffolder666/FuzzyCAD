@@ -312,6 +312,52 @@
 
 /* ---- size (needs-input) card ---- */
 
+.sizeAxisRow {
+  margin-bottom: 8px;
+}
+
+.sizeQuestionBox {
+  padding: 8px;
+  border-radius: 10px;
+  border: 1.5px solid rgba(217, 119, 6, 0.4);
+  background: rgba(217, 119, 6, 0.06);
+}
+
+.sizeQuestionLabel {
+  font-size: 11px;
+  font-weight: 700;
+  color: #b45309;
+  margin-bottom: 6px;
+}
+
+.sizeAnswerInput {
+  flex: 1;
+  min-width: 0;
+  height: 30px;
+  box-sizing: border-box;
+  padding: 0 9px;
+  border-radius: 8px;
+  border: 1.5px solid rgba(217, 119, 6, 0.5);
+  background: rgba(255, 255, 255, 0.95);
+  color: #0f172a;
+  font-size: 13px;
+  font-weight: 600;
+  outline: none;
+}
+
+.sizeAnswerButton {
+  height: 30px;
+  padding: 0 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 800;
+  border: 1px solid rgba(217, 119, 6, 0.6);
+  background: #d97706;
+  color: #ffffff;
+  white-space: nowrap;
+}
+
 .comment {
   width: 100%;
   min-height: 58px;

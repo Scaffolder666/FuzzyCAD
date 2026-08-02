@@ -260,6 +260,7 @@ export default function FuzzyCADHome() {
     resetUncertaintyDocument,
     upsertSizeMark,
     removeSizeMarks,
+    answerSizeAxisMark,
     deleteAnnotation,
     replaceUncertaintyDocument,
     updateAnnotationComment,
@@ -1383,6 +1384,9 @@ if (result.ok && result.state) {
           hoveredPathKey={hoveredPathKey}
           onSelectAnnotation={selectUncertaintyCard}
           onEditSizeAnnotation={editSizeUncertaintyCard}
+          onAnswerSizeAxis={(annotationId, axis, valueMm) =>
+            answerSizeAxisMark(annotationId, axis, valueMm / 1000)
+          }
           onDeleteAnnotation={deleteUncertaintyCard}
           onCommentChange={updateUncertaintyCardComment}
           onResolveAnnotation={resolveAnnotation}

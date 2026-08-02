@@ -28,6 +28,11 @@ type UncertaintyMarksPanelProps = {
   hoveredPathKey?: string | null;
   onSelectAnnotation: (annotationId: string | null) => void;
   onEditSizeAnnotation: (annotation: SizeUncertaintyAnnotation) => void;
+  onAnswerSizeAxis: (
+    annotationId: string,
+    axis: ConfidenceAxis,
+    valueMm: number,
+  ) => void;
   onDeleteAnnotation: (annotationId: string) => void;
   onCommentChange: (annotationId: string, comment: string) => void;
   onResolveAnnotation: (annotationId: string) => void;
@@ -104,6 +109,78 @@ function matchesFilter(
   return annotation.type === filter;
 }
 
+function SizeAxisAnswer({
+  axis,
+  resolvedMeters,
+  onAnswer,
+}: {
+  axis: ConfidenceAxis;
+  resolvedMeters: number | undefined;
+  onAnswer: (valueMm: number) => void;
+}) {
+  const [draft, setDraft] = useState("");
+
+  function submit() {
+    const parsed = parseFloat(draft);
+
+    if (!Number.isNaN(parsed)) {
+      onAnswer(parsed);
+      setDraft("");
+    }
+  }
+
+  if (resolvedMeters !== undefined) {
+    return (
+      <div className={styles.sizeAxisRow}>
+        <div className={styles.distanceAnsweredBox}>
+          <span className={styles.distanceAnsweredLabel}>
+            {axis.toUpperCase()} answered
+          </span>
+          <span className={styles.valueNew}>
+            {(resolvedMeters * 1000).toFixed(1)} mm
+          </span>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className={styles.sizeAxisRow}
+      onClick={(event) => event.stopPropagation()}
+    >
+      <div className={styles.sizeQuestionBox}>
+        <div className={styles.sizeQuestionLabel}>
+          {axis.toUpperCase()}: what should this measure?
+        </div>
+        <div className={styles.answerRow}>
+          <input
+            type="number"
+            inputMode="decimal"
+            className={styles.sizeAnswerInput}
+            placeholder="mm"
+            value={draft}
+            onChange={(event) => setDraft(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.currentTarget.blur();
+                submit();
+              }
+            }}
+          />
+          <button
+            type="button"
+            className={styles.sizeAnswerButton}
+            onClick={submit}
+          >
+            Submit
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function SizeCard({
   annotation,
   selected,
@@ -112,6 +189,7 @@ function SizeCard({
   onEdit,
   onDelete,
   onCommentChange,
+  onAnswerAxis,
   onResolve,
 }: {
   annotation: SizeUncertaintyAnnotation;
@@ -121,9 +199,12 @@ function SizeCard({
   onEdit: () => void;
   onDelete: () => void;
   onCommentChange: (comment: string) => void;
+  onAnswerAxis: (axis: ConfidenceAxis, valueMm: number) => void;
   onResolve: () => void;
 }) {
   const worst = getWorstConfidence(annotation.confidence);
+  const flaggedAxes = (Object.keys(annotation.confidence) as ConfidenceAxis[])
+    .filter((axis) => annotation.confidence[axis] !== "high");
 
   return (
     <article
@@ -148,6 +229,15 @@ function SizeCard({
           ? `${annotation.target.pathKeys.length} objects`
           : annotation.target.referencePathKey}
       </div>
+
+      {flaggedAxes.map((axis) => (
+        <SizeAxisAnswer
+          key={axis}
+          axis={axis}
+          resolvedMeters={annotation.resolvedAxisValues[axis]}
+          onAnswer={(valueMm) => onAnswerAxis(axis, valueMm)}
+        />
+      ))}
 
       <textarea
         className={styles.comment}
@@ -764,6 +854,7 @@ export default function UncertaintyMarksPanel({
   hoveredPathKey,
   onSelectAnnotation,
   onEditSizeAnnotation,
+  onAnswerSizeAxis,
   onDeleteAnnotation,
   onCommentChange,
   onResolveAnnotation,
@@ -868,6 +959,9 @@ export default function UncertaintyMarksPanel({
                   onDelete={() => onDeleteAnnotation(annotation.id)}
                   onCommentChange={(comment) =>
                     onCommentChange(annotation.id, comment)
+                  }
+                  onAnswerAxis={(axis, valueMm) =>
+                    onAnswerSizeAxis(annotation.id, axis, valueMm)
                   }
                   onResolve={() => onResolveAnnotation(annotation.id)}
                 />

@@ -9,6 +9,7 @@ import {
   setDistanceAnswer,
   setDistanceConfidence,
   setDistanceMoveMode,
+  setSizeAxisAnswer,
   toDistancePreviews,
   toFuzzyConfidenceAnnotations,
   toMovePreviews,
@@ -28,6 +29,7 @@ import {
 import type {
   AxisConfidenceMap,
   AxisDirectionMap,
+  ConfidenceAxis,
   ConfidenceDirection,
   ConfidenceLevel,
 } from "../lib/uncertainty/types";
@@ -108,6 +110,24 @@ export function useUncertaintyDocument(source: FuzzyCADUncertaintySource) {
           source,
         },
         pathKeys,
+      ),
+    );
+  }
+
+  function answerSizeAxisMark(
+    annotationId: string,
+    axis: ConfidenceAxis,
+    valueMeters: number,
+  ) {
+    setUncertaintyDocument((previous) =>
+      setSizeAxisAnswer(
+        {
+          ...previous,
+          source,
+        },
+        annotationId,
+        axis,
+        valueMeters,
       ),
     );
   }
@@ -308,6 +328,7 @@ export function useUncertaintyDocument(source: FuzzyCADUncertaintySource) {
     replaceUncertaintyDocument,
     upsertSizeMark,
     removeSizeMarks,
+    answerSizeAxisMark,
     deleteAnnotation,
     updateAnnotationComment,
     resolveAnnotation,

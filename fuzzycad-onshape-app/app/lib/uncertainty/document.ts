@@ -1,6 +1,7 @@
 import type {
   AxisConfidenceMap,
   AxisDirectionMap,
+  ConfidenceAxis,
   ConfidenceDirection,
   ConfidenceLevel,
   FuzzyConfidenceAnnotation,
@@ -43,11 +44,19 @@ type BaseAnnotationFields = {
   updatedAt: string;
 };
 
-/** "Needs input": a dimension/parameter is open, waiting on someone's value. */
+/**
+ * "Needs input": a dimension/parameter is open, waiting on someone's value.
+ * Confidence + direction flag which axes are in question and how; the
+ * actual answer for each flagged axis (once someone with the relevant
+ * domain knowledge gives it) lives in resolvedAxisValues, the same
+ * "primary is the answer, confidence is secondary color" model Distance
+ * uses.
+ */
 export type SizeUncertaintyAnnotation = BaseAnnotationFields & {
   type: "size";
   confidence: AxisConfidenceMap;
   directions: AxisDirectionMap;
+  resolvedAxisValues: Partial<Record<ConfidenceAxis, number>>;
 };
 
 /** Which of the object's 3 local axes (0=length, 1=width, 2=height) this proposal changes. */
@@ -164,6 +173,7 @@ function createSizeAnnotation(input: {
   pathKeys: string[];
   confidence: AxisConfidenceMap;
   directions: AxisDirectionMap;
+  resolvedAxisValues?: Partial<Record<ConfidenceAxis, number>>;
   comment?: string;
   author?: string;
   assignee?: string;
@@ -190,6 +200,7 @@ function createSizeAnnotation(input: {
     },
     confidence: { ...input.confidence },
     directions: { ...input.directions },
+    resolvedAxisValues: { ...input.resolvedAxisValues },
     comment: input.comment,
     author: input.author,
     assignee: input.assignee,
@@ -222,6 +233,7 @@ function removePathKeysFromAnnotation(
     pathKeys: remainingPathKeys,
     confidence: annotation.confidence,
     directions: annotation.directions,
+    resolvedAxisValues: annotation.resolvedAxisValues,
     comment: annotation.comment,
     author: annotation.author,
     assignee: annotation.assignee,
@@ -266,6 +278,10 @@ export function upsertSizeAnnotation(
     pathKeys,
     confidence: input.confidence,
     directions: input.directions,
+    resolvedAxisValues:
+      existingExactAnnotation?.type === "size"
+        ? existingExactAnnotation.resolvedAxisValues
+        : undefined,
     comment: existingExactAnnotation?.comment,
     author: existingExactAnnotation?.author ?? input.author,
     assignee: existingExactAnnotation?.assignee,
@@ -284,6 +300,38 @@ export function upsertSizeAnnotation(
   return {
     ...document,
     annotations: [...preservedAnnotations, nextAnnotation],
+  };
+}
+
+/**
+ * Someone with the relevant domain knowledge answers one flagged axis with
+ * the actual value it should be — same "answer lives on the mark itself"
+ * model as Distance. Doesn't touch the other axes or resolve the mark.
+ */
+export function setSizeAxisAnswer(
+  document: FuzzyCADUncertaintyDocument,
+  annotationId: string,
+  axis: ConfidenceAxis,
+  valueMeters: number,
+): FuzzyCADUncertaintyDocument {
+  const now = new Date().toISOString();
+
+  return {
+    ...document,
+    annotations: document.annotations.map((annotation) => {
+      if (annotation.id !== annotationId || annotation.type !== "size") {
+        return annotation;
+      }
+
+      return {
+        ...annotation,
+        resolvedAxisValues: {
+          ...annotation.resolvedAxisValues,
+          [axis]: valueMeters,
+        },
+        updatedAt: now,
+      };
+    }),
   };
 }
 
