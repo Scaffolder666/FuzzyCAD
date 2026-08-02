@@ -13,6 +13,7 @@ import DevPanel from "./components/DevPanel";
 import { useAssemblyPlacementTree } from "./hooks/useAssemblyPlacementTree";
 import type {
   AxialStretchObjectSummary,
+  FocusRequest,
   MeshGraphNode,
   MoveDelta,
   RolePreviewPlan,
@@ -120,6 +121,11 @@ export default function FuzzyCADHome() {
     null,
   );
   const [hoveredPathKey, setHoveredPathKey] = useState<string | null>(null);
+  const [focusRequest, setFocusRequest] = useState<FocusRequest | null>(null);
+
+  function focusOnPathKey(pathKey: string) {
+    setFocusRequest({ pathKey, token: Date.now() });
+  }
   const [lassoPathKeys, setLassoPathKeys] = useState<string[]>([]);
 
   const { placements, partTree, resetPlacementTree } = useAssemblyPlacementTree(
@@ -664,6 +670,12 @@ export default function FuzzyCADHome() {
       return;
     }
 
+    // Fly the camera to the annotated object and glow it, regardless of
+    // type, so clicking a card always visibly reacts even when the object
+    // is off-screen or the camera is looking elsewhere.
+    setHighlightedPathKey(annotation.target.referencePathKey);
+    focusOnPathKey(annotation.target.referencePathKey);
+
     if (annotation.type === "size") {
       setActiveTool("height");
       resetSizeOperationState();
@@ -1058,6 +1070,7 @@ if (result.ok && result.state) {
           onMoveDeltaChange={setMoveDelta}
           hoveredPathKey={hoveredPathKey}
           onHoveredPathKeyChange={setHoveredPathKey}
+          focusRequest={focusRequest}
           enableManipulationHandles={
             !heightPreviewOpen &&
             (Boolean(confirmedHeightPlan) ||

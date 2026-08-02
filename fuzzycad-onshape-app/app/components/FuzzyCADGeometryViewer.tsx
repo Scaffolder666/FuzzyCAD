@@ -1,7 +1,7 @@
 "use client";
 
 import { Canvas, type ThreeEvent, useThree } from "@react-three/fiber";
-import { Bounds, Html, OrbitControls, useGLTF } from "@react-three/drei";
+import { Bounds, Html, OrbitControls, useBounds, useGLTF } from "@react-three/drei";
 import RoleBadge, { type RoleBadgeRole } from "./viewer/RoleBadge";
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
@@ -88,6 +88,17 @@ export type MoveRolePlan = {
   followPathKeys: string[];
 };
 
+/**
+ * A request to smoothly fly the camera to frame a specific object — e.g.
+ * when a card is clicked in the marks panel. `token` always changes on a
+ * new request (even re-clicking the same card) so the effect that watches
+ * it re-fires even when `pathKey` is identical to last time.
+ */
+export type FocusRequest = {
+  pathKey: string;
+  token: number;
+};
+
 /** A saved move's delta, structurally the same shape as document.ts's. */
 export type MovePreview = {
   pathKey: string;
@@ -147,6 +158,8 @@ type FuzzyCADGeometryViewerProps = {
   /** Path key currently under the mouse in the 3D view, for linking to the marks panel. */
   hoveredPathKey?: string | null;
   onHoveredPathKeyChange?: (pathKey: string | null) => void;
+  /** Set to fly the camera to frame a specific object (e.g. a clicked card). */
+  focusRequest?: FocusRequest | null;
   onMeshGraph?: (nodes: MeshGraphNode[]) => void;
   onObjectSummaries?: (summaries: AxialStretchObjectSummary[]) => void;
   onSelectedNode?: (node: MeshGraphNode | null) => void;
@@ -746,6 +759,7 @@ function Model({
   onMoveDeltaChange,
   hoveredPathKey,
   onHoveredPathKeyChange,
+  focusRequest,
   enableManipulationHandles = true,
   lassoPolygon,
 
@@ -780,6 +794,7 @@ function Model({
   onMoveDeltaChange?: (delta: MoveDelta) => void;
   hoveredPathKey?: string | null;
   onHoveredPathKeyChange?: (pathKey: string | null) => void;
+  focusRequest?: FocusRequest | null;
   enableManipulationHandles?: boolean;
   lassoPolygon?: ScreenPoint[] | null;
   onMeshGraph?: (nodes: MeshGraphNode[]) => void;
@@ -793,6 +808,7 @@ function Model({
   const gltf = useGLTF(url);
   const graphRef = useRef<MeshGraphNode[]>([]);
   const { camera, gl, invalidate } = useThree();
+  const bounds = useBounds();
 
   const scene = useMemo(() => {
     const cloned = gltf.scene.clone(true);
@@ -1133,6 +1149,27 @@ function Model({
     applyPathHighlight(scene, activeHighlights, hoveredPathKey);
     invalidate();
   }, [scene, highlightedPathKey, selectedPathKeys, hoveredPathKey, invalidate]);
+
+  // Smoothly fly the camera to frame a specific object — e.g. clicking a
+  // card in the marks panel, so the panel visibly "does something" even
+  // when the object is off-screen or the camera is looking elsewhere.
+  useEffect(() => {
+    if (!focusRequest) {
+      return;
+    }
+
+    const target = findObjectsByPathKeys(scene, [focusRequest.pathKey])[0];
+
+    if (!target) {
+      return;
+    }
+
+    bounds.refresh(target).clip().fit();
+    invalidate();
+    // `focusRequest` is a fresh object on every request (see FocusRequest's
+    // `token`), so this re-triggers even when the same card is clicked twice
+    // in a row, not just when pathKey changes.
+  }, [focusRequest, scene, bounds, invalidate]);
 
   // Every open proposal's target object gets the same hatched-marker
   // treatment Size marks get (see applyFuzzyConfidence), so it reads as
@@ -1680,6 +1717,7 @@ export default function FuzzyCADGeometryViewer({
   onMoveDeltaChange,
   hoveredPathKey,
   onHoveredPathKeyChange,
+  focusRequest,
   enableManipulationHandles = true,
   onMeshGraph,
   onObjectSummaries,
@@ -1752,6 +1790,7 @@ export default function FuzzyCADGeometryViewer({
                   onMoveDeltaChange={onMoveDeltaChange}
                   hoveredPathKey={hoveredPathKey}
                   onHoveredPathKeyChange={onHoveredPathKeyChange}
+                  focusRequest={focusRequest}
                   enableManipulationHandles={enableManipulationHandles}
                   lassoPolygon={lassoPolygon}
                   onMeshGraph={onMeshGraph}
