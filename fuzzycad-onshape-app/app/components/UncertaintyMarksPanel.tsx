@@ -47,6 +47,7 @@ type UncertaintyMarksPanelProps = {
   ) => void;
   onSetDistanceMoveMode: (annotationId: string, moveMode: DistanceMoveMode) => void;
   onSaveToOnshape: () => void;
+  savingToOnshape?: boolean;
 };
 
 const FILTERS: { key: FilterKey; label: string }[] = [
@@ -947,6 +948,7 @@ export default function UncertaintyMarksPanel({
   onSetDistanceConfidence,
   onSetDistanceMoveMode,
   onSaveToOnshape,
+  savingToOnshape = false,
 }: UncertaintyMarksPanelProps) {
   const [activeFilter, setActiveFilter] = useState<FilterKey | null>(null);
   const [resolvedOpen, setResolvedOpen] = useState(false);
@@ -1010,8 +1012,9 @@ export default function UncertaintyMarksPanel({
             type="button"
             className={styles.syncButton}
             onClick={onSaveToOnshape}
+            disabled={savingToOnshape}
           >
-            Save to Onshape
+            {savingToOnshape ? "Saving..." : "Save to Onshape"}
           </button>
         </div>
 

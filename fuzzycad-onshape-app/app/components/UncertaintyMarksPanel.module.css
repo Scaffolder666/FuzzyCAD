@@ -94,6 +94,11 @@
   font-weight: 900;
 }
 
+.syncButton:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
 .emptyState {
   padding: 14px 10px;
   border-radius: 14px;

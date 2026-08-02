@@ -249,6 +249,14 @@ export default function FuzzyCADHome() {
     string | null
   >(null);
 
+  // Guards against overlapping "Save to Onshape" requests: each save reads
+  // the document's element list, then creates-or-updates a blob element by
+  // name — two requests in flight at once can both see "no existing
+  // element yet" and both create one, which Onshape resolves by silently
+  // renaming the second to "... (2)" instead of erroring. A stacked click
+  // while a save is already running must not fire a second request.
+  const [savingToOnshape, setSavingToOnshape] = useState(false);
+
   const documentId = params.get("documentId");
   const workspaceId = params.get("workspaceId");
   const elementId = params.get("elementId");
@@ -1126,36 +1134,46 @@ async function saveProjectStateToOnshape() {
     return;
   }
 
-  const projectState = buildFuzzyCADProjectState({
-    source: currentUncertaintySource,
-    annotations: uncertaintyDocumentWithCurrentSource.annotations,
-    objectSummaries,
-  });
+  if (savingToOnshape) {
+    return;
+  }
 
-  const annotatedSelectionStl =
-    gltfUrl && placements
-      ? await exportAnnotatedSelectionStl({
-          gltfUrl,
-          placements,
-          annotations: uncertaintyDocumentWithCurrentSource.annotations,
-        })
-      : null;
+  setSavingToOnshape(true);
 
-  console.log("Annotated selection STL:", annotatedSelectionStl);
+  try {
+    const projectState = buildFuzzyCADProjectState({
+      source: currentUncertaintySource,
+      annotations: uncertaintyDocumentWithCurrentSource.annotations,
+      objectSummaries,
+    });
 
-  const result = await saveFuzzycadProject(
-    {
-      documentId,
-      workspaceId,
-      server,
-    },
-    projectState,
-    {
-      annotatedSelectionStl,
-    },
-  );
+    const annotatedSelectionStl =
+      gltfUrl && placements
+        ? await exportAnnotatedSelectionStl({
+            gltfUrl,
+            placements,
+            annotations: uncertaintyDocumentWithCurrentSource.annotations,
+          })
+        : null;
 
-  console.log("Saved FuzzyCAD project:", result);
+    console.log("Annotated selection STL:", annotatedSelectionStl);
+
+    const result = await saveFuzzycadProject(
+      {
+        documentId,
+        workspaceId,
+        server,
+      },
+      projectState,
+      {
+        annotatedSelectionStl,
+      },
+    );
+
+    console.log("Saved FuzzyCAD project:", result);
+  } finally {
+    setSavingToOnshape(false);
+  }
 }
 
 
@@ -1609,6 +1627,7 @@ if (result.ok && result.state) {
           onSetDistanceConfidence={setDistanceConfidenceMark}
           onSetDistanceMoveMode={setDistanceMoveModeMark}
           onSaveToOnshape={() => void saveProjectStateToOnshape()}
+          savingToOnshape={savingToOnshape}
         />
 
         {heightCandidateOpen ? (

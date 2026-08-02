@@ -154,7 +154,7 @@ const toolGroups: ToolGroup[] = [
     tools: [
       {
         id: "extend",
-        label: "Propose",
+        label: "Extend",
         title: "Drag to a specific length and save it as a proposed change",
         icon: <ExtendIcon />,
       },
