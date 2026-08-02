@@ -1555,10 +1555,11 @@ function buildAnnotatedSelectionManifest(projectState: UnknownRecord) {
 
   for (const annotation of annotations) {
     if (!isRecord(annotation)) continue;
-    if (annotation.type !== "size") continue;
 
     const annotationId =
       typeof annotation.id === "string" ? annotation.id : "unknown-annotation";
+    const annotationType =
+      typeof annotation.type === "string" ? annotation.type : "unknown";
 
     const target = isRecord(annotation.target) ? annotation.target : null;
     const pathKeys = Array.isArray(target?.pathKeys)
@@ -1571,7 +1572,7 @@ function buildAnnotatedSelectionManifest(projectState: UnknownRecord) {
       includedObjects.push({
         annotationId,
         pathKey,
-        type: "size",
+        type: annotationType,
       });
     }
   }

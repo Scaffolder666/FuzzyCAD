@@ -12,8 +12,6 @@ function getAnnotatedPathKeys(annotations: FuzzyCADUncertaintyAnnotation[]) {
   const pathKeys = new Set<string>();
 
   for (const annotation of annotations) {
-    if (annotation.type !== "size") continue;
-
     for (const pathKey of annotation.target.pathKeys) {
       pathKeys.add(pathKey);
     }
