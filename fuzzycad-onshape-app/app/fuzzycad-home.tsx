@@ -271,6 +271,7 @@ export default function FuzzyCADHome() {
     upsertScaleMark,
     upsertDistanceMark,
     setDistanceConfidenceMark,
+    setDistanceMoveModeMark,
     answerDistanceMark,
   } = useUncertaintyDocument(currentUncertaintySource);
 
@@ -1199,6 +1200,9 @@ if (result.ok && result.state) {
           scaleFactor={scaleFactor}
           onScaleFactorChange={setScaleFactor}
           distancePreviews={distancePreviews}
+          onAnswerDistance={(annotationId, distanceMm) =>
+            answerDistanceMark(annotationId, distanceMm / 1000)
+          }
           hoveredPathKey={hoveredPathKey}
           onHoveredPathKeyChange={setHoveredPathKey}
           focusRequest={focusRequest}
@@ -1388,6 +1392,7 @@ if (result.ok && result.state) {
             answerDistanceMark(annotationId, distanceMm / 1000)
           }
           onSetDistanceConfidence={setDistanceConfidenceMark}
+          onSetDistanceMoveMode={setDistanceMoveModeMark}
           onSaveToOnshape={() => void saveProjectStateToOnshape()}
         />
 

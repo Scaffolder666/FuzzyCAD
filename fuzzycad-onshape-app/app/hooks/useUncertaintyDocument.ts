@@ -8,6 +8,7 @@ import {
   selectAlternativeOption,
   setDistanceAnswer,
   setDistanceConfidence,
+  setDistanceMoveMode,
   toDistancePreviews,
   toFuzzyConfidenceAnnotations,
   toMovePreviews,
@@ -30,6 +31,7 @@ import type {
   ConfidenceDirection,
   ConfidenceLevel,
 } from "../lib/uncertainty/types";
+import type { DistanceMoveMode } from "../lib/uncertainty/document";
 
 export function useUncertaintyDocument(source: FuzzyCADUncertaintySource) {
   const [uncertaintyDocument, setUncertaintyDocument] =
@@ -252,6 +254,19 @@ export function useUncertaintyDocument(source: FuzzyCADUncertaintySource) {
     );
   }
 
+  function setDistanceMoveModeMark(annotationId: string, moveMode: DistanceMoveMode) {
+    setUncertaintyDocument((previous) =>
+      setDistanceMoveMode(
+        {
+          ...previous,
+          source,
+        },
+        annotationId,
+        moveMode,
+      ),
+    );
+  }
+
   function answerDistanceMark(annotationId: string, resolvedDistanceMeters: number) {
     setUncertaintyDocument((previous) =>
       setDistanceAnswer(
@@ -303,6 +318,7 @@ export function useUncertaintyDocument(source: FuzzyCADUncertaintySource) {
     upsertScaleMark,
     upsertDistanceMark,
     setDistanceConfidenceMark,
+    setDistanceMoveModeMark,
     answerDistanceMark,
   };
 }

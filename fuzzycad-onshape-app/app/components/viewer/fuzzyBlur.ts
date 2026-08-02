@@ -1491,6 +1491,17 @@ export type ScaleMarkerTarget = {
 };
 
 /**
+ * Distance targets carry their own color (unlike the other marker types)
+ * because it depends on external state the caller already tracks — sky
+ * blue while the flag is still an open question, teal once someone has
+ * answered it — so the marker on the object always matches its ruler.
+ */
+export type DistanceMarkerTarget = {
+  pathKey: string;
+  colorHex: number;
+};
+
+/**
  * A clean, solid-colored edge wireframe over the real object — like
  * SketchUp's blueprint-style preview line work — instead of the hatched
  * shader + range envelope Size marks use. A Proposal or Move already has a
@@ -1560,6 +1571,7 @@ export function applyFuzzyConfidence(
   proposalTargets?: ProposalMarkerTarget[],
   moveTargets?: MoveMarkerTarget[],
   scaleTargets?: ScaleMarkerTarget[],
+  distanceTargets?: DistanceMarkerTarget[],
 ) {
   scene.updateMatrixWorld(true);
 
@@ -1597,11 +1609,24 @@ export function applyFuzzyConfidence(
       .map((target) => [target.pathKey, target]),
   );
 
+  const distanceByPathKey = new Map(
+    (distanceTargets ?? [])
+      .filter(
+        (target) =>
+          !annotationByPathKey.has(target.pathKey) &&
+          !proposalByPathKey.has(target.pathKey) &&
+          !moveByPathKey.has(target.pathKey) &&
+          !scaleByPathKey.has(target.pathKey),
+      )
+      .map((target) => [target.pathKey, target]),
+  );
+
   if (
     annotationByPathKey.size === 0 &&
     proposalByPathKey.size === 0 &&
     moveByPathKey.size === 0 &&
-    scaleByPathKey.size === 0
+    scaleByPathKey.size === 0 &&
+    distanceByPathKey.size === 0
   ) {
     return;
   }
@@ -1611,6 +1636,7 @@ export function applyFuzzyConfidence(
     ...proposalByPathKey.keys(),
     ...moveByPathKey.keys(),
     ...scaleByPathKey.keys(),
+    ...distanceByPathKey.keys(),
   ]);
 
   for (const object of targetObjects) {
@@ -1682,13 +1708,27 @@ export function applyFuzzyConfidence(
 
     const scaleTarget = scaleByPathKey.get(pathKey);
 
-    if (!scaleTarget) {
+    if (scaleTarget) {
+      applyTintedMaterials(object, SCALE_MARKER_COLOR, 0.16);
+
+      const overlay = createWireframeMarkerOverlay(object, SCALE_MARKER_COLOR);
+
+      if (overlay) {
+        object.add(overlay);
+      }
+
       continue;
     }
 
-    applyTintedMaterials(object, SCALE_MARKER_COLOR, 0.16);
+    const distanceTarget = distanceByPathKey.get(pathKey);
 
-    const overlay = createWireframeMarkerOverlay(object, SCALE_MARKER_COLOR);
+    if (!distanceTarget) {
+      continue;
+    }
+
+    applyTintedMaterials(object, distanceTarget.colorHex, 0.16);
+
+    const overlay = createWireframeMarkerOverlay(object, distanceTarget.colorHex);
 
     if (overlay) {
       object.add(overlay);

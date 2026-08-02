@@ -121,6 +121,9 @@ export type ScaleUncertaintyAnnotation = BaseAnnotationFields & {
  * are optional secondary color, addable after the fact, not required to
  * create the flag.
  */
+/** Which side(s) the answered-distance ghost preview moves: the first object (referencePathKey), the second (otherPathKey), or both meeting in the middle. */
+export type DistanceMoveMode = "moveA" | "moveB" | "both";
+
 export type DistanceUncertaintyAnnotation = BaseAnnotationFields & {
   type: "distance";
   otherPathKey: string;
@@ -128,6 +131,7 @@ export type DistanceUncertaintyAnnotation = BaseAnnotationFields & {
   confidence: ConfidenceLevel | null;
   direction: ConfidenceDirection | null;
   resolvedDistanceMeters: number | null;
+  moveMode: DistanceMoveMode;
 };
 
 export type FuzzyCADUncertaintyAnnotation =
@@ -775,6 +779,7 @@ function createDistanceAnnotation(input: {
   confidence?: ConfidenceLevel | null;
   direction?: ConfidenceDirection | null;
   resolvedDistanceMeters?: number | null;
+  moveMode?: DistanceMoveMode;
   comment?: string;
   author?: string;
   assignee?: string;
@@ -801,6 +806,7 @@ function createDistanceAnnotation(input: {
     confidence: input.confidence ?? null,
     direction: input.direction ?? null,
     resolvedDistanceMeters: input.resolvedDistanceMeters ?? null,
+    moveMode: input.moveMode ?? "moveB",
     comment: input.comment,
     author: input.author,
     assignee: input.assignee,
@@ -835,6 +841,7 @@ export function upsertDistance(
     confidence: existingDistance?.confidence,
     direction: existingDistance?.direction,
     resolvedDistanceMeters: existingDistance?.resolvedDistanceMeters,
+    moveMode: existingDistance?.moveMode,
     comment: existing?.comment,
     author: existing?.author ?? input.author,
     assignee: existing?.assignee,
@@ -884,6 +891,30 @@ export function setDistanceConfidence(
   };
 }
 
+/** Which object(s) the answered-distance ghost preview should move. */
+export function setDistanceMoveMode(
+  document: FuzzyCADUncertaintyDocument,
+  annotationId: string,
+  moveMode: DistanceMoveMode,
+): FuzzyCADUncertaintyDocument {
+  const now = new Date().toISOString();
+
+  return {
+    ...document,
+    annotations: document.annotations.map((annotation) => {
+      if (annotation.id !== annotationId || annotation.type !== "distance") {
+        return annotation;
+      }
+
+      return {
+        ...annotation,
+        moveMode,
+        updatedAt: now,
+      };
+    }),
+  };
+}
+
 /**
  * Someone with the relevant domain knowledge answers a distance flag with
  * the actual value it should be. This records the answer but does *not*
@@ -915,12 +946,14 @@ export function setDistanceAnswer(
 }
 
 export type DistancePreview = {
+  id: string;
   pathKeyA: string;
   pathKeyB: string;
   confidence: ConfidenceLevel | null;
   direction: ConfidenceDirection | null;
   measuredDistanceMeters: number;
   resolvedDistanceMeters: number | null;
+  moveMode: DistanceMoveMode;
 };
 
 /** Open distance flags, for the 3D viewer to render as a persistent ruler. */
@@ -933,11 +966,13 @@ export function toDistancePreviews(
         annotation.type === "distance" && annotation.status === "open",
     )
     .map((annotation) => ({
+      id: annotation.id,
       pathKeyA: annotation.target.referencePathKey,
       pathKeyB: annotation.otherPathKey,
       confidence: annotation.confidence,
       direction: annotation.direction,
       measuredDistanceMeters: annotation.measuredDistanceMeters,
       resolvedDistanceMeters: annotation.resolvedDistanceMeters,
+      moveMode: annotation.moveMode,
     }));
 }

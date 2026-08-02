@@ -3,6 +3,7 @@
 import { useState } from "react";
 import type {
   AlternativeUncertaintyAnnotation,
+  DistanceMoveMode,
   DistanceUncertaintyAnnotation,
   FuzzyCADUncertaintyAnnotation,
   FuzzyCADUncertaintyDocument,
@@ -38,6 +39,7 @@ type UncertaintyMarksPanelProps = {
     confidence: ConfidenceLevel,
     direction: ConfidenceDirection,
   ) => void;
+  onSetDistanceMoveMode: (annotationId: string, moveMode: DistanceMoveMode) => void;
   onSaveToOnshape: () => void;
 };
 
@@ -200,6 +202,12 @@ const DISTANCE_DIRECTION_LABEL: Record<
   both: "not sure which way",
 };
 
+const MOVE_MODE_LABEL: Record<DistanceMoveMode, string> = {
+  moveA: "Move A",
+  moveB: "Move B",
+  both: "Move both",
+};
+
 function DistanceCard({
   annotation,
   selected,
@@ -209,6 +217,7 @@ function DistanceCard({
   onCommentChange,
   onAnswer,
   onSetConfidence,
+  onSetMoveMode,
   onResolve,
 }: {
   annotation: DistanceUncertaintyAnnotation;
@@ -219,6 +228,7 @@ function DistanceCard({
   onCommentChange: (comment: string) => void;
   onAnswer: (distanceMm: number) => void;
   onSetConfidence: (confidence: ConfidenceLevel, direction: NonNullable<DistanceUncertaintyAnnotation["direction"]>) => void;
+  onSetMoveMode: (moveMode: DistanceMoveMode) => void;
   onResolve: () => void;
 }) {
   const [answerDraft, setAnswerDraft] = useState("");
@@ -264,6 +274,26 @@ function DistanceCard({
 
       <div className={styles.valueLine}>
         <span>currently measures {measuredMm.toFixed(1)} mm</span>
+      </div>
+
+      <div
+        className={styles.confidenceInlinePanel}
+        onClick={(event) => event.stopPropagation()}
+      >
+        {(["moveA", "moveB", "both"] as const).map((mode) => (
+          <button
+            key={mode}
+            type="button"
+            className={`${styles.confidenceInlineButton} ${
+              annotation.moveMode === mode
+                ? styles.confidenceInlineButtonActive
+                : ""
+            }`}
+            onClick={() => onSetMoveMode(mode)}
+          >
+            {MOVE_MODE_LABEL[mode]}
+          </button>
+        ))}
       </div>
 
       {confidenceOpen ? (
@@ -741,6 +771,7 @@ export default function UncertaintyMarksPanel({
   onSelectAlternativeOption,
   onAnswerDistance,
   onSetDistanceConfidence,
+  onSetDistanceMoveMode,
   onSaveToOnshape,
 }: UncertaintyMarksPanelProps) {
   const [activeFilter, setActiveFilter] = useState<FilterKey | null>(null);
@@ -911,6 +942,9 @@ export default function UncertaintyMarksPanel({
                   }
                   onSetConfidence={(confidence, direction) =>
                     onSetDistanceConfidence(annotation.id, confidence, direction)
+                  }
+                  onSetMoveMode={(moveMode) =>
+                    onSetDistanceMoveMode(annotation.id, moveMode)
                   }
                   onResolve={() => onResolveAnnotation(annotation.id)}
                 />

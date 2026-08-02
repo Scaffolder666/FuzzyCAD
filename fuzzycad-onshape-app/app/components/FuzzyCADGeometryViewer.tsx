@@ -29,6 +29,7 @@ import type {
 import {
   applyFuzzyConfidence,
   type ConfidenceAxisFrame,
+  type DistanceMarkerTarget,
   type FuzzyConfidenceAnnotation,
   type ScaleMarkerTarget,
 } from "./viewer/fuzzyBlur";
@@ -135,13 +136,18 @@ export type ScalePreview = {
 };
 
 /** A saved distance flag, structurally the same shape as document.ts's. */
+/** Which side(s) an answered distance flag's ghost preview moves — structurally the same as document.ts's. */
+export type DistanceMoveMode = "moveA" | "moveB" | "both";
+
 export type DistancePreview = {
+  id: string;
   pathKeyA: string;
   pathKeyB: string;
   confidence: ConfidenceLevel | null;
   direction: ConfidenceDirection | null;
   measuredDistanceMeters: number;
   resolvedDistanceMeters: number | null;
+  moveMode: DistanceMoveMode;
 };
 
 export type FuzzyConfidenceEditor = {
@@ -201,6 +207,8 @@ type FuzzyCADGeometryViewerProps = {
   onScaleFactorChange?: (factor: number) => void;
   /** Saved distance flags, shown as persistent rulers. */
   distancePreviews?: DistancePreview[];
+  /** Answer an open distance flag directly from its 3D ruler. */
+  onAnswerDistance?: (annotationId: string, distanceMm: number) => void;
   /** Path key currently under the mouse in the 3D view, for linking to the marks panel. */
   hoveredPathKey?: string | null;
   onHoveredPathKeyChange?: (pathKey: string | null) => void;
@@ -346,10 +354,12 @@ const MOVE_ACCENT_COLOR_MUTED = "#c4b5fd";
 const SCALE_ACCENT_COLOR = "#0d9488";
 const SCALE_ACCENT_COLOR_MUTED = "#99f6e4";
 const DISTANCE_ACCENT_COLOR = "#0ea5e9";
+const DISTANCE_ACCENT_COLOR_HEX = 0x0ea5e9;
 // Once someone answers a distance flag, its ruler switches to this color —
 // a settled fact instead of an open question — matching the teal used for
 // "accepted"/"new value" elsewhere (Propose/Move/Scale cards' valueNew).
 const DISTANCE_ANSWERED_COLOR = "#0f766e";
+const DISTANCE_ANSWERED_COLOR_HEX = 0x0f766e;
 
 // Thicker line = a wider "I'm not sure" range, not a value change — so a
 // low-confidence flag visually reads as less certain, same idea as Size's
@@ -863,6 +873,7 @@ function Model({
   scaleFactor = 1,
   onScaleFactorChange,
   distancePreviews,
+  onAnswerDistance,
   hoveredPathKey,
   onHoveredPathKeyChange,
   focusRequest,
@@ -904,6 +915,7 @@ function Model({
   scaleFactor?: number;
   onScaleFactorChange?: (factor: number) => void;
   distancePreviews?: DistancePreview[];
+  onAnswerDistance?: (annotationId: string, distanceMm: number) => void;
   hoveredPathKey?: string | null;
   onHoveredPathKeyChange?: (pathKey: string | null) => void;
   focusRequest?: FocusRequest | null;
@@ -1571,6 +1583,7 @@ function Model({
       return [
         {
           key: `${preview.pathKeyA}:${preview.pathKeyB}`,
+          id: preview.id,
           from: new THREE.Vector3(...pointOnA),
           to: new THREE.Vector3(...pointOnB),
           distanceMeters,
@@ -1623,22 +1636,38 @@ function Model({
         .sub(new THREE.Vector3(...pointOnA))
         .divideScalar(distanceMeters);
       const moveMeters = preview.resolvedDistanceMeters - distanceMeters;
-      const deltaWorld = axis.multiplyScalar(moveMeters);
 
-      if (deltaWorld.lengthSq() < 1e-12) {
+      if (Math.abs(moveMeters) < 1e-6) {
         return [];
       }
 
+      const centerA = new THREE.Vector3(...summaryA.aabbCenterWorld);
       const centerB = new THREE.Vector3(...summaryB.aabbCenterWorld);
+      // B's full move, along the A→B axis; A's is always the exact
+      // opposite (moving A the other way changes the gap the same amount).
+      const deltaBFull = axis.multiplyScalar(moveMeters);
 
-      return [
-        {
-          pathKey: preview.pathKeyB,
-          deltaWorld,
-          fromCenter: centerB,
-          toCenter: centerB.clone().add(deltaWorld),
-        },
-      ];
+      const makeEntry = (pathKey: string, center: THREE.Vector3, delta: THREE.Vector3) => ({
+        pathKey,
+        deltaWorld: delta,
+        fromCenter: center,
+        toCenter: center.clone().add(delta),
+      });
+
+      if (preview.moveMode === "moveA") {
+        return [makeEntry(preview.pathKeyA, centerA, deltaBFull.clone().negate())];
+      }
+
+      if (preview.moveMode === "both") {
+        const half = deltaBFull.clone().multiplyScalar(0.5);
+
+        return [
+          makeEntry(preview.pathKeyB, centerB, half),
+          makeEntry(preview.pathKeyA, centerA, half.clone().negate()),
+        ];
+      }
+
+      return [makeEntry(preview.pathKeyB, centerB, deltaBFull)];
     });
   }, [distancePreviews, objectSummaries]);
 
@@ -1927,6 +1956,25 @@ function Model({
     [scalePreviews],
   );
 
+  // Both objects in every open distance flag get marked directly, so the
+  // flag is visible even when the connecting ruler line is hidden behind
+  // other geometry — color reflects whether it's still open or answered.
+  const distanceMarkerTargets = useMemo<DistanceMarkerTarget[]>(
+    () =>
+      (distancePreviews ?? []).flatMap((preview) => {
+        const colorHex =
+          preview.resolvedDistanceMeters !== null
+            ? DISTANCE_ANSWERED_COLOR_HEX
+            : DISTANCE_ACCENT_COLOR_HEX;
+
+        return [
+          { pathKey: preview.pathKeyA, colorHex },
+          { pathKey: preview.pathKeyB, colorHex },
+        ];
+      }),
+    [distancePreviews],
+  );
+
   useEffect(() => {
     applyFuzzyConfidence(
       scene,
@@ -1935,6 +1983,7 @@ function Model({
       proposalMarkerTargets,
       moveMarkerTargets,
       scaleMarkerTargets,
+      distanceMarkerTargets,
     );
     invalidate();
 
@@ -1949,6 +1998,7 @@ function Model({
     proposalMarkerTargets,
     moveMarkerTargets,
     scaleMarkerTargets,
+    distanceMarkerTargets,
     invalidate,
   ]);
 
@@ -2459,6 +2509,11 @@ function Model({
           resolvedDistanceMeters={ruler.resolvedDistanceMeters}
           color={ruler.color}
           lineWidth={ruler.lineWidth}
+          onAnswer={
+            onAnswerDistance
+              ? (mm) => onAnswerDistance(ruler.id, mm)
+              : undefined
+          }
         />
       ))}
 
@@ -2515,6 +2570,7 @@ export default function FuzzyCADGeometryViewer({
   scaleFactor,
   onScaleFactorChange,
   distancePreviews,
+  onAnswerDistance,
   hoveredPathKey,
   onHoveredPathKeyChange,
   focusRequest,
@@ -2613,6 +2669,7 @@ export default function FuzzyCADGeometryViewer({
                   scaleFactor={scaleFactor}
                   onScaleFactorChange={onScaleFactorChange}
                   distancePreviews={distancePreviews}
+                  onAnswerDistance={onAnswerDistance}
                   hoveredPathKey={hoveredPathKey}
                   onHoveredPathKeyChange={onHoveredPathKeyChange}
                   focusRequest={focusRequest}
