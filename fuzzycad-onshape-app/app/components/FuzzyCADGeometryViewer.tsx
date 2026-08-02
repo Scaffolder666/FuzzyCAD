@@ -1,6 +1,6 @@
 "use client";
 
-import { Canvas, type ThreeEvent, useThree } from "@react-three/fiber";
+import { Canvas, type ThreeEvent, useFrame, useThree } from "@react-three/fiber";
 import { Bounds, Html, OrbitControls, useBounds, useGLTF } from "@react-three/drei";
 import RoleBadge, { type RoleBadgeRole } from "./viewer/RoleBadge";
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
@@ -271,6 +271,10 @@ function getBadgePosition(
 const PROPOSAL_ACCENT_COLOR_MUTED = "#fdba74";
 const MOVE_ACCENT_COLOR = "#7c3aed";
 const MOVE_ACCENT_COLOR_MUTED = "#c4b5fd";
+
+// How long one full there-and-back cycle of the saved-move loop animation
+// takes, in seconds.
+const MOVE_LOOP_PERIOD_SECONDS = 2.6;
 
 const CONFIDENCE_ORDER: ConfidenceLevel[] = ["high", "medium", "low"];
 
@@ -1023,8 +1027,15 @@ function Model({
     [movePreviews, activeMovePathKey],
   );
 
+  // Saved (non-active) moves loop back and forth between their original spot
+  // and the proposed one, so "this was moved" reads at a glance without
+  // needing to hover or click anything.
+  const persistentMoveLoopRef = useRef<
+    { session: MoveTranslatePreviewSession; deltaWorld: THREE.Vector3 }[]
+  >([]);
+
   useEffect(() => {
-    const sessions = persistentMovePreviews
+    const entries = persistentMovePreviews
       .map((preview) => {
         const session = createMoveTranslatePreviewSession(scene, [
           preview.pathKey,
@@ -1035,32 +1046,59 @@ function Model({
           return null;
         }
 
-        updateMoveTranslatePreviewSession(
-          session,
-          new THREE.Vector3(...preview.deltaWorld),
-        );
         scene.add(session.group);
 
-        return session;
+        return {
+          session,
+          deltaWorld: new THREE.Vector3(...preview.deltaWorld),
+        };
       })
       .filter(
-        (session): session is MoveTranslatePreviewSession => session !== null,
+        (
+          entry,
+        ): entry is {
+          session: MoveTranslatePreviewSession;
+          deltaWorld: THREE.Vector3;
+        } => entry !== null,
       );
 
-    if (sessions.length === 0) {
+    persistentMoveLoopRef.current = entries;
+
+    if (entries.length === 0) {
       return;
     }
 
     invalidate();
 
     return () => {
-      for (const session of sessions) {
-        disposeMoveTranslatePreviewSession(session);
+      persistentMoveLoopRef.current = [];
+
+      for (const entry of entries) {
+        disposeMoveTranslatePreviewSession(entry.session);
       }
 
       invalidate();
     };
   }, [scene, persistentMovePreviews, invalidate]);
+
+  useFrame(({ clock }) => {
+    const entries = persistentMoveLoopRef.current;
+
+    if (entries.length === 0) {
+      return;
+    }
+
+    const phase =
+      (clock.elapsedTime / MOVE_LOOP_PERIOD_SECONDS) * Math.PI * 2;
+    const t = (Math.sin(phase) + 1) / 2;
+
+    for (const entry of entries) {
+      updateMoveTranslatePreviewSession(
+        entry.session,
+        entry.deltaWorld.clone().multiplyScalar(t),
+      );
+    }
+  });
 
   // Dimension-ruler for every saved-but-not-actively-edited move, from the
   // target's original center to where it would end up, so "moved this far"
