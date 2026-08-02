@@ -2951,16 +2951,12 @@ function Model({
         moveConstraintNormal ? (
           <MovePlaneHandle
             centerWorld={new THREE.Vector3(...activeMoveSummary.aabbCenterWorld)}
-            armLength={Math.max(
-              Math.max(...activeMoveSummary.aabbSizeWorld) * 0.9,
-              1e-4,
-            )}
-            normalWorld={new THREE.Vector3(...moveConstraintNormal)}
             constraintMesh={moveConstraintMesh}
             constraintStandoff={moveConstraintStandoff}
             deltaWorld={moveDelta}
             onDeltaChange={(delta) => onMoveDeltaChange?.(delta)}
             onDragStateChange={handleDragStateChange}
+            color={MOVE_ACCENT_COLOR}
           />
         ) : (
           <MoveTriadHandle
