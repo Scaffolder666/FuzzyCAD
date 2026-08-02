@@ -244,6 +244,9 @@ const MOVE_MARKER_COLOR = 0x7c3aed;
 /** Marker color for scale-target objects — distinct from Proposal/Move so a resize doesn't read as either. */
 const SCALE_MARKER_COLOR = 0x0d9488;
 
+/** Marker color for rotate-target objects (both the rotated part and its axis anchor) — distinct from every other tool's color. */
+const ROTATE_MARKER_COLOR = 0x4f46e5;
+
 export type MoveMarkerTarget = {
   pathKey: string;
   deltaWorld: [number, number, number];
@@ -263,6 +266,11 @@ export type ScaleMarkerTarget = {
 export type DistanceMarkerTarget = {
   pathKey: string;
   colorHex: number;
+};
+
+/** Marks both the rotated object and its axis anchor, so the pivot reads as "part of this flag" too. */
+export type RotateMarkerTarget = {
+  pathKey: string;
 };
 
 /**
@@ -333,6 +341,7 @@ export function applyFuzzyConfidence(
   moveTargets?: MoveMarkerTarget[],
   scaleTargets?: ScaleMarkerTarget[],
   distanceTargets?: DistanceMarkerTarget[],
+  rotateTargets?: RotateMarkerTarget[],
 ) {
   scene.updateMatrixWorld(true);
 
@@ -382,12 +391,26 @@ export function applyFuzzyConfidence(
       .map((target) => [target.pathKey, target]),
   );
 
+  const rotateByPathKey = new Map(
+    (rotateTargets ?? [])
+      .filter(
+        (target) =>
+          !annotationByPathKey.has(target.pathKey) &&
+          !proposalByPathKey.has(target.pathKey) &&
+          !moveByPathKey.has(target.pathKey) &&
+          !scaleByPathKey.has(target.pathKey) &&
+          !distanceByPathKey.has(target.pathKey),
+      )
+      .map((target) => [target.pathKey, target]),
+  );
+
   if (
     annotationByPathKey.size === 0 &&
     proposalByPathKey.size === 0 &&
     moveByPathKey.size === 0 &&
     scaleByPathKey.size === 0 &&
-    distanceByPathKey.size === 0
+    distanceByPathKey.size === 0 &&
+    rotateByPathKey.size === 0
   ) {
     return;
   }
@@ -398,6 +421,7 @@ export function applyFuzzyConfidence(
     ...moveByPathKey.keys(),
     ...scaleByPathKey.keys(),
     ...distanceByPathKey.keys(),
+    ...rotateByPathKey.keys(),
   ]);
 
   for (const object of targetObjects) {
@@ -469,13 +493,27 @@ export function applyFuzzyConfidence(
 
     const distanceTarget = distanceByPathKey.get(pathKey);
 
-    if (!distanceTarget) {
+    if (distanceTarget) {
+      applyTintedMaterials(object, distanceTarget.colorHex, 0.16);
+
+      const overlay = createWireframeMarkerOverlay(object, distanceTarget.colorHex);
+
+      if (overlay) {
+        object.add(overlay);
+      }
+
       continue;
     }
 
-    applyTintedMaterials(object, distanceTarget.colorHex, 0.16);
+    const rotateTarget = rotateByPathKey.get(pathKey);
 
-    const overlay = createWireframeMarkerOverlay(object, distanceTarget.colorHex);
+    if (!rotateTarget) {
+      continue;
+    }
+
+    applyTintedMaterials(object, ROTATE_MARKER_COLOR, 0.16);
+
+    const overlay = createWireframeMarkerOverlay(object, ROTATE_MARKER_COLOR);
 
     if (overlay) {
       object.add(overlay);

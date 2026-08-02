@@ -9,6 +9,7 @@ import type {
   FuzzyCADUncertaintyDocument,
   MoveUncertaintyAnnotation,
   ProposalUncertaintyAnnotation,
+  RotateUncertaintyAnnotation,
   ScaleUncertaintyAnnotation,
   SizeUncertaintyAnnotation,
 } from "../lib/uncertainty/document";
@@ -89,13 +90,14 @@ function matchesFilter(
   filter: FilterKey,
 ) {
   if (filter === "proposal") {
-    // Move and Scale are both kinds of proposed change (a position or a
-    // size instead of one dimension) — they share the "Proposed" filter
-    // rather than getting their own top-level tab.
+    // Move, Scale, and Rotate are all kinds of proposed change (a position,
+    // a size, or an orientation instead of one dimension) — they share the
+    // "Proposed" filter rather than getting their own top-level tab.
     return (
       annotation.type === "proposal" ||
       annotation.type === "move" ||
-      annotation.type === "scale"
+      annotation.type === "scale" ||
+      annotation.type === "rotate"
     );
   }
 
@@ -767,6 +769,87 @@ function ScaleCard({
   );
 }
 
+function RotateCard({
+  annotation,
+  selected,
+  hovered,
+  onSelect,
+  onDelete,
+  onCommentChange,
+  onResolve,
+}: {
+  annotation: RotateUncertaintyAnnotation;
+  selected: boolean;
+  hovered: boolean;
+  onSelect: () => void;
+  onDelete: () => void;
+  onCommentChange: (comment: string) => void;
+  onResolve: () => void;
+}) {
+  return (
+    <article
+      className={`${styles.card} ${selected ? styles.cardSelected : ""} ${
+        hovered ? styles.cardHovered : ""
+      }`}
+      onClick={onSelect}
+    >
+      <div className={styles.cardHeader}>
+        <span className={`${styles.kindPill} ${styles.kindPillRotate}`}>
+          Proposed rotate
+        </span>
+      </div>
+
+      <div className={styles.cardTitle}>
+        {annotation.target.referencePathKey}
+        <span className={styles.proposalModeTag}>
+          around {annotation.axisPathKey}
+        </span>
+      </div>
+
+      <div className={styles.valueLine}>
+        <span className={styles.valueOld}>{annotation.previousValueLabel}</span>
+        <span className={styles.valueArrow}>&rarr;</span>
+        <span className={styles.valueNew}>{annotation.proposedValueLabel}</span>
+      </div>
+
+      {annotation.author ? (
+        <div className={styles.metaRow}>proposed by {annotation.author}</div>
+      ) : null}
+
+      <textarea
+        className={styles.comment}
+        value={annotation.comment ?? ""}
+        placeholder="Add a comment..."
+        onClick={(event) => event.stopPropagation()}
+        onChange={(event) => onCommentChange(event.target.value)}
+      />
+
+      <div className={styles.actions}>
+        <button
+          type="button"
+          className={styles.resolveButton}
+          onClick={(event) => {
+            event.stopPropagation();
+            onResolve();
+          }}
+        >
+          Accept
+        </button>
+        <button
+          type="button"
+          className={styles.deleteButton}
+          onClick={(event) => {
+            event.stopPropagation();
+            onDelete();
+          }}
+        >
+          Reject
+        </button>
+      </div>
+    </article>
+  );
+}
+
 function AlternativeCard({
   annotation,
   selected,
@@ -1019,6 +1102,23 @@ export default function UncertaintyMarksPanel({
               );
             }
 
+            if (annotation.type === "rotate") {
+              return (
+                <RotateCard
+                  key={annotation.id}
+                  annotation={annotation}
+                  selected={selected}
+                  hovered={hovered}
+                  onSelect={() => onSelectAnnotation(annotation.id)}
+                  onDelete={() => onDeleteAnnotation(annotation.id)}
+                  onCommentChange={(comment) =>
+                    onCommentChange(annotation.id, comment)
+                  }
+                  onResolve={() => onResolveAnnotation(annotation.id)}
+                />
+              );
+            }
+
             if (annotation.type === "distance") {
               return (
                 <DistanceCard
@@ -1089,9 +1189,11 @@ export default function UncertaintyMarksPanel({
                             ? `Move: ${annotation.target.referencePathKey}`
                             : annotation.type === "scale"
                               ? `Scale: ${annotation.target.referencePathKey}`
-                              : annotation.type === "distance"
-                                ? `Distance: ${annotation.target.referencePathKey} ↔ ${annotation.otherPathKey}`
-                                : "Alternative"}
+                              : annotation.type === "rotate"
+                                ? `Rotate: ${annotation.target.referencePathKey}`
+                                : annotation.type === "distance"
+                                  ? `Distance: ${annotation.target.referencePathKey} ↔ ${annotation.otherPathKey}`
+                                  : "Alternative"}
                     </span>
                     <button
                       type="button"

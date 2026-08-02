@@ -6,4 +6,5 @@ export type OperationTool =
   | "extend"
   | "angle"
   | "move"
-  | "scale";
+  | "scale"
+  | "rotate";

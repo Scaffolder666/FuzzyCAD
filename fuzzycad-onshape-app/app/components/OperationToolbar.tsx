@@ -105,6 +105,15 @@ function ScaleIcon() {
   );
 }
 
+function RotateIcon() {
+  return (
+    <svg viewBox="0 0 32 32" aria-hidden="true">
+      <path d="M23 10C21 7 17.5 6 14 7.2C9.5 8.7 7 13.5 8.5 18C10 22.5 14.8 25 19.3 23.5C22.8 22.3 25.2 19.2 25.4 15.7" />
+      <path d="M25 5L25.4 11L19.4 10" />
+    </svg>
+  );
+}
+
 function AlternativeIcon() {
   return (
     <svg viewBox="0 0 32 32" aria-hidden="true">
@@ -166,6 +175,12 @@ const toolGroups: ToolGroup[] = [
         label: "Scale",
         title: "Grow or shrink this part uniformly and save the change",
         icon: <ScaleIcon />,
+      },
+      {
+        id: "rotate",
+        label: "Rotate",
+        title: "Click a part, then another part to rotate around, and save the change",
+        icon: <RotateIcon />,
       },
     ],
   },

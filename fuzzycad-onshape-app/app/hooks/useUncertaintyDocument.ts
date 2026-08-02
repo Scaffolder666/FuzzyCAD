@@ -14,10 +14,12 @@ import {
   toFuzzyConfidenceAnnotations,
   toMovePreviews,
   toProposalPreviews,
+  toRotatePreviews,
   toScalePreviews,
   updateUncertaintyAnnotationComment,
   upsertDistance,
   upsertMove,
+  upsertRotate,
   upsertScale,
   upsertSizeAnnotation,
   upsertSizeProposal,
@@ -25,6 +27,7 @@ import {
   type FuzzyCADUncertaintySource,
   type ProposalAxisIndex,
   type ProposalAxisMode,
+  type RotateAxisDirection,
 } from "../lib/uncertainty/document";
 import type {
   AxisConfidenceMap,
@@ -71,6 +74,11 @@ export function useUncertaintyDocument(source: FuzzyCADUncertaintySource) {
 
   const distancePreviews = useMemo(
     () => toDistancePreviews(uncertaintyDocumentWithCurrentSource),
+    [uncertaintyDocumentWithCurrentSource],
+  );
+
+  const rotatePreviews = useMemo(
+    () => toRotatePreviews(uncertaintyDocumentWithCurrentSource),
     [uncertaintyDocumentWithCurrentSource],
   );
 
@@ -300,6 +308,26 @@ export function useUncertaintyDocument(source: FuzzyCADUncertaintySource) {
     );
   }
 
+  function upsertRotateMark(input: {
+    pathKey: string;
+    axisPathKey: string;
+    axisDirection: RotateAxisDirection;
+    angleRad: number;
+    previousValueLabel: string;
+    proposedValueLabel: string;
+    author?: string;
+  }) {
+    setUncertaintyDocument((previous) =>
+      upsertRotate(
+        {
+          ...previous,
+          source,
+        },
+        input,
+      ),
+    );
+  }
+
   function selectAnnotationAlternativeOption(
     annotationId: string,
     optionId: string,
@@ -324,6 +352,7 @@ export function useUncertaintyDocument(source: FuzzyCADUncertaintySource) {
     movePreviews,
     scalePreviews,
     distancePreviews,
+    rotatePreviews,
     resetUncertaintyDocument,
     replaceUncertaintyDocument,
     upsertSizeMark,
@@ -341,5 +370,6 @@ export function useUncertaintyDocument(source: FuzzyCADUncertaintySource) {
     setDistanceConfidenceMark,
     setDistanceMoveModeMark,
     answerDistanceMark,
+    upsertRotateMark,
   };
 }

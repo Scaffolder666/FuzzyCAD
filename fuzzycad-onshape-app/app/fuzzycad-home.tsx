@@ -59,6 +59,7 @@ import {
   type FuzzyCADUncertaintyAnnotation,
   type ProposalAxisIndex,
   type ProposalAxisMode,
+  type RotateAxisDirection,
   type SizeUncertaintyAnnotation,
 } from "./lib/uncertainty/document";
 import { AXIS_LABEL } from "./components/viewer/AxisTriadHandle";
@@ -204,6 +205,20 @@ export default function FuzzyCADHome() {
   } | null>(null);
   const [scaleFactor, setScaleFactor] = useState(1);
 
+  // "Rotate" tool: click the part to rotate, then a second part whose
+  // bounding-box center defines the pivot — "spin this around that other
+  // part" — then drag/type an angle around one of the 3 world axes.
+  const [rotateFirstPathKey, setRotateFirstPathKey] = useState<string | null>(
+    null,
+  );
+  const [activeRotatePlan, setActiveRotatePlan] = useState<{
+    pathKey: string;
+    axisPathKey: string;
+  } | null>(null);
+  const [rotateAxisDirection, setRotateAxisDirection] =
+    useState<RotateAxisDirection>("y");
+  const [rotateAngleRad, setRotateAngleRad] = useState(0);
+
   // "Distance" tool: click one part, then a second, to flag the gap between
   // them. The flag saves itself the moment both are picked — it's a
   // request waiting on someone else's answer, not a value the marker
@@ -259,6 +274,7 @@ export default function FuzzyCADHome() {
     movePreviews,
     scalePreviews,
     distancePreviews,
+    rotatePreviews,
     resetUncertaintyDocument,
     upsertSizeMark,
     removeSizeMarks,
@@ -276,6 +292,7 @@ export default function FuzzyCADHome() {
     setDistanceConfidenceMark,
     setDistanceMoveModeMark,
     answerDistanceMark,
+    upsertRotateMark,
   } = useUncertaintyDocument(currentUncertaintySource);
 
   const assemblyElements = useMemo(() => {
@@ -350,12 +367,22 @@ export default function FuzzyCADHome() {
       return [distanceFirstPathKey];
     }
 
+    if (rotateFirstPathKey) {
+      return [rotateFirstPathKey];
+    }
+
+    if (activeRotatePlan) {
+      return [activeRotatePlan.pathKey, activeRotatePlan.axisPathKey];
+    }
+
     return lassoPathKeys;
   }, [
     heightCandidateOpen,
     heightConfidenceOpen,
     heightCandidatePathKeys,
     distanceFirstPathKey,
+    rotateFirstPathKey,
+    activeRotatePlan,
     lassoPathKeys,
   ]);
 
@@ -396,6 +423,10 @@ export default function FuzzyCADHome() {
     setActiveScalePlan(null);
     setScaleFactor(1);
     setDistanceFirstPathKey(null);
+    setRotateFirstPathKey(null);
+    setActiveRotatePlan(null);
+    setRotateAxisDirection("y");
+    setRotateAngleRad(0);
     closeSizeUncertaintyEditor();
   }
 
@@ -1028,6 +1059,67 @@ export default function FuzzyCADHome() {
     setActiveTool("select");
   }
 
+  function startRotate() {
+    setActiveTool("rotate");
+    resetSizeOperationState();
+    setLassoPathKeys([]);
+  }
+
+  /** Click routing while the Rotate tool is active: first click picks the
+   * part to rotate, second click (a different part) picks the axis anchor
+   * whose bbox center becomes the pivot — then the angle handle appears so
+   * the user can drag/type the angle before saving. */
+  function handleRotatePick(pathKey: string | null) {
+    if (!pathKey || activeRotatePlan) {
+      return;
+    }
+
+    setHighlightedPathKey(pathKey);
+
+    if (!rotateFirstPathKey) {
+      setRotateFirstPathKey(pathKey);
+      return;
+    }
+
+    if (pathKey === rotateFirstPathKey) {
+      return;
+    }
+
+    setActiveRotatePlan({ pathKey: rotateFirstPathKey, axisPathKey: pathKey });
+    setRotateFirstPathKey(null);
+    setRotateAxisDirection("y");
+    setRotateAngleRad(0);
+  }
+
+  function cancelRotate() {
+    setRotateFirstPathKey(null);
+    setActiveRotatePlan(null);
+    setRotateAxisDirection("y");
+    setRotateAngleRad(0);
+    setActiveTool("select");
+  }
+
+  function applyRotate() {
+    if (!activeRotatePlan) {
+      return;
+    }
+
+    const degrees = (rotateAngleRad * 180) / Math.PI;
+
+    upsertRotateMark({
+      pathKey: activeRotatePlan.pathKey,
+      axisPathKey: activeRotatePlan.axisPathKey,
+      axisDirection: rotateAxisDirection,
+      angleRad: rotateAngleRad,
+      previousValueLabel: "current orientation",
+      proposedValueLabel: `${Math.round(degrees)}° around ${rotateAxisDirection.toUpperCase()}`,
+    });
+
+    setActiveRotatePlan(null);
+    setRotateAngleRad(0);
+    setActiveTool("select");
+  }
+
 async function saveProjectStateToOnshape() {
   if (!documentId || !workspaceId) {
     console.warn("Missing documentId or workspaceId");
@@ -1186,6 +1278,11 @@ if (result.ok && result.state) {
       return;
     }
 
+    if (activeTool === "rotate" && !activeRotatePlan) {
+      handleRotatePick(pathKey);
+      return;
+    }
+
     setHighlightedPathKey(pathKey);
     leaveUncertaintyEditingState();
   }
@@ -1250,6 +1347,11 @@ if (result.ok && result.state) {
           scalePreviews={scalePreviews}
           scaleFactor={scaleFactor}
           onScaleFactorChange={setScaleFactor}
+          rotatePlan={activeRotatePlan}
+          rotatePreviews={rotatePreviews}
+          rotateAxisDirection={rotateAxisDirection}
+          rotateAngleRad={rotateAngleRad}
+          onRotateAngleChange={setRotateAngleRad}
           distancePreviews={distancePreviews}
           onAnswerDistance={(annotationId, distanceMm) =>
             answerDistanceMark(annotationId, distanceMm / 1000)
@@ -1262,7 +1364,8 @@ if (result.ok && result.state) {
             (Boolean(confirmedHeightPlan) ||
               Boolean(proposalPlan) ||
               Boolean(activeMovePlan) ||
-              Boolean(activeScalePlan))
+              Boolean(activeScalePlan) ||
+              Boolean(activeRotatePlan))
           }
           manipulationValue={manipulationValue}
           confidenceAnnotations={confidenceAnnotations}
@@ -1322,6 +1425,11 @@ if (result.ok && result.state) {
 
             if (tool === "distance") {
               startDistance();
+              return;
+            }
+
+            if (tool === "rotate") {
+              startRotate();
               return;
             }
 
@@ -1424,6 +1532,59 @@ if (result.ok && result.state) {
               onClick={cancelDistance}
             >
               Done
+            </button>
+          </div>
+        ) : null}
+
+        {activeTool === "rotate" && !activeRotatePlan ? (
+          <div className={styles.manipulationReadout}>
+            <span className={styles.manipulationValue}>
+              {rotateFirstPathKey
+                ? "Click the part to rotate around..."
+                : "Click the part to rotate"}
+            </span>
+            <button
+              type="button"
+              className={styles.manipulationResetButton}
+              onClick={cancelRotate}
+            >
+              Cancel
+            </button>
+          </div>
+        ) : null}
+
+        {activeTool === "rotate" && activeRotatePlan ? (
+          <div className={styles.manipulationReadout}>
+            <span className={styles.manipulationValue}>
+              Rotate: {Math.round((rotateAngleRad * 180) / Math.PI)}°
+            </span>
+            {(["x", "y", "z"] as const).map((axis) => (
+              <button
+                key={axis}
+                type="button"
+                className={`${styles.manipulationResetButton} ${
+                  rotateAxisDirection === axis
+                    ? styles.manipulationToggleActive
+                    : ""
+                }`}
+                onClick={() => setRotateAxisDirection(axis)}
+              >
+                {axis.toUpperCase()}
+              </button>
+            ))}
+            <button
+              type="button"
+              className={styles.manipulationResetButton}
+              onClick={cancelRotate}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              className={styles.manipulationResetButton}
+              onClick={applyRotate}
+            >
+              Save proposal
             </button>
           </div>
         ) : null}

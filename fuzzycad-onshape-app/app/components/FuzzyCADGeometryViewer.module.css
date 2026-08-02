@@ -210,6 +210,87 @@
   margin: 0;
 }
 
+.rotateHandle {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  cursor: ew-resize;
+  touch-action: none;
+  user-select: none;
+  pointer-events: auto;
+}
+
+.rotateHandleActive {
+  cursor: ew-resize;
+}
+
+.rotateHandleTrack {
+  position: relative;
+  width: 260px;
+  height: 8px;
+  border-radius: 4px;
+  background: rgba(79, 70, 229, 0.18);
+  border: 1px solid rgba(79, 70, 229, 0.45);
+  box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.55) inset;
+}
+
+.rotateHandleKnob {
+  position: absolute;
+  top: 50%;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: #4f46e5;
+  border: 2.5px solid #ffffff;
+  box-shadow:
+    0 0 0 1px rgba(79, 70, 229, 0.55),
+    0 4px 12px rgba(79, 70, 229, 0.4);
+  transform: translate(-50%, -50%);
+  transition: box-shadow 120ms ease;
+  pointer-events: none;
+}
+
+.rotateHandleActive .rotateHandleKnob {
+  box-shadow:
+    0 0 0 3px rgba(79, 70, 229, 0.3),
+    0 4px 16px rgba(79, 70, 229, 0.55);
+}
+
+.rotateHandleLabel {
+  display: flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: 9px;
+  background: rgba(20, 30, 48, 0.82);
+  color: #ffffff;
+  font-size: 13px;
+  font-family: monospace;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.rotateHandleValueInput {
+  width: 3.6em;
+  padding: 0;
+  border: none;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.5);
+  background: transparent;
+  color: inherit;
+  font-size: inherit;
+  font-family: inherit;
+  text-align: right;
+  pointer-events: auto;
+  outline: none;
+  appearance: textfield;
+}
+
+.rotateHandleValueInput::-webkit-outer-spin-button,
+.rotateHandleValueInput::-webkit-inner-spin-button {
+  appearance: none;
+  margin: 0;
+}
+
 .axisTriadDot {
   width: 22px;
   height: 22px;

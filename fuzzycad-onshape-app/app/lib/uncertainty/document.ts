@@ -143,13 +143,33 @@ export type DistanceUncertaintyAnnotation = BaseAnnotationFields & {
   moveMode: DistanceMoveMode;
 };
 
+/**
+ * "Rotate": a proposed re-orientation of the target around a pivot defined
+ * by ANOTHER object (its bounding-box center) rather than the target's own
+ * origin — "this bracket should pivot around that shaft" is easier to
+ * express by pointing at the shaft than by typing coordinates. The axis
+ * itself is one of the 3 world directions through that pivot, picked the
+ * same way Move's axis handles work.
+ */
+export type RotateAxisDirection = "x" | "y" | "z";
+
+export type RotateUncertaintyAnnotation = BaseAnnotationFields & {
+  type: "rotate";
+  axisPathKey: string;
+  axisDirection: RotateAxisDirection;
+  angleRad: number;
+  previousValueLabel: string;
+  proposedValueLabel: string;
+};
+
 export type FuzzyCADUncertaintyAnnotation =
   | SizeUncertaintyAnnotation
   | ProposalUncertaintyAnnotation
   | AlternativeUncertaintyAnnotation
   | MoveUncertaintyAnnotation
   | ScaleUncertaintyAnnotation
-  | DistanceUncertaintyAnnotation;
+  | DistanceUncertaintyAnnotation
+  | RotateUncertaintyAnnotation;
 
 export function createEmptyUncertaintyDocument(
   source: FuzzyCADUncertaintySource,
@@ -1022,5 +1042,118 @@ export function toDistancePreviews(
       measuredDistanceMeters: annotation.measuredDistanceMeters,
       resolvedDistanceMeters: annotation.resolvedDistanceMeters,
       moveMode: annotation.moveMode,
+    }));
+}
+
+export function makeRotateAnnotationId(pathKey: string) {
+  return `rotate:${pathKey}`;
+}
+
+function createRotateAnnotation(input: {
+  pathKey: string;
+  axisPathKey: string;
+  axisDirection: RotateAxisDirection;
+  angleRad: number;
+  previousValueLabel: string;
+  proposedValueLabel: string;
+  comment?: string;
+  author?: string;
+  assignee?: string;
+  status?: AnnotationStatus;
+  createdAt?: string;
+  updatedAt?: string;
+}): RotateUncertaintyAnnotation | null {
+  if (!input.pathKey || !input.axisPathKey || input.pathKey === input.axisPathKey) {
+    return null;
+  }
+
+  const now = new Date().toISOString();
+
+  return {
+    id: makeRotateAnnotationId(input.pathKey),
+    type: "rotate",
+    target: {
+      pathKeys: [input.pathKey, input.axisPathKey],
+      referencePathKey: input.pathKey,
+      scope: "group",
+    },
+    axisPathKey: input.axisPathKey,
+    axisDirection: input.axisDirection,
+    angleRad: input.angleRad,
+    previousValueLabel: input.previousValueLabel,
+    proposedValueLabel: input.proposedValueLabel,
+    comment: input.comment,
+    author: input.author,
+    assignee: input.assignee,
+    status: input.status ?? "open",
+    createdAt: input.createdAt ?? now,
+    updatedAt: input.updatedAt ?? now,
+  };
+}
+
+/** One open rotate per rotated object — a new save replaces it. */
+export function upsertRotate(
+  document: FuzzyCADUncertaintyDocument,
+  input: {
+    pathKey: string;
+    axisPathKey: string;
+    axisDirection: RotateAxisDirection;
+    angleRad: number;
+    previousValueLabel: string;
+    proposedValueLabel: string;
+    author?: string;
+  },
+): FuzzyCADUncertaintyDocument {
+  const id = makeRotateAnnotationId(input.pathKey);
+  const existing = document.annotations.find((annotation) => annotation.id === id);
+
+  const nextAnnotation = createRotateAnnotation({
+    pathKey: input.pathKey,
+    axisPathKey: input.axisPathKey,
+    axisDirection: input.axisDirection,
+    angleRad: input.angleRad,
+    previousValueLabel: input.previousValueLabel,
+    proposedValueLabel: input.proposedValueLabel,
+    comment: existing?.comment,
+    author: existing?.author ?? input.author,
+    assignee: existing?.assignee,
+    status: "open",
+    createdAt: existing?.createdAt,
+  });
+
+  if (!nextAnnotation) {
+    return document;
+  }
+
+  return {
+    ...document,
+    annotations: [
+      ...document.annotations.filter((annotation) => annotation.id !== id),
+      nextAnnotation,
+    ],
+  };
+}
+
+export type RotatePreview = {
+  pathKey: string;
+  axisPathKey: string;
+  axisDirection: RotateAxisDirection;
+  angleRad: number;
+};
+
+/** Open rotate proposals, for the 3D viewer to render as a persistent ghost. */
+export function toRotatePreviews(
+  document: FuzzyCADUncertaintyDocument,
+): RotatePreview[] {
+  return document.annotations
+    .filter(
+      (annotation): annotation is RotateUncertaintyAnnotation =>
+        annotation.type === "rotate" && annotation.status === "open",
+    )
+    .map((annotation) => ({
+      pathKey: annotation.target.referencePathKey,
+      axisPathKey: annotation.axisPathKey,
+      axisDirection: annotation.axisDirection,
+      angleRad: annotation.angleRad,
     }));
 }

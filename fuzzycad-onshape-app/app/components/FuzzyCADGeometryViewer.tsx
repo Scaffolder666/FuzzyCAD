@@ -31,6 +31,7 @@ import {
   type ConfidenceAxisFrame,
   type DistanceMarkerTarget,
   type FuzzyConfidenceAnnotation,
+  type RotateMarkerTarget,
   type ScaleMarkerTarget,
 } from "./viewer/fuzzyBlur";
 
@@ -52,6 +53,7 @@ import DimensionRuler from "./viewer/DimensionRuler";
 import AxisTriadHandle from "./viewer/AxisTriadHandle";
 import MoveTriadHandle, { type MoveDelta } from "./viewer/MoveTriadHandle";
 import ScaleHandle from "./viewer/ScaleHandle";
+import RotateHandle from "./viewer/RotateHandle";
 import {
   computeProposalTipSegments,
   type ProposalAxisIndex,
@@ -77,6 +79,14 @@ import {
   updateScalePreviewSession,
   type ScalePreviewSession,
 } from "./viewer/scalePreview";
+import {
+  createRotatePreviewSession,
+  disposeRotatePreviewSession,
+  updateRotatePreviewSession,
+  getRotateAxisUnitVector,
+  type RotatePreviewSession,
+  type RotateAxisDirection,
+} from "./viewer/rotatePreview";
 import ClearanceRuler from "./viewer/ClearanceRuler";
 import { closestPointsBetweenAabbs } from "../lib/operations/clearanceMeasure";
 
@@ -133,6 +143,20 @@ export type ScaleRolePlan = {
 export type ScalePreview = {
   pathKey: string;
   factor: number;
+};
+
+/** A single-object-plus-axis-anchor plan for the "Rotate" tool's active drag session. */
+export type RotateRolePlan = {
+  pathKey: string;
+  axisPathKey: string;
+};
+
+/** A saved rotate proposal's axis + angle, structurally the same shape as document.ts's. */
+export type RotatePreview = {
+  pathKey: string;
+  axisPathKey: string;
+  axisDirection: RotateAxisDirection;
+  angleRad: number;
 };
 
 /** A saved distance flag, structurally the same shape as document.ts's. */
@@ -205,6 +229,13 @@ type FuzzyCADGeometryViewerProps = {
   scalePreviews?: ScalePreview[];
   scaleFactor?: number;
   onScaleFactorChange?: (factor: number) => void;
+  /** Target + axis-anchor plan for the "Rotate" tool's active drag session. */
+  rotatePlan?: RotateRolePlan | null;
+  /** Other saved (not currently being dragged) rotate proposals, shown as static ghosts. */
+  rotatePreviews?: RotatePreview[];
+  rotateAxisDirection?: RotateAxisDirection;
+  rotateAngleRad?: number;
+  onRotateAngleChange?: (angleRad: number) => void;
   /** Saved distance flags, shown as persistent rulers. */
   distancePreviews?: DistancePreview[];
   /** Answer an open distance flag directly from its 3D ruler. */
@@ -353,6 +384,8 @@ const MOVE_ACCENT_COLOR = "#7c3aed";
 const MOVE_ACCENT_COLOR_MUTED = "#c4b5fd";
 const SCALE_ACCENT_COLOR = "#0d9488";
 const SCALE_ACCENT_COLOR_MUTED = "#99f6e4";
+const ROTATE_ACCENT_COLOR = "#4f46e5";
+const ROTATE_ACCENT_COLOR_MUTED = "#c7d2fe";
 const DISTANCE_ACCENT_COLOR = "#0ea5e9";
 const DISTANCE_ACCENT_COLOR_HEX = 0x0ea5e9;
 // Once someone answers a distance flag, its ruler switches to this color —
@@ -872,6 +905,11 @@ function Model({
   scalePreviews,
   scaleFactor = 1,
   onScaleFactorChange,
+  rotatePlan,
+  rotatePreviews,
+  rotateAxisDirection = "y",
+  rotateAngleRad = 0,
+  onRotateAngleChange,
   distancePreviews,
   onAnswerDistance,
   hoveredPathKey,
@@ -914,6 +952,11 @@ function Model({
   scalePreviews?: ScalePreview[];
   scaleFactor?: number;
   onScaleFactorChange?: (factor: number) => void;
+  rotatePlan?: RotateRolePlan | null;
+  rotatePreviews?: RotatePreview[];
+  rotateAxisDirection?: RotateAxisDirection;
+  rotateAngleRad?: number;
+  onRotateAngleChange?: (angleRad: number) => void;
   distancePreviews?: DistancePreview[];
   onAnswerDistance?: (annotationId: string, distanceMm: number) => void;
   hoveredPathKey?: string | null;
@@ -1555,6 +1598,248 @@ function Model({
     });
   }, [persistentScalePreviews, objectSummaries]);
 
+  // Active "Rotate" drag session — the target spins around a pivot borrowed
+  // from a DIFFERENT object (the axis anchor) instead of its own center.
+  const activeRotatePathKey = rotatePlan?.pathKey ?? null;
+  const activeRotateAxisPathKey = rotatePlan?.axisPathKey ?? null;
+  const activeRotateTargetSummary = useMemo(
+    () =>
+      objectSummaries.find((item) => item.pathKey === activeRotatePathKey) ??
+      null,
+    [objectSummaries, activeRotatePathKey],
+  );
+  const activeRotateAxisSummary = useMemo(
+    () =>
+      objectSummaries.find((item) => item.pathKey === activeRotateAxisPathKey) ??
+      null,
+    [objectSummaries, activeRotateAxisPathKey],
+  );
+
+  // Pivot is the axis anchor's bbox center; the handle sits out along the
+  // chosen world axis at roughly the same distance as the rotated target,
+  // so it reads as "belonging to" that target instead of floating at a
+  // fixed, unrelated length.
+  const activeRotateFrame = useMemo(() => {
+    if (!activeRotateAxisSummary || !activeRotateTargetSummary) {
+      return null;
+    }
+
+    const pivotWorld = new THREE.Vector3(
+      ...activeRotateAxisSummary.aabbCenterWorld,
+    );
+    const targetCenterWorld = new THREE.Vector3(
+      ...activeRotateTargetSummary.aabbCenterWorld,
+    );
+    const axisWorld = getRotateAxisUnitVector(rotateAxisDirection);
+    const referenceLength = Math.max(
+      pivotWorld.distanceTo(targetCenterWorld),
+      0.05,
+    );
+
+    return { pivotWorld, axisWorld, referenceLength };
+  }, [activeRotateAxisSummary, activeRotateTargetSummary, rotateAxisDirection]);
+
+  const rotatePreviewSession = useMemo(() => {
+    if (!rotatePlan) {
+      return null;
+    }
+
+    return createRotatePreviewSession(
+      scene,
+      objectSummaries,
+      rotatePlan.pathKey,
+      rotatePlan.axisPathKey,
+      rotateAxisDirection,
+    );
+  }, [scene, objectSummaries, rotatePlan, rotateAxisDirection]);
+
+  useEffect(() => {
+    if (!rotatePreviewSession) {
+      return;
+    }
+
+    scene.add(rotatePreviewSession.group);
+    invalidate();
+
+    return () => {
+      disposeRotatePreviewSession(rotatePreviewSession);
+      invalidate();
+    };
+  }, [scene, rotatePreviewSession, invalidate]);
+
+  useEffect(() => {
+    if (!rotatePreviewSession) {
+      return;
+    }
+
+    updateRotatePreviewSession(rotatePreviewSession, rotateAngleRad);
+    invalidate();
+  }, [rotatePreviewSession, rotateAngleRad, invalidate]);
+
+  // Every OTHER saved rotate proposal (not the one currently being dragged)
+  // shows as a static ghost at its saved angle.
+  const persistentRotatePreviews = useMemo(
+    () =>
+      (rotatePreviews ?? []).filter(
+        (preview) => preview.pathKey !== activeRotatePathKey,
+      ),
+    [rotatePreviews, activeRotatePathKey],
+  );
+
+  // Saved (non-active) rotate proposals loop back and forth between their
+  // original and proposed orientation, same as saved moves/scales — only
+  // while hovered or selected in the marks panel.
+  const persistentRotateLoopRef = useRef<
+    {
+      session: RotatePreviewSession;
+      angleRad: number;
+      pathKeys: string[];
+    }[]
+  >([]);
+  const settledRotateSessionsRef = useRef<Set<RotatePreviewSession>>(new Set());
+
+  useEffect(() => {
+    const entries = persistentRotatePreviews
+      .map((preview) => {
+        const session = createRotatePreviewSession(
+          scene,
+          objectSummaries,
+          preview.pathKey,
+          preview.axisPathKey,
+          preview.axisDirection,
+        );
+
+        if (!session) {
+          return null;
+        }
+
+        scene.add(session.group);
+
+        return {
+          session,
+          angleRad: preview.angleRad,
+          pathKeys: [preview.pathKey, preview.axisPathKey],
+        };
+      })
+      .filter(
+        (
+          entry,
+        ): entry is {
+          session: RotatePreviewSession;
+          angleRad: number;
+          pathKeys: string[];
+        } => entry !== null,
+      );
+
+    const settledSessions = settledRotateSessionsRef.current;
+
+    persistentRotateLoopRef.current = entries;
+    settledSessions.clear();
+
+    if (entries.length === 0) {
+      return;
+    }
+
+    invalidate();
+
+    return () => {
+      persistentRotateLoopRef.current = [];
+      settledSessions.clear();
+
+      for (const entry of entries) {
+        disposeRotatePreviewSession(entry.session);
+      }
+
+      invalidate();
+    };
+  }, [scene, objectSummaries, persistentRotatePreviews, invalidate]);
+
+  useFrame(({ clock }) => {
+    const entries = persistentRotateLoopRef.current;
+
+    if (entries.length === 0) {
+      return;
+    }
+
+    const phase =
+      (clock.elapsedTime / PREVIEW_LOOP_PERIOD_SECONDS) * Math.PI * 2;
+    const loopT = (Math.sin(phase) + 1) / 2;
+
+    for (const entry of entries) {
+      const active = isPathKeysUnderInspection(
+        entry.pathKeys,
+        hoveredPathKey,
+        highlightedPathKey,
+        selectedPathKeys,
+      );
+
+      if (!active && settledRotateSessionsRef.current.has(entry.session)) {
+        continue;
+      }
+
+      // At rest (loopT irrelevant) sit exactly at the proposed angle; while
+      // animating, ease between the original orientation (0) and it.
+      const restAngle = entry.angleRad;
+      const appliedAngle = active ? restAngle * loopT : restAngle;
+
+      updateRotatePreviewSession(entry.session, appliedAngle);
+
+      if (active) {
+        settledRotateSessionsRef.current.delete(entry.session);
+      } else {
+        settledRotateSessionsRef.current.add(entry.session);
+      }
+    }
+  });
+
+  // A small "30°" badge above every saved-but-not-actively-edited rotate
+  // proposal, at the target's rotated (not original) position, so the
+  // change reads as an explicit number the same way Move/Scale's do.
+  const persistentRotateBadges = useMemo(() => {
+    return persistentRotatePreviews.flatMap((preview) => {
+      const targetSummary = objectSummaries.find(
+        (item) => item.pathKey === preview.pathKey,
+      );
+      const axisSummary = objectSummaries.find(
+        (item) => item.pathKey === preview.axisPathKey,
+      );
+
+      if (!targetSummary || !axisSummary) {
+        return [];
+      }
+
+      const pivotWorld = new THREE.Vector3(...axisSummary.aabbCenterWorld);
+      const targetCenterWorld = new THREE.Vector3(
+        ...targetSummary.aabbCenterWorld,
+      );
+      const axisWorld = getRotateAxisUnitVector(preview.axisDirection);
+      const rotation = new THREE.Quaternion().setFromAxisAngle(
+        axisWorld,
+        preview.angleRad,
+      );
+      const rotatedCenter = pivotWorld
+        .clone()
+        .add(
+          targetCenterWorld.clone().sub(pivotWorld).applyQuaternion(rotation),
+        );
+
+      const halfSize = new THREE.Vector3(
+        ...targetSummary.aabbSizeWorld,
+      ).multiplyScalar(0.5);
+      const position = rotatedCenter
+        .clone()
+        .add(new THREE.Vector3(0, halfSize.length() + 0.02, 0));
+
+      return [
+        {
+          key: preview.pathKey,
+          position,
+          degrees: THREE.MathUtils.radToDeg(preview.angleRad),
+        },
+      ];
+    });
+  }, [persistentRotatePreviews, objectSummaries]);
+
   // "Distance" is a needs-input flag, not a proposal: the gap is measured
   // live from the two objects' current positions (no dragging, no ghost
   // preview session needed), so this is a plain derived value.
@@ -1975,6 +2260,17 @@ function Model({
     [distancePreviews],
   );
 
+  // Both the rotated object and its axis anchor get marked, so the pivot
+  // reads as "part of this flag" even though it never moves itself.
+  const rotateMarkerTargets = useMemo<RotateMarkerTarget[]>(
+    () =>
+      (rotatePreviews ?? []).flatMap((preview) => [
+        { pathKey: preview.pathKey },
+        { pathKey: preview.axisPathKey },
+      ]),
+    [rotatePreviews],
+  );
+
   useEffect(() => {
     applyFuzzyConfidence(
       scene,
@@ -1984,6 +2280,7 @@ function Model({
       moveMarkerTargets,
       scaleMarkerTargets,
       distanceMarkerTargets,
+      rotateMarkerTargets,
     );
     invalidate();
 
@@ -1999,6 +2296,7 @@ function Model({
     moveMarkerTargets,
     scaleMarkerTargets,
     distanceMarkerTargets,
+    rotateMarkerTargets,
     invalidate,
   ]);
 
@@ -2500,6 +2798,46 @@ function Model({
         </Html>
       ))}
 
+      {enableManipulationHandles && rotatePlan && activeRotateFrame ? (
+        <RotateHandle
+          pivotWorld={activeRotateFrame.pivotWorld}
+          axisWorld={activeRotateFrame.axisWorld}
+          referenceLength={activeRotateFrame.referenceLength}
+          degrees={THREE.MathUtils.radToDeg(rotateAngleRad)}
+          color={ROTATE_ACCENT_COLOR}
+          onChange={(degrees) =>
+            onRotateAngleChange?.(THREE.MathUtils.degToRad(degrees))
+          }
+          onDragStateChange={handleDragStateChange}
+        />
+      ) : null}
+
+      {persistentRotateBadges.map((badge) => (
+        <Html
+          key={badge.key}
+          position={badge.position}
+          center
+          zIndexRange={[40, 0]}
+          style={{ pointerEvents: "none" }}
+        >
+          <div
+            style={{
+              padding: "3px 8px",
+              borderRadius: 999,
+              background: "rgba(255,255,255,0.95)",
+              border: `1.5px solid ${ROTATE_ACCENT_COLOR_MUTED}`,
+              color: "#0f172a",
+              fontSize: 12,
+              fontWeight: 700,
+              fontFamily: "monospace",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {Math.round(badge.degrees)}°
+          </div>
+        </Html>
+      ))}
+
       {distanceRulers.map((ruler) => (
         <ClearanceRuler
           key={ruler.key}
@@ -2569,6 +2907,11 @@ export default function FuzzyCADGeometryViewer({
   scalePreviews,
   scaleFactor,
   onScaleFactorChange,
+  rotatePlan,
+  rotatePreviews,
+  rotateAxisDirection,
+  rotateAngleRad,
+  onRotateAngleChange,
   distancePreviews,
   onAnswerDistance,
   hoveredPathKey,
@@ -2668,6 +3011,11 @@ export default function FuzzyCADGeometryViewer({
                   scalePreviews={scalePreviews}
                   scaleFactor={scaleFactor}
                   onScaleFactorChange={onScaleFactorChange}
+                  rotatePlan={rotatePlan}
+                  rotatePreviews={rotatePreviews}
+                  rotateAxisDirection={rotateAxisDirection}
+                  rotateAngleRad={rotateAngleRad}
+                  onRotateAngleChange={onRotateAngleChange}
                   distancePreviews={distancePreviews}
                   onAnswerDistance={onAnswerDistance}
                   hoveredPathKey={hoveredPathKey}
