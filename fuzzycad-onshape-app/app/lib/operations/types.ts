@@ -7,4 +7,5 @@ export type OperationTool =
   | "angle"
   | "move"
   | "scale"
-  | "rotate";
+  | "rotate"
+  | "rotateAxis";

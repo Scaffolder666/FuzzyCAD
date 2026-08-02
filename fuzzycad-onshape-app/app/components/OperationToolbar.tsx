@@ -16,6 +16,12 @@ type ToolItem = {
   title: string;
   icon: ReactNode;
   hidden?: boolean;
+  /**
+   * Photoshop-style flyout: when present, this slot shows whichever variant
+   * was last picked (defaulting to the first) as the main button, plus a
+   * small corner triangle that opens a panel listing every variant.
+   */
+  variants?: ToolItem[];
 };
 
 function SelectIcon() {
@@ -114,6 +120,18 @@ function RotateIcon() {
   );
 }
 
+function RotateAxisIcon() {
+  return (
+    <svg viewBox="0 0 32 32" aria-hidden="true">
+      <path d="M9 25L23 7" strokeDasharray="3 3" />
+      <circle cx="9" cy="25" r="2.4" />
+      <circle cx="23" cy="7" r="2.4" />
+      <path d="M17 10C19.5 10.5 21.3 12.5 21.3 15.3C21.3 18.5 18.7 21 15.5 21C13.5 21 11.8 20 10.8 18.4" />
+      <path d="M10.5 14.5L10.6 18.6L14.7 18.2" />
+    </svg>
+  );
+}
+
 function AlternativeIcon() {
   return (
     <svg viewBox="0 0 32 32" aria-hidden="true">
@@ -181,6 +199,20 @@ const toolGroups: ToolGroup[] = [
         label: "Rotate",
         title: "Click a part, then another part to rotate around, and save the change",
         icon: <RotateIcon />,
+        variants: [
+          {
+            id: "rotate",
+            label: "Rotate",
+            title: "Click a part, then another part to rotate around, and save the change",
+            icon: <RotateIcon />,
+          },
+          {
+            id: "rotateAxis",
+            label: "Custom axis",
+            title: "Click a part, then two points to define a custom rotation axis",
+            icon: <RotateAxisIcon />,
+          },
+        ],
       },
     ],
   },
@@ -210,9 +242,16 @@ export default function OperationToolbar({
   onToolChange,
 }: OperationToolbarProps) {
   const [hoveredKey, setHoveredKey] = useState<string | null>(null);
+  const [openFlyoutKey, setOpenFlyoutKey] = useState<string | null>(null);
+  // Which variant a flyout slot currently shows on its main button —
+  // Photoshop remembers the last one you picked instead of always
+  // resetting to the first, so the button "becomes" that variant.
+  const [variantSelection, setVariantSelection] = useState<
+    Record<string, OperationTool>
+  >({});
 
   function renderTooltip(key: string, text: string) {
-    if (hoveredKey !== key) {
+    if (hoveredKey !== key || openFlyoutKey === key) {
       return null;
     }
 
@@ -220,16 +259,27 @@ export default function OperationToolbar({
   }
 
   function renderButton(tool: ToolItem) {
-    const active = activeTool === tool.id;
+    const variants = tool.variants;
+    const hasVariants = Boolean(variants && variants.length > 0);
+    const selectedVariantId = hasVariants
+      ? (variantSelection[tool.id] ?? variants![0].id)
+      : tool.id;
+    const displayed = hasVariants
+      ? (variants!.find((variant) => variant.id === selectedVariantId) ??
+        variants![0])
+      : tool;
+    const active = activeTool === displayed.id;
+    const flyoutOpen = openFlyoutKey === tool.id;
 
     return (
       <div
         key={tool.id}
         className={styles.toolButtonWrap}
         onMouseEnter={() => setHoveredKey(tool.id)}
-        onMouseLeave={() =>
-          setHoveredKey((current) => (current === tool.id ? null : current))
-        }
+        onMouseLeave={() => {
+          setHoveredKey((current) => (current === tool.id ? null : current));
+          setOpenFlyoutKey((current) => (current === tool.id ? null : current));
+        }}
       >
         <button
           type="button"
@@ -240,13 +290,61 @@ export default function OperationToolbar({
               : styles.operationToolButton
           }
           onClick={() => {
-            onToolChange(tool.id);
+            setOpenFlyoutKey(null);
+            onToolChange(displayed.id);
           }}
         >
-          <span className={styles.operationToolIcon}>{tool.icon}</span>
-          <span className={styles.operationToolLabel}>{tool.label}</span>
+          <span className={styles.operationToolIcon}>{displayed.icon}</span>
+          <span className={styles.operationToolLabel}>{displayed.label}</span>
         </button>
-        {renderTooltip(tool.id, tool.title)}
+
+        {hasVariants ? (
+          <button
+            type="button"
+            disabled={disabled}
+            aria-label={`More ${tool.label} tools`}
+            className={styles.variantTriangle}
+            onClick={(event) => {
+              event.stopPropagation();
+              setOpenFlyoutKey((current) =>
+                current === tool.id ? null : tool.id,
+              );
+            }}
+          />
+        ) : null}
+
+        {renderTooltip(tool.id, displayed.title)}
+
+        {hasVariants && flyoutOpen ? (
+          <div className={styles.variantFlyout}>
+            {variants!.map((variant) => (
+              <button
+                key={variant.id}
+                type="button"
+                className={`${styles.variantFlyoutButton} ${
+                  variant.id === selectedVariantId
+                    ? styles.variantFlyoutButtonActive
+                    : ""
+                }`}
+                onClick={() => {
+                  setVariantSelection((previous) => ({
+                    ...previous,
+                    [tool.id]: variant.id,
+                  }));
+                  setOpenFlyoutKey(null);
+                  onToolChange(variant.id);
+                }}
+              >
+                <span className={styles.operationToolIcon}>
+                  {variant.icon}
+                </span>
+                <span className={styles.variantFlyoutLabel}>
+                  {variant.label}
+                </span>
+              </button>
+            ))}
+          </div>
+        ) : null}
       </div>
     );
   }

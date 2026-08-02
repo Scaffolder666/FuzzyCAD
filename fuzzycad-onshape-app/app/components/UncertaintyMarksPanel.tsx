@@ -803,7 +803,9 @@ function RotateCard({
       <div className={styles.cardTitle}>
         {annotation.target.referencePathKey}
         <span className={styles.proposalModeTag}>
-          around {annotation.axisPathKey}
+          {annotation.axisMode === "object"
+            ? `around ${annotation.axisPathKey}`
+            : "around custom axis"}
         </span>
       </div>
 

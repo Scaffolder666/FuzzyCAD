@@ -27,7 +27,7 @@ import {
   type FuzzyCADUncertaintySource,
   type ProposalAxisIndex,
   type ProposalAxisMode,
-  type RotateAxisDirection,
+  type RotateAxisInput,
 } from "../lib/uncertainty/document";
 import type {
   AxisConfidenceMap,
@@ -308,15 +308,15 @@ export function useUncertaintyDocument(source: FuzzyCADUncertaintySource) {
     );
   }
 
-  function upsertRotateMark(input: {
-    pathKey: string;
-    axisPathKey: string;
-    axisDirection: RotateAxisDirection;
-    angleRad: number;
-    previousValueLabel: string;
-    proposedValueLabel: string;
-    author?: string;
-  }) {
+  function upsertRotateMark(
+    input: {
+      pathKey: string;
+      angleRad: number;
+      previousValueLabel: string;
+      proposedValueLabel: string;
+      author?: string;
+    } & RotateAxisInput,
+  ) {
     setUncertaintyDocument((previous) =>
       upsertRotate(
         {

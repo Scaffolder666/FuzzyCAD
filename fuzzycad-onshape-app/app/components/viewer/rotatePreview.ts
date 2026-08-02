@@ -1,6 +1,5 @@
 import * as THREE from "three";
 import { LineSegments2 } from "three/addons/lines/LineSegments2.js";
-import type { AxialStretchObjectSummary } from "../../lib/operations/axialStretchTypes";
 import { cloneObjectForPreview, disposeMaterial } from "./axialStretchPreview";
 import { findObjectsByPathKeys, rotateObjectsAroundWorldAxis } from "./manipulation";
 
@@ -35,21 +34,20 @@ export type RotatePreviewSession = {
 /**
  * A rigid rotation ghost preview for the Rotate tool: the target is cloned
  * whole (same dashed-edge look as the other ghost previews) and spun around
- * a pivot borrowed from a DIFFERENT object — the "axis anchor" — instead of
- * its own center, since the whole point of this tool is "rotate around that
- * other part," not around the target's own origin.
+ * a caller-resolved pivot + axis — borrowed from a different object's
+ * center in "object" mode, or from two picked points in "custom" mode —
+ * instead of the target's own origin, since the whole point of this tool
+ * is rotating around something else.
  */
 export function createRotatePreviewSession(
   scene: THREE.Object3D,
-  objectSummaries: AxialStretchObjectSummary[],
   pathKey: string,
-  axisPathKey: string,
-  axisDirection: RotateAxisDirection,
+  pivotWorld: THREE.Vector3,
+  axisWorld: THREE.Vector3,
 ): RotatePreviewSession | null {
-  const axisSummary = objectSummaries.find((item) => item.pathKey === axisPathKey);
   const original = findObjectsByPathKeys(scene, [pathKey])[0];
 
-  if (!axisSummary || !original) {
+  if (!original) {
     return null;
   }
 
@@ -62,8 +60,8 @@ export function createRotatePreviewSession(
 
   return {
     group,
-    pivotWorld: new THREE.Vector3(...axisSummary.aabbCenterWorld),
-    axisWorld: getRotateAxisUnitVector(axisDirection),
+    pivotWorld: pivotWorld.clone(),
+    axisWorld: axisWorld.clone().normalize(),
     clones: [
       {
         pathKey,

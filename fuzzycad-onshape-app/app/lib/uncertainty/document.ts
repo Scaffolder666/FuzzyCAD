@@ -144,19 +144,27 @@ export type DistanceUncertaintyAnnotation = BaseAnnotationFields & {
 };
 
 /**
- * "Rotate": a proposed re-orientation of the target around a pivot defined
- * by ANOTHER object (its bounding-box center) rather than the target's own
- * origin — "this bracket should pivot around that shaft" is easier to
- * express by pointing at the shaft than by typing coordinates. The axis
- * itself is one of the 3 world directions through that pivot, picked the
- * same way Move's axis handles work.
+ * "Rotate": a proposed re-orientation of the target around a pivot.
+ * "object" mode borrows the pivot from ANOTHER object's bounding-box
+ * center — "this bracket should pivot around that shaft" is easier to
+ * express by pointing at the shaft than by typing coordinates — with the
+ * axis as one of the 3 world directions through that pivot. "custom" mode
+ * is the SketchUp-style fallback for when there's no second object to
+ * point at: the marker clicks two points directly in the 3D view, and the
+ * line through them (first point = pivot) becomes the axis.
  */
 export type RotateAxisDirection = "x" | "y" | "z";
+export type RotateAxisMode = "object" | "custom";
 
 export type RotateUncertaintyAnnotation = BaseAnnotationFields & {
   type: "rotate";
-  axisPathKey: string;
-  axisDirection: RotateAxisDirection;
+  axisMode: RotateAxisMode;
+  /** Set when axisMode is "object". */
+  axisPathKey: string | null;
+  axisDirection: RotateAxisDirection | null;
+  /** Set when axisMode is "custom" — world-space pivot and unit axis direction. */
+  pivotWorld: [number, number, number] | null;
+  axisVectorWorld: [number, number, number] | null;
   angleRad: number;
   previousValueLabel: string;
   proposedValueLabel: string;
@@ -1049,36 +1057,62 @@ export function makeRotateAnnotationId(pathKey: string) {
   return `rotate:${pathKey}`;
 }
 
-function createRotateAnnotation(input: {
-  pathKey: string;
-  axisPathKey: string;
-  axisDirection: RotateAxisDirection;
-  angleRad: number;
-  previousValueLabel: string;
-  proposedValueLabel: string;
-  comment?: string;
-  author?: string;
-  assignee?: string;
-  status?: AnnotationStatus;
-  createdAt?: string;
-  updatedAt?: string;
-}): RotateUncertaintyAnnotation | null {
-  if (!input.pathKey || !input.axisPathKey || input.pathKey === input.axisPathKey) {
+export type RotateAxisInput =
+  | {
+      axisMode: "object";
+      axisPathKey: string;
+      axisDirection: RotateAxisDirection;
+    }
+  | {
+      axisMode: "custom";
+      pivotWorld: [number, number, number];
+      axisVectorWorld: [number, number, number];
+    };
+
+function createRotateAnnotation(
+  input: {
+    pathKey: string;
+    angleRad: number;
+    previousValueLabel: string;
+    proposedValueLabel: string;
+    comment?: string;
+    author?: string;
+    assignee?: string;
+    status?: AnnotationStatus;
+    createdAt?: string;
+    updatedAt?: string;
+  } & RotateAxisInput,
+): RotateUncertaintyAnnotation | null {
+  if (!input.pathKey) {
+    return null;
+  }
+
+  if (
+    input.axisMode === "object" &&
+    (!input.axisPathKey || input.pathKey === input.axisPathKey)
+  ) {
     return null;
   }
 
   const now = new Date().toISOString();
+  const targetPathKeys =
+    input.axisMode === "object"
+      ? [input.pathKey, input.axisPathKey]
+      : [input.pathKey];
 
   return {
     id: makeRotateAnnotationId(input.pathKey),
     type: "rotate",
     target: {
-      pathKeys: [input.pathKey, input.axisPathKey],
+      pathKeys: targetPathKeys,
       referencePathKey: input.pathKey,
-      scope: "group",
+      scope: targetPathKeys.length > 1 ? "group" : "single",
     },
-    axisPathKey: input.axisPathKey,
-    axisDirection: input.axisDirection,
+    axisMode: input.axisMode,
+    axisPathKey: input.axisMode === "object" ? input.axisPathKey : null,
+    axisDirection: input.axisMode === "object" ? input.axisDirection : null,
+    pivotWorld: input.axisMode === "custom" ? input.pivotWorld : null,
+    axisVectorWorld: input.axisMode === "custom" ? input.axisVectorWorld : null,
     angleRad: input.angleRad,
     previousValueLabel: input.previousValueLabel,
     proposedValueLabel: input.proposedValueLabel,
@@ -1096,24 +1130,17 @@ export function upsertRotate(
   document: FuzzyCADUncertaintyDocument,
   input: {
     pathKey: string;
-    axisPathKey: string;
-    axisDirection: RotateAxisDirection;
     angleRad: number;
     previousValueLabel: string;
     proposedValueLabel: string;
     author?: string;
-  },
+  } & RotateAxisInput,
 ): FuzzyCADUncertaintyDocument {
   const id = makeRotateAnnotationId(input.pathKey);
   const existing = document.annotations.find((annotation) => annotation.id === id);
 
   const nextAnnotation = createRotateAnnotation({
-    pathKey: input.pathKey,
-    axisPathKey: input.axisPathKey,
-    axisDirection: input.axisDirection,
-    angleRad: input.angleRad,
-    previousValueLabel: input.previousValueLabel,
-    proposedValueLabel: input.proposedValueLabel,
+    ...input,
     comment: existing?.comment,
     author: existing?.author ?? input.author,
     assignee: existing?.assignee,
@@ -1136,8 +1163,11 @@ export function upsertRotate(
 
 export type RotatePreview = {
   pathKey: string;
-  axisPathKey: string;
-  axisDirection: RotateAxisDirection;
+  axisMode: RotateAxisMode;
+  axisPathKey: string | null;
+  axisDirection: RotateAxisDirection | null;
+  pivotWorld: [number, number, number] | null;
+  axisVectorWorld: [number, number, number] | null;
   angleRad: number;
 };
 
@@ -1152,8 +1182,11 @@ export function toRotatePreviews(
     )
     .map((annotation) => ({
       pathKey: annotation.target.referencePathKey,
+      axisMode: annotation.axisMode,
       axisPathKey: annotation.axisPathKey,
       axisDirection: annotation.axisDirection,
+      pivotWorld: annotation.pivotWorld,
+      axisVectorWorld: annotation.axisVectorWorld,
       angleRad: annotation.angleRad,
     }));
 }

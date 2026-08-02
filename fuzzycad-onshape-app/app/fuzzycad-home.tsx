@@ -6,7 +6,7 @@ import {
   getObjectDisplayName,
 } from "./lib/uncertainty/sizeCandidateSelection";
 import { useSearchParams } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import styles from "./fuzzycad-home.module.css";
 import FuzzyCADSidebar from "./components/FuzzyCADSidebar";
 import DevPanel from "./components/DevPanel";
@@ -17,6 +17,7 @@ import type {
   MeshGraphNode,
   MoveDelta,
   RolePreviewPlan,
+  RotateRolePlan,
 } from "./components/FuzzyCADGeometryViewer";
 import { usePartGraph } from "./hooks/usePartGraph";
 import { getLinkedGroup } from "./lib/partGraph";
@@ -211,10 +212,19 @@ export default function FuzzyCADHome() {
   const [rotateFirstPathKey, setRotateFirstPathKey] = useState<string | null>(
     null,
   );
-  const [activeRotatePlan, setActiveRotatePlan] = useState<{
-    pathKey: string;
-    axisPathKey: string;
-  } | null>(null);
+  // "Rotate (custom axis)" tool: click the part to rotate, then two points
+  // directly in the 3D view — the line through them (first = pivot) becomes
+  // the axis, for when there's no second object to borrow a pivot from.
+  const [rotateAxisTargetPathKey, setRotateAxisTargetPathKey] = useState<
+    string | null
+  >(null);
+  const [rotateAxisFirstPoint, setRotateAxisFirstPoint] = useState<
+    [number, number, number] | null
+  >(null);
+  const lastWorldPointRef = useRef<[number, number, number] | null>(null);
+
+  const [activeRotatePlan, setActiveRotatePlan] =
+    useState<RotateRolePlan | null>(null);
   const [rotateAxisDirection, setRotateAxisDirection] =
     useState<RotateAxisDirection>("y");
   const [rotateAngleRad, setRotateAngleRad] = useState(0);
@@ -379,8 +389,14 @@ export default function FuzzyCADHome() {
       return [rotateFirstPathKey];
     }
 
+    if (rotateAxisTargetPathKey) {
+      return [rotateAxisTargetPathKey];
+    }
+
     if (activeRotatePlan) {
-      return [activeRotatePlan.pathKey, activeRotatePlan.axisPathKey];
+      return activeRotatePlan.axisMode === "object"
+        ? [activeRotatePlan.pathKey, activeRotatePlan.axisPathKey]
+        : [activeRotatePlan.pathKey];
     }
 
     return lassoPathKeys;
@@ -390,6 +406,7 @@ export default function FuzzyCADHome() {
     heightCandidatePathKeys,
     distanceFirstPathKey,
     rotateFirstPathKey,
+    rotateAxisTargetPathKey,
     activeRotatePlan,
     lassoPathKeys,
   ]);
@@ -432,6 +449,8 @@ export default function FuzzyCADHome() {
     setScaleFactor(1);
     setDistanceFirstPathKey(null);
     setRotateFirstPathKey(null);
+    setRotateAxisTargetPathKey(null);
+    setRotateAxisFirstPoint(null);
     setActiveRotatePlan(null);
     setRotateAxisDirection("y");
     setRotateAngleRad(0);
@@ -1093,14 +1112,85 @@ export default function FuzzyCADHome() {
       return;
     }
 
-    setActiveRotatePlan({ pathKey: rotateFirstPathKey, axisPathKey: pathKey });
+    setActiveRotatePlan({
+      pathKey: rotateFirstPathKey,
+      axisMode: "object",
+      axisPathKey: pathKey,
+    });
     setRotateFirstPathKey(null);
     setRotateAxisDirection("y");
     setRotateAngleRad(0);
   }
 
+  function startRotateAxis() {
+    setActiveTool("rotateAxis");
+    resetSizeOperationState();
+    setLassoPathKeys([]);
+  }
+
+  /** Click routing while the "Rotate (custom axis)" tool is active: first
+   * click picks the part to rotate, then two clicks in the 3D view (on any
+   * geometry) place the two points whose line becomes the rotation axis —
+   * the first point is the pivot. */
+  function handleRotateAxisPick(pathKey: string | null) {
+    if (!pathKey || activeRotatePlan) {
+      return;
+    }
+
+    const worldPoint = lastWorldPointRef.current;
+
+    if (!worldPoint) {
+      return;
+    }
+
+    setHighlightedPathKey(pathKey);
+
+    if (!rotateAxisTargetPathKey) {
+      setRotateAxisTargetPathKey(pathKey);
+      return;
+    }
+
+    if (!rotateAxisFirstPoint) {
+      setRotateAxisFirstPoint(worldPoint);
+      return;
+    }
+
+    const axisVectorRaw: [number, number, number] = [
+      worldPoint[0] - rotateAxisFirstPoint[0],
+      worldPoint[1] - rotateAxisFirstPoint[1],
+      worldPoint[2] - rotateAxisFirstPoint[2],
+    ];
+    const length = Math.sqrt(
+      axisVectorRaw[0] ** 2 + axisVectorRaw[1] ** 2 + axisVectorRaw[2] ** 2,
+    );
+
+    if (length < 1e-6) {
+      // Same point clicked twice (or too close to tell apart) — no axis
+      // direction to derive. Stay on this step and let them click again.
+      return;
+    }
+
+    const axisVectorWorld: [number, number, number] = [
+      axisVectorRaw[0] / length,
+      axisVectorRaw[1] / length,
+      axisVectorRaw[2] / length,
+    ];
+
+    setActiveRotatePlan({
+      pathKey: rotateAxisTargetPathKey,
+      axisMode: "custom",
+      pivotWorld: rotateAxisFirstPoint,
+      axisVectorWorld,
+    });
+    setRotateAxisTargetPathKey(null);
+    setRotateAxisFirstPoint(null);
+    setRotateAngleRad(0);
+  }
+
   function cancelRotate() {
     setRotateFirstPathKey(null);
+    setRotateAxisTargetPathKey(null);
+    setRotateAxisFirstPoint(null);
     setActiveRotatePlan(null);
     setRotateAxisDirection("y");
     setRotateAngleRad(0);
@@ -1114,14 +1204,27 @@ export default function FuzzyCADHome() {
 
     const degrees = (rotateAngleRad * 180) / Math.PI;
 
-    upsertRotateMark({
-      pathKey: activeRotatePlan.pathKey,
-      axisPathKey: activeRotatePlan.axisPathKey,
-      axisDirection: rotateAxisDirection,
-      angleRad: rotateAngleRad,
-      previousValueLabel: "current orientation",
-      proposedValueLabel: `${Math.round(degrees)}° around ${rotateAxisDirection.toUpperCase()}`,
-    });
+    if (activeRotatePlan.axisMode === "object") {
+      upsertRotateMark({
+        pathKey: activeRotatePlan.pathKey,
+        axisMode: "object",
+        axisPathKey: activeRotatePlan.axisPathKey,
+        axisDirection: rotateAxisDirection,
+        angleRad: rotateAngleRad,
+        previousValueLabel: "current orientation",
+        proposedValueLabel: `${Math.round(degrees)}° around ${rotateAxisDirection.toUpperCase()}`,
+      });
+    } else {
+      upsertRotateMark({
+        pathKey: activeRotatePlan.pathKey,
+        axisMode: "custom",
+        pivotWorld: activeRotatePlan.pivotWorld,
+        axisVectorWorld: activeRotatePlan.axisVectorWorld,
+        angleRad: rotateAngleRad,
+        previousValueLabel: "current orientation",
+        proposedValueLabel: `${Math.round(degrees)}° around custom axis`,
+      });
+    }
 
     setActiveRotatePlan(null);
     setRotateAngleRad(0);
@@ -1301,8 +1404,17 @@ if (result.ok && result.state) {
       return;
     }
 
+    if (activeTool === "rotateAxis" && !activeRotatePlan) {
+      handleRotateAxisPick(pathKey);
+      return;
+    }
+
     setHighlightedPathKey(pathKey);
     leaveUncertaintyEditingState();
+  }
+
+  function handleViewerSelectedWorldPoint(point: { x: number; y: number; z: number } | null) {
+    lastWorldPointRef.current = point ? [point.x, point.y, point.z] : null;
   }
 
   function handleAssemblyChange(assemblyId: string) {
@@ -1410,6 +1522,7 @@ if (result.ok && result.state) {
           onObjectSummaries={setObjectSummaries}
           onSelectedNode={setSelectedMeshNode}
           onSelectedPathKey={handleViewerSelectedPathKey}
+          onSelectedWorldPoint={handleViewerSelectedWorldPoint}
           onObjectLassoSelection={(pathKeys) => {
             setLassoPathKeys(pathKeys);
             setHighlightedPathKey(pathKeys[0] ?? null);
@@ -1448,6 +1561,11 @@ if (result.ok && result.state) {
 
             if (tool === "rotate") {
               startRotate();
+              return;
+            }
+
+            if (tool === "rotateAxis") {
+              startRotateAxis();
               return;
             }
 
@@ -1571,25 +1689,47 @@ if (result.ok && result.state) {
           </div>
         ) : null}
 
-        {activeTool === "rotate" && activeRotatePlan ? (
+        {activeTool === "rotateAxis" && !activeRotatePlan ? (
+          <div className={styles.manipulationReadout}>
+            <span className={styles.manipulationValue}>
+              {!rotateAxisTargetPathKey
+                ? "Click the part to rotate"
+                : !rotateAxisFirstPoint
+                  ? "Click a point to be the pivot..."
+                  : "Click a second point to set the axis direction..."}
+            </span>
+            <button
+              type="button"
+              className={styles.manipulationResetButton}
+              onClick={cancelRotate}
+            >
+              Cancel
+            </button>
+          </div>
+        ) : null}
+
+        {(activeTool === "rotate" || activeTool === "rotateAxis") &&
+        activeRotatePlan ? (
           <div className={styles.manipulationReadout}>
             <span className={styles.manipulationValue}>
               Rotate: {Math.round((rotateAngleRad * 180) / Math.PI)}°
             </span>
-            {(["x", "y", "z"] as const).map((axis) => (
-              <button
-                key={axis}
-                type="button"
-                className={`${styles.manipulationResetButton} ${
-                  rotateAxisDirection === axis
-                    ? styles.manipulationToggleActive
-                    : ""
-                }`}
-                onClick={() => setRotateAxisDirection(axis)}
-              >
-                {axis.toUpperCase()}
-              </button>
-            ))}
+            {activeRotatePlan.axisMode === "object"
+              ? (["x", "y", "z"] as const).map((axis) => (
+                  <button
+                    key={axis}
+                    type="button"
+                    className={`${styles.manipulationResetButton} ${
+                      rotateAxisDirection === axis
+                        ? styles.manipulationToggleActive
+                        : ""
+                    }`}
+                    onClick={() => setRotateAxisDirection(axis)}
+                  >
+                    {axis.toUpperCase()}
+                  </button>
+                ))
+              : null}
             <button
               type="button"
               className={styles.manipulationResetButton}

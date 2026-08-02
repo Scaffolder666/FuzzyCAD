@@ -146,17 +146,27 @@ export type ScalePreview = {
   factor: number;
 };
 
-/** A single-object-plus-axis-anchor plan for the "Rotate" tool's active drag session. */
-export type RotateRolePlan = {
-  pathKey: string;
-  axisPathKey: string;
-};
+/** Which of the object's or a custom point's coordinate frame the Rotate axis comes from — structurally the same as document.ts's RotateAxisMode. */
+export type RotateAxisMode = "object" | "custom";
+
+/** A plan for the "Rotate" tool's active drag session — either borrows a pivot from another object ("object" mode) or from two picked points ("custom" mode). */
+export type RotateRolePlan =
+  | { pathKey: string; axisMode: "object"; axisPathKey: string }
+  | {
+      pathKey: string;
+      axisMode: "custom";
+      pivotWorld: [number, number, number];
+      axisVectorWorld: [number, number, number];
+    };
 
 /** A saved rotate proposal's axis + angle, structurally the same shape as document.ts's. */
 export type RotatePreview = {
   pathKey: string;
-  axisPathKey: string;
-  axisDirection: RotateAxisDirection;
+  axisMode: RotateAxisMode;
+  axisPathKey: string | null;
+  axisDirection: RotateAxisDirection | null;
+  pivotWorld: [number, number, number] | null;
+  axisVectorWorld: [number, number, number] | null;
   angleRad: number;
 };
 
@@ -250,6 +260,8 @@ type FuzzyCADGeometryViewerProps = {
   onObjectSummaries?: (summaries: AxialStretchObjectSummary[]) => void;
   onSelectedNode?: (node: MeshGraphNode | null) => void;
   onSelectedPathKey?: (pathKey: string | null) => void;
+  /** World-space point of the last click on real geometry — used by tools that need a precise 3D pick (e.g. Rotate's custom-axis mode) rather than just an object's path key. */
+  onSelectedWorldPoint?: (point: THREE.Vector3 | null) => void;
   onObjectLassoSelection?: (pathKeys: string[]) => void;
   onManipulationChange?: (value: number) => void;
 };
@@ -309,6 +321,47 @@ function isPathKeysUnderInspection(
   }
 
   return false;
+}
+
+/**
+ * Resolves a Rotate mark's pivot + axis into world-space vectors regardless
+ * of which mode defined it: "object" mode borrows another object's bbox
+ * center + a world-aligned direction; "custom" mode already has both baked
+ * in from the two points that were clicked.
+ */
+function resolveRotateFrame(
+  input:
+    | {
+        axisMode: "object";
+        axisPathKey: string;
+        axisDirection: RotateAxisDirection;
+      }
+    | {
+        axisMode: "custom";
+        pivotWorld: [number, number, number];
+        axisVectorWorld: [number, number, number];
+      },
+  objectSummaries: AxialStretchObjectSummary[],
+): { pivotWorld: THREE.Vector3; axisWorld: THREE.Vector3 } | null {
+  if (input.axisMode === "custom") {
+    return {
+      pivotWorld: new THREE.Vector3(...input.pivotWorld),
+      axisWorld: new THREE.Vector3(...input.axisVectorWorld).normalize(),
+    };
+  }
+
+  const axisSummary = objectSummaries.find(
+    (item) => item.pathKey === input.axisPathKey,
+  );
+
+  if (!axisSummary) {
+    return null;
+  }
+
+  return {
+    pivotWorld: new THREE.Vector3(...axisSummary.aabbCenterWorld),
+    axisWorld: getRotateAxisUnitVector(input.axisDirection),
+  };
 }
 
 function getLowerEnd(summary: AxialStretchObjectSummary) {
@@ -924,6 +977,7 @@ function Model({
   onObjectSummaries,
   onSelectedNode,
   onSelectedPathKey,
+  onSelectedWorldPoint,
   onObjectLassoSelection,
   onManipulationChange,
   onManipulationDragStateChange,
@@ -971,6 +1025,7 @@ function Model({
   onObjectSummaries?: (summaries: AxialStretchObjectSummary[]) => void;
   onSelectedNode?: (node: MeshGraphNode | null) => void;
   onSelectedPathKey?: (pathKey: string | null) => void;
+  onSelectedWorldPoint?: (point: THREE.Vector3 | null) => void;
   onObjectLassoSelection?: (pathKeys: string[]) => void;
   onManipulationChange?: (value: number) => void;
   onManipulationDragStateChange?: (dragging: boolean) => void;
@@ -1600,59 +1655,73 @@ function Model({
   }, [persistentScalePreviews, objectSummaries]);
 
   // Active "Rotate" drag session — the target spins around a pivot borrowed
-  // from a DIFFERENT object (the axis anchor) instead of its own center.
+  // either from a DIFFERENT object (object mode) or from two picked points
+  // (custom mode) instead of its own center.
   const activeRotatePathKey = rotatePlan?.pathKey ?? null;
-  const activeRotateAxisPathKey = rotatePlan?.axisPathKey ?? null;
   const activeRotateTargetSummary = useMemo(
     () =>
       objectSummaries.find((item) => item.pathKey === activeRotatePathKey) ??
       null,
     [objectSummaries, activeRotatePathKey],
   );
-  const activeRotateAxisSummary = useMemo(
-    () =>
-      objectSummaries.find((item) => item.pathKey === activeRotateAxisPathKey) ??
-      null,
-    [objectSummaries, activeRotateAxisPathKey],
-  );
 
-  // Pivot is the axis anchor's bbox center; the handle sits out along the
-  // chosen world axis at roughly the same distance as the rotated target,
-  // so it reads as "belonging to" that target instead of floating at a
-  // fixed, unrelated length.
-  const activeRotateFrame = useMemo(() => {
-    if (!activeRotateAxisSummary || !activeRotateTargetSummary) {
+  const activeRotateResolvedFrame = useMemo(() => {
+    if (!rotatePlan) {
       return null;
     }
 
-    const pivotWorld = new THREE.Vector3(
-      ...activeRotateAxisSummary.aabbCenterWorld,
+    if (rotatePlan.axisMode === "custom") {
+      return resolveRotateFrame(
+        {
+          axisMode: "custom",
+          pivotWorld: rotatePlan.pivotWorld,
+          axisVectorWorld: rotatePlan.axisVectorWorld,
+        },
+        objectSummaries,
+      );
+    }
+
+    return resolveRotateFrame(
+      {
+        axisMode: "object",
+        axisPathKey: rotatePlan.axisPathKey,
+        axisDirection: rotateAxisDirection,
+      },
+      objectSummaries,
     );
+  }, [rotatePlan, rotateAxisDirection, objectSummaries]);
+
+  // The handle sits out along the axis at roughly the same distance as the
+  // rotated target, so it reads as "belonging to" that target instead of
+  // floating at a fixed, unrelated length.
+  const activeRotateFrame = useMemo(() => {
+    if (!activeRotateResolvedFrame || !activeRotateTargetSummary) {
+      return null;
+    }
+
     const targetCenterWorld = new THREE.Vector3(
       ...activeRotateTargetSummary.aabbCenterWorld,
     );
-    const axisWorld = getRotateAxisUnitVector(rotateAxisDirection);
     const referenceLength = Math.max(
-      pivotWorld.distanceTo(targetCenterWorld),
+      activeRotateResolvedFrame.pivotWorld.distanceTo(targetCenterWorld),
       0.05,
     );
 
-    return { pivotWorld, axisWorld, referenceLength };
-  }, [activeRotateAxisSummary, activeRotateTargetSummary, rotateAxisDirection]);
+    return { ...activeRotateResolvedFrame, referenceLength };
+  }, [activeRotateResolvedFrame, activeRotateTargetSummary]);
 
   const rotatePreviewSession = useMemo(() => {
-    if (!rotatePlan) {
+    if (!rotatePlan || !activeRotateResolvedFrame) {
       return null;
     }
 
     return createRotatePreviewSession(
       scene,
-      objectSummaries,
       rotatePlan.pathKey,
-      rotatePlan.axisPathKey,
-      rotateAxisDirection,
+      activeRotateResolvedFrame.pivotWorld,
+      activeRotateResolvedFrame.axisWorld,
     );
-  }, [scene, objectSummaries, rotatePlan, rotateAxisDirection]);
+  }, [scene, rotatePlan, activeRotateResolvedFrame]);
 
   useEffect(() => {
     if (!rotatePreviewSession) {
@@ -1702,12 +1771,34 @@ function Model({
   useEffect(() => {
     const entries = persistentRotatePreviews
       .map((preview) => {
+        const frame =
+          preview.axisMode === "custom"
+            ? resolveRotateFrame(
+                {
+                  axisMode: "custom",
+                  pivotWorld: preview.pivotWorld!,
+                  axisVectorWorld: preview.axisVectorWorld!,
+                },
+                objectSummaries,
+              )
+            : resolveRotateFrame(
+                {
+                  axisMode: "object",
+                  axisPathKey: preview.axisPathKey!,
+                  axisDirection: preview.axisDirection!,
+                },
+                objectSummaries,
+              );
+
+        if (!frame) {
+          return null;
+        }
+
         const session = createRotatePreviewSession(
           scene,
-          objectSummaries,
           preview.pathKey,
-          preview.axisPathKey,
-          preview.axisDirection,
+          frame.pivotWorld,
+          frame.axisWorld,
         );
 
         if (!session) {
@@ -1719,7 +1810,10 @@ function Model({
         return {
           session,
           angleRad: preview.angleRad,
-          pathKeys: [preview.pathKey, preview.axisPathKey],
+          pathKeys:
+            preview.axisMode === "object" && preview.axisPathKey
+              ? [preview.pathKey, preview.axisPathKey]
+              : [preview.pathKey],
         };
       })
       .filter(
@@ -1801,27 +1895,48 @@ function Model({
       const targetSummary = objectSummaries.find(
         (item) => item.pathKey === preview.pathKey,
       );
-      const axisSummary = objectSummaries.find(
-        (item) => item.pathKey === preview.axisPathKey,
-      );
 
-      if (!targetSummary || !axisSummary) {
+      if (!targetSummary) {
         return [];
       }
 
-      const pivotWorld = new THREE.Vector3(...axisSummary.aabbCenterWorld);
+      const frame =
+        preview.axisMode === "custom"
+          ? resolveRotateFrame(
+              {
+                axisMode: "custom",
+                pivotWorld: preview.pivotWorld!,
+                axisVectorWorld: preview.axisVectorWorld!,
+              },
+              objectSummaries,
+            )
+          : resolveRotateFrame(
+              {
+                axisMode: "object",
+                axisPathKey: preview.axisPathKey!,
+                axisDirection: preview.axisDirection!,
+              },
+              objectSummaries,
+            );
+
+      if (!frame) {
+        return [];
+      }
+
       const targetCenterWorld = new THREE.Vector3(
         ...targetSummary.aabbCenterWorld,
       );
-      const axisWorld = getRotateAxisUnitVector(preview.axisDirection);
       const rotation = new THREE.Quaternion().setFromAxisAngle(
-        axisWorld,
+        frame.axisWorld,
         preview.angleRad,
       );
-      const rotatedCenter = pivotWorld
+      const rotatedCenter = frame.pivotWorld
         .clone()
         .add(
-          targetCenterWorld.clone().sub(pivotWorld).applyQuaternion(rotation),
+          targetCenterWorld
+            .clone()
+            .sub(frame.pivotWorld)
+            .applyQuaternion(rotation),
         );
 
       const halfSize = new THREE.Vector3(
@@ -1850,25 +1965,47 @@ function Model({
       const targetSummary = objectSummaries.find(
         (item) => item.pathKey === preview.pathKey,
       );
-      const axisSummary = objectSummaries.find(
-        (item) => item.pathKey === preview.axisPathKey,
-      );
 
-      if (!targetSummary || !axisSummary) {
+      if (!targetSummary) {
         return [];
       }
 
-      const pivotWorld = new THREE.Vector3(...axisSummary.aabbCenterWorld);
+      const frame =
+        preview.axisMode === "custom"
+          ? resolveRotateFrame(
+              {
+                axisMode: "custom",
+                pivotWorld: preview.pivotWorld!,
+                axisVectorWorld: preview.axisVectorWorld!,
+              },
+              objectSummaries,
+            )
+          : resolveRotateFrame(
+              {
+                axisMode: "object",
+                axisPathKey: preview.axisPathKey!,
+                axisDirection: preview.axisDirection!,
+              },
+              objectSummaries,
+            );
+
+      if (!frame) {
+        return [];
+      }
+
       const targetCenterWorld = new THREE.Vector3(
         ...targetSummary.aabbCenterWorld,
       );
-      const radius = Math.max(pivotWorld.distanceTo(targetCenterWorld), 0.05);
+      const radius = Math.max(
+        frame.pivotWorld.distanceTo(targetCenterWorld),
+        0.05,
+      );
 
       return [
         {
           key: preview.pathKey,
-          pivotWorld,
-          axisWorld: getRotateAxisUnitVector(preview.axisDirection),
+          pivotWorld: frame.pivotWorld,
+          axisWorld: frame.axisWorld,
           radius,
           angleRad: preview.angleRad,
         },
@@ -2306,10 +2443,11 @@ function Model({
   // reads as "part of this flag" even though it never moves itself.
   const rotateMarkerTargets = useMemo<RotateMarkerTarget[]>(
     () =>
-      (rotatePreviews ?? []).flatMap((preview) => [
-        { pathKey: preview.pathKey },
-        { pathKey: preview.axisPathKey },
-      ]),
+      (rotatePreviews ?? []).flatMap((preview) =>
+        preview.axisMode === "object" && preview.axisPathKey
+          ? [{ pathKey: preview.pathKey }, { pathKey: preview.axisPathKey }]
+          : [{ pathKey: preview.pathKey }],
+      ),
     [rotatePreviews],
   );
 
@@ -2628,6 +2766,9 @@ function Model({
     const selectedPathKey = findFuzzyPathKey(selectedObject);
 
     onSelectedNode?.(selectedNode);
+    // Fires before onSelectedPathKey so a handler reacting to the path key
+    // can synchronously read the matching world point from this same click.
+    onSelectedWorldPoint?.(event.point.clone());
     onSelectedPathKey?.(selectedPathKey);
   }
 
@@ -2984,6 +3125,7 @@ export default function FuzzyCADGeometryViewer({
   onObjectSummaries,
   onSelectedNode,
   onSelectedPathKey,
+  onSelectedWorldPoint,
   onObjectLassoSelection,
   onManipulationChange,
 }: FuzzyCADGeometryViewerProps) {
@@ -3090,6 +3232,7 @@ export default function FuzzyCADGeometryViewer({
                   onObjectSummaries={onObjectSummaries}
                   onSelectedNode={onSelectedNode}
                   onSelectedPathKey={onSelectedPathKey}
+                  onSelectedWorldPoint={onSelectedWorldPoint}
                   onObjectLassoSelection={onObjectLassoSelection}
                   onManipulationChange={onManipulationChange}
                   onManipulationDragStateChange={setManipulationDragging}
