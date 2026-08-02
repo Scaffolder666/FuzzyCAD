@@ -55,6 +55,8 @@ import {
 import {
   findSizeAnnotationForPathKey,
   makeSizeAnnotationId,
+  type DistanceMoveMode,
+  type FuzzyCADUncertaintyAnnotation,
   type ProposalAxisIndex,
   type ProposalAxisMode,
   type SizeUncertaintyAnnotation,
@@ -1065,6 +1067,47 @@ async function saveProjectStateToOnshape() {
 }
 
 
+// Fills in fields that were added to the schema after some annotations were
+// already saved to Onshape project storage — old saved records genuinely
+// lack them at runtime (TypeScript's "required" doesn't protect data that
+// predates the field), so any direct property access on them would throw.
+function normalizeLoadedAnnotation(
+  raw: unknown,
+): FuzzyCADUncertaintyAnnotation | null {
+  if (!raw || typeof raw !== "object") {
+    return null;
+  }
+
+  const annotation = raw as Record<string, unknown> & { type?: unknown };
+
+  if (annotation.type === "size") {
+    return {
+      ...annotation,
+      resolvedAxisValues:
+        (annotation.resolvedAxisValues as
+          | Partial<Record<ConfidenceAxis, number>>
+          | undefined) ?? {},
+    } as SizeUncertaintyAnnotation;
+  }
+
+  if (annotation.type === "distance") {
+    return {
+      ...annotation,
+      confidence:
+        (annotation.confidence as ConfidenceLevel | null | undefined) ?? null,
+      direction:
+        (annotation.direction as ConfidenceDirection | null | undefined) ??
+        null,
+      resolvedDistanceMeters:
+        (annotation.resolvedDistanceMeters as number | null | undefined) ??
+        null,
+      moveMode: (annotation.moveMode as DistanceMoveMode | undefined) ?? "moveB",
+    } as unknown as FuzzyCADUncertaintyAnnotation;
+  }
+
+  return annotation as unknown as FuzzyCADUncertaintyAnnotation;
+}
+
 function normalizeLoadedUncertaintyDocument(state: unknown) {
   if (!state || typeof state !== "object") {
     return null;
@@ -1078,10 +1121,17 @@ function normalizeLoadedUncertaintyDocument(state: unknown) {
     return null;
   }
 
+  const annotations = record.annotations
+    .map((annotation) => normalizeLoadedAnnotation(annotation))
+    .filter(
+      (annotation): annotation is FuzzyCADUncertaintyAnnotation =>
+        annotation !== null,
+    );
+
   return {
     version: "0.1" as const,
     source: currentUncertaintySource,
-    annotations: record.annotations,
+    annotations,
   };
 }
 

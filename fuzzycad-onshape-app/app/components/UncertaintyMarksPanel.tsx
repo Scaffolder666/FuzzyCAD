@@ -234,7 +234,7 @@ function SizeCard({
         <SizeAxisAnswer
           key={axis}
           axis={axis}
-          resolvedMeters={annotation.resolvedAxisValues[axis]}
+          resolvedMeters={annotation.resolvedAxisValues?.[axis]}
           onAnswer={(valueMm) => onAnswerAxis(axis, valueMm)}
         />
       ))}
