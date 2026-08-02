@@ -94,7 +94,6 @@ export default function DimensionRuler({
       <Html
         position={labelPosition}
         center
-        distanceFactor={7}
         zIndexRange={[40, 0]}
         style={{ pointerEvents: "none" }}
       >
