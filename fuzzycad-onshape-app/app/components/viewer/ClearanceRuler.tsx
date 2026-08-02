@@ -58,17 +58,20 @@ export default function ClearanceRuler({
       .crossVectors(axis, reference)
       .normalize();
 
-    const arrowSize = Math.min(Math.max(length * 0.18, 0.0015), length * 0.4);
+    const arrowSize = Math.min(Math.max(length * 0.28, 0.003), length * 0.45);
 
     return {
-      // Both arrows point inward, toward each other, like a caliper's "|<->|".
-      arrowA: { tip: fromWorld, direction: axis, across, size: arrowSize },
-      arrowB: {
-        tip: toWorld,
+      // Both arrows point outward, tips touching A and B respectively —
+      // the standard "|<----->|" dimension-line convention. The arrowhead
+      // base sits *inside* the span (toward the opposite end) so the
+      // triangle is drawn on top of the ruler line, not off past the tip.
+      arrowA: {
+        tip: fromWorld,
         direction: axis.clone().negate(),
         across,
         size: arrowSize,
       },
+      arrowB: { tip: toWorld, direction: axis, across, size: arrowSize },
       labelPosition: fromWorld.clone().lerp(toWorld, 0.5),
     };
   }, [fromWorld, toWorld]);
