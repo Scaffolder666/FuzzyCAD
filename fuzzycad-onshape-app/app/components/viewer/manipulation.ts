@@ -44,10 +44,20 @@ export function translateObjectsWorld(
     if (parent) {
       parent.updateMatrixWorld(true);
 
-      const parentInverse = new THREE.Matrix4()
-        .copy(parent.matrixWorld)
-        .invert();
-      const localDelta = worldDelta.clone().transformDirection(parentInverse);
+      // Vector3.transformDirection() normalizes its result, which silently
+      // discards worldDelta's magnitude — every call would move the object
+      // by a fixed unit distance regardless of how far it was dragged, with
+      // only the direction varying, which (with several axes combined) looks
+      // like the object swinging around a pivot instead of translating.
+      // Rotating by the parent's inverse orientation (no normalize) instead
+      // preserves the true distance.
+      const parentWorldQuaternion = new THREE.Quaternion();
+
+      parent.getWorldQuaternion(parentWorldQuaternion);
+
+      const localDelta = worldDelta
+        .clone()
+        .applyQuaternion(parentWorldQuaternion.invert());
 
       object.position.add(localDelta);
     } else {
