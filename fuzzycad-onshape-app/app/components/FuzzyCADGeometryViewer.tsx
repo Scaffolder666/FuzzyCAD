@@ -272,9 +272,9 @@ const PROPOSAL_ACCENT_COLOR_MUTED = "#fdba74";
 const MOVE_ACCENT_COLOR = "#7c3aed";
 const MOVE_ACCENT_COLOR_MUTED = "#c4b5fd";
 
-// How long one full there-and-back cycle of the saved-move loop animation
-// takes, in seconds.
-const MOVE_LOOP_PERIOD_SECONDS = 2.6;
+// How long one full there-and-back cycle of a saved-preview loop animation
+// (move ghosts, propose/stretch ghosts) takes, in seconds.
+const PREVIEW_LOOP_PERIOD_SECONDS = 2.6;
 
 const CONFIDENCE_ORDER: ConfidenceLevel[] = ["high", "medium", "low"];
 
@@ -926,8 +926,15 @@ function Model({
     });
   }, [persistentProposalPreviews, objectSummaries]);
 
+  // Saved (non-active) proposals loop back and forth between their original
+  // size and the proposed stretch, same as saved moves, so "this dimension
+  // was proposed to change" reads at a glance.
+  const persistentProposalLoopRef = useRef<
+    { session: AxialStretchPreviewSession; deltaMeters: number }[]
+  >([]);
+
   useEffect(() => {
-    const sessions = persistentProposalPreviews
+    const entries = persistentProposalPreviews
       .map((preview) => {
         const session = createAxialStretchPreviewSession(
           scene,
@@ -946,29 +953,53 @@ function Model({
           return null;
         }
 
-        updateAxialStretchPreviewSession(session, preview.deltaMeters);
         scene.add(session.group);
 
-        return session;
+        return { session, deltaMeters: preview.deltaMeters };
       })
       .filter(
-        (session): session is AxialStretchPreviewSession => session !== null,
+        (
+          entry,
+        ): entry is {
+          session: AxialStretchPreviewSession;
+          deltaMeters: number;
+        } => entry !== null,
       );
 
-    if (sessions.length === 0) {
+    persistentProposalLoopRef.current = entries;
+
+    if (entries.length === 0) {
       return;
     }
 
     invalidate();
 
     return () => {
-      for (const session of sessions) {
-        disposeAxialStretchPreviewSession(session);
+      persistentProposalLoopRef.current = [];
+
+      for (const entry of entries) {
+        disposeAxialStretchPreviewSession(entry.session);
       }
 
       invalidate();
     };
   }, [scene, objectSummaries, persistentProposalPreviews, invalidate]);
+
+  useFrame(({ clock }) => {
+    const entries = persistentProposalLoopRef.current;
+
+    if (entries.length === 0) {
+      return;
+    }
+
+    const phase =
+      (clock.elapsedTime / PREVIEW_LOOP_PERIOD_SECONDS) * Math.PI * 2;
+    const t = (Math.sin(phase) + 1) / 2;
+
+    for (const entry of entries) {
+      updateAxialStretchPreviewSession(entry.session, entry.deltaMeters * t);
+    }
+  });
 
   // Active "Move" drag session — a rigid (non-deforming) translate of the
   // target plus whichever mate-linked neighbors the user chose to include.
@@ -1089,7 +1120,7 @@ function Model({
     }
 
     const phase =
-      (clock.elapsedTime / MOVE_LOOP_PERIOD_SECONDS) * Math.PI * 2;
+      (clock.elapsedTime / PREVIEW_LOOP_PERIOD_SECONDS) * Math.PI * 2;
     const t = (Math.sin(phase) + 1) / 2;
 
     for (const entry of entries) {
