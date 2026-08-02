@@ -144,6 +144,9 @@ type FuzzyCADGeometryViewerProps = {
   movePreviews?: MovePreview[];
   moveDelta?: MoveDelta;
   onMoveDeltaChange?: (delta: MoveDelta) => void;
+  /** Path key currently under the mouse in the 3D view, for linking to the marks panel. */
+  hoveredPathKey?: string | null;
+  onHoveredPathKeyChange?: (pathKey: string | null) => void;
   onMeshGraph?: (nodes: MeshGraphNode[]) => void;
   onObjectSummaries?: (summaries: AxialStretchObjectSummary[]) => void;
   onSelectedNode?: (node: MeshGraphNode | null) => void;
@@ -734,6 +737,8 @@ function Model({
   movePreviews,
   moveDelta = { x: 0, y: 0, z: 0 },
   onMoveDeltaChange,
+  hoveredPathKey,
+  onHoveredPathKeyChange,
   enableManipulationHandles = true,
   lassoPolygon,
 
@@ -766,6 +771,8 @@ function Model({
   movePreviews?: MovePreview[];
   moveDelta?: MoveDelta;
   onMoveDeltaChange?: (delta: MoveDelta) => void;
+  hoveredPathKey?: string | null;
+  onHoveredPathKeyChange?: (pathKey: string | null) => void;
   enableManipulationHandles?: boolean;
   lassoPolygon?: ScreenPoint[] | null;
   onMeshGraph?: (nodes: MeshGraphNode[]) => void;
@@ -1116,8 +1123,9 @@ function Model({
         ? selectedPathKeys
         : highlightedPathKey;
 
-    applyPathHighlight(scene, activeHighlights);
-  }, [scene, highlightedPathKey, selectedPathKeys]);
+    applyPathHighlight(scene, activeHighlights, hoveredPathKey);
+    invalidate();
+  }, [scene, highlightedPathKey, selectedPathKeys, hoveredPathKey, invalidate]);
 
   // Every open proposal's target object gets the same hatched-marker
   // treatment Size marks get (see applyFuzzyConfidence), so it reads as
@@ -1459,11 +1467,42 @@ function Model({
     onSelectedPathKey?.(selectedPathKey);
   }
 
+  const hoveredPathKeyRef = useRef<string | null>(null);
+
+  function handlePointerOver(event: ThreeEvent<PointerEvent>) {
+    event.stopPropagation();
+
+    const pathKey = findFuzzyPathKey(event.object);
+
+    if (pathKey === hoveredPathKeyRef.current) {
+      return;
+    }
+
+    hoveredPathKeyRef.current = pathKey;
+    onHoveredPathKeyChange?.(pathKey);
+  }
+
+  function handlePointerOut(event: ThreeEvent<PointerEvent>) {
+    event.stopPropagation();
+
+    if (hoveredPathKeyRef.current === null) {
+      return;
+    }
+
+    hoveredPathKeyRef.current = null;
+    onHoveredPathKeyChange?.(null);
+  }
+
   const manipulationValueOrZero = manipulationValue ?? 0;
 
   return (
     <>
-      <primitive object={scene} onPointerDown={handlePointerDown} />
+      <primitive
+        object={scene}
+        onPointerDown={handlePointerDown}
+        onPointerOver={handlePointerOver}
+        onPointerOut={handlePointerOut}
+      />
 
       {roleBadges.map((badge) => (
         <RoleBadge
@@ -1629,6 +1668,8 @@ export default function FuzzyCADGeometryViewer({
   movePreviews,
   moveDelta,
   onMoveDeltaChange,
+  hoveredPathKey,
+  onHoveredPathKeyChange,
   enableManipulationHandles = true,
   onMeshGraph,
   onObjectSummaries,
@@ -1699,6 +1740,8 @@ export default function FuzzyCADGeometryViewer({
                   movePreviews={movePreviews}
                   moveDelta={moveDelta}
                   onMoveDeltaChange={onMoveDeltaChange}
+                  hoveredPathKey={hoveredPathKey}
+                  onHoveredPathKeyChange={onHoveredPathKeyChange}
                   enableManipulationHandles={enableManipulationHandles}
                   lassoPolygon={lassoPolygon}
                   onMeshGraph={onMeshGraph}

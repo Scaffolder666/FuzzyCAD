@@ -119,6 +119,7 @@ export default function FuzzyCADHome() {
   const [highlightedPathKey, setHighlightedPathKey] = useState<string | null>(
     null,
   );
+  const [hoveredPathKey, setHoveredPathKey] = useState<string | null>(null);
   const [lassoPathKeys, setLassoPathKeys] = useState<string[]>([]);
 
   const { placements, partTree, resetPlacementTree } = useAssemblyPlacementTree(
@@ -1055,6 +1056,8 @@ if (result.ok && result.state) {
           movePreviews={movePreviews}
           moveDelta={moveDelta}
           onMoveDeltaChange={setMoveDelta}
+          hoveredPathKey={hoveredPathKey}
+          onHoveredPathKeyChange={setHoveredPathKey}
           enableManipulationHandles={
             !heightPreviewOpen &&
             (Boolean(confirmedHeightPlan) ||
@@ -1179,6 +1182,7 @@ if (result.ok && result.state) {
         <UncertaintyMarksPanel
           document={uncertaintyDocumentWithCurrentSource}
           selectedAnnotationId={selectedUncertaintyId}
+          hoveredPathKey={hoveredPathKey}
           onSelectAnnotation={selectUncertaintyCard}
           onEditSizeAnnotation={editSizeUncertaintyCard}
           onDeleteAnnotation={deleteUncertaintyCard}

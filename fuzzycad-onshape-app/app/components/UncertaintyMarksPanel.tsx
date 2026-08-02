@@ -17,6 +17,8 @@ type FilterKey = "size" | "proposal" | "alternative";
 type UncertaintyMarksPanelProps = {
   document: FuzzyCADUncertaintyDocument;
   selectedAnnotationId: string | null;
+  /** Path key currently under the mouse in the 3D view. */
+  hoveredPathKey?: string | null;
   onSelectAnnotation: (annotationId: string | null) => void;
   onEditSizeAnnotation: (annotation: SizeUncertaintyAnnotation) => void;
   onDeleteAnnotation: (annotationId: string) => void;
@@ -80,6 +82,7 @@ function matchesFilter(
 function SizeCard({
   annotation,
   selected,
+  hovered,
   onSelect,
   onEdit,
   onDelete,
@@ -88,6 +91,7 @@ function SizeCard({
 }: {
   annotation: SizeUncertaintyAnnotation;
   selected: boolean;
+  hovered: boolean;
   onSelect: () => void;
   onEdit: () => void;
   onDelete: () => void;
@@ -98,7 +102,9 @@ function SizeCard({
 
   return (
     <article
-      className={`${styles.card} ${selected ? styles.cardSelected : ""}`}
+      className={`${styles.card} ${selected ? styles.cardSelected : ""} ${
+        hovered ? styles.cardHovered : ""
+      }`}
       onClick={onSelect}
     >
       <div className={styles.cardHeader}>
@@ -165,6 +171,7 @@ function SizeCard({
 function ProposalCard({
   annotation,
   selected,
+  hovered,
   onSelect,
   onDelete,
   onCommentChange,
@@ -172,6 +179,7 @@ function ProposalCard({
 }: {
   annotation: ProposalUncertaintyAnnotation;
   selected: boolean;
+  hovered: boolean;
   onSelect: () => void;
   onDelete: () => void;
   onCommentChange: (comment: string) => void;
@@ -179,7 +187,9 @@ function ProposalCard({
 }) {
   return (
     <article
-      className={`${styles.card} ${selected ? styles.cardSelected : ""}`}
+      className={`${styles.card} ${selected ? styles.cardSelected : ""} ${
+        hovered ? styles.cardHovered : ""
+      }`}
       onClick={onSelect}
     >
       <div className={styles.cardHeader}>
@@ -246,6 +256,7 @@ function ProposalCard({
 function MoveCard({
   annotation,
   selected,
+  hovered,
   onSelect,
   onDelete,
   onCommentChange,
@@ -253,6 +264,7 @@ function MoveCard({
 }: {
   annotation: MoveUncertaintyAnnotation;
   selected: boolean;
+  hovered: boolean;
   onSelect: () => void;
   onDelete: () => void;
   onCommentChange: (comment: string) => void;
@@ -260,7 +272,9 @@ function MoveCard({
 }) {
   return (
     <article
-      className={`${styles.card} ${selected ? styles.cardSelected : ""}`}
+      className={`${styles.card} ${selected ? styles.cardSelected : ""} ${
+        hovered ? styles.cardHovered : ""
+      }`}
       onClick={onSelect}
     >
       <div className={styles.cardHeader}>
@@ -325,6 +339,7 @@ function MoveCard({
 function AlternativeCard({
   annotation,
   selected,
+  hovered,
   onSelect,
   onDelete,
   onSelectOption,
@@ -332,6 +347,7 @@ function AlternativeCard({
 }: {
   annotation: AlternativeUncertaintyAnnotation;
   selected: boolean;
+  hovered: boolean;
   onSelect: () => void;
   onDelete: () => void;
   onSelectOption: (optionId: string) => void;
@@ -339,7 +355,9 @@ function AlternativeCard({
 }) {
   return (
     <article
-      className={`${styles.card} ${selected ? styles.cardSelected : ""}`}
+      className={`${styles.card} ${selected ? styles.cardSelected : ""} ${
+        hovered ? styles.cardHovered : ""
+      }`}
       onClick={onSelect}
     >
       <div className={styles.cardHeader}>
@@ -402,6 +420,7 @@ function AlternativeCard({
 export default function UncertaintyMarksPanel({
   document,
   selectedAnnotationId,
+  hoveredPathKey,
   onSelectAnnotation,
   onEditSizeAnnotation,
   onDeleteAnnotation,
@@ -489,6 +508,9 @@ export default function UncertaintyMarksPanel({
         <div className={styles.cardList}>
           {visibleAnnotations.map((annotation) => {
             const selected = annotation.id === selectedAnnotationId;
+            const hovered = hoveredPathKey
+              ? annotation.target.pathKeys.includes(hoveredPathKey)
+              : false;
 
             if (annotation.type === "size") {
               return (
@@ -496,6 +518,7 @@ export default function UncertaintyMarksPanel({
                   key={annotation.id}
                   annotation={annotation}
                   selected={selected}
+                  hovered={hovered}
                   onSelect={() => onSelectAnnotation(annotation.id)}
                   onEdit={() => onEditSizeAnnotation(annotation)}
                   onDelete={() => onDeleteAnnotation(annotation.id)}
@@ -513,6 +536,7 @@ export default function UncertaintyMarksPanel({
                   key={annotation.id}
                   annotation={annotation}
                   selected={selected}
+                  hovered={hovered}
                   onSelect={() => onSelectAnnotation(annotation.id)}
                   onDelete={() => onDeleteAnnotation(annotation.id)}
                   onCommentChange={(comment) =>
@@ -529,6 +553,7 @@ export default function UncertaintyMarksPanel({
                   key={annotation.id}
                   annotation={annotation}
                   selected={selected}
+                  hovered={hovered}
                   onSelect={() => onSelectAnnotation(annotation.id)}
                   onDelete={() => onDeleteAnnotation(annotation.id)}
                   onCommentChange={(comment) =>
@@ -544,6 +569,7 @@ export default function UncertaintyMarksPanel({
                 key={annotation.id}
                 annotation={annotation}
                 selected={selected}
+                hovered={hovered}
                 onSelect={() => onSelectAnnotation(annotation.id)}
                 onDelete={() => onDeleteAnnotation(annotation.id)}
                 onSelectOption={(optionId) =>

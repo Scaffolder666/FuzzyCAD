@@ -1,6 +1,6 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import styles from "../fuzzycad-home.module.css";
 import type { OperationTool } from "../lib/operations/types";
 
@@ -134,7 +134,7 @@ const toolGroups: ToolGroup[] = [
       {
         id: "move",
         label: "Move",
-        title: "Drag to a specific position and save it as a proposed move",
+        title: "Drag this part to a new position and save the change",
         icon: <MoveIcon />,
       },
     ],
@@ -158,27 +158,45 @@ export default function OperationToolbar({
   disabled = false,
   onToolChange,
 }: OperationToolbarProps) {
+  const [hoveredKey, setHoveredKey] = useState<string | null>(null);
+
+  function renderTooltip(key: string, text: string) {
+    if (hoveredKey !== key) {
+      return null;
+    }
+
+    return <div className={styles.toolTooltip}>{text}</div>;
+  }
+
   function renderButton(tool: ToolItem) {
     const active = activeTool === tool.id;
 
     return (
-      <button
+      <div
         key={tool.id}
-        type="button"
-        title={tool.title}
-        disabled={disabled}
-        className={
-          active
-            ? `${styles.operationToolButton} ${styles.operationToolButtonActive}`
-            : styles.operationToolButton
+        className={styles.toolButtonWrap}
+        onMouseEnter={() => setHoveredKey(tool.id)}
+        onMouseLeave={() =>
+          setHoveredKey((current) => (current === tool.id ? null : current))
         }
-        onClick={() => {
-          onToolChange(tool.id);
-        }}
       >
-        <span className={styles.operationToolIcon}>{tool.icon}</span>
-        <span className={styles.operationToolLabel}>{tool.label}</span>
-      </button>
+        <button
+          type="button"
+          disabled={disabled}
+          className={
+            active
+              ? `${styles.operationToolButton} ${styles.operationToolButtonActive}`
+              : styles.operationToolButton
+          }
+          onClick={() => {
+            onToolChange(tool.id);
+          }}
+        >
+          <span className={styles.operationToolIcon}>{tool.icon}</span>
+          <span className={styles.operationToolLabel}>{tool.label}</span>
+        </button>
+        {renderTooltip(tool.id, tool.title)}
+      </div>
     );
   }
 
@@ -204,17 +222,30 @@ export default function OperationToolbar({
         <div className={styles.toolGroup}>
           <span className={styles.toolGroupLabel}>Alternative</span>
           <div className={styles.toolGroupButtons}>
-            <button
-              type="button"
-              title="Compare competing component options — coming soon"
-              disabled
-              className={styles.operationToolButton}
+            <div
+              className={styles.toolButtonWrap}
+              onMouseEnter={() => setHoveredKey("alternative-placeholder")}
+              onMouseLeave={() =>
+                setHoveredKey((current) =>
+                  current === "alternative-placeholder" ? null : current,
+                )
+              }
             >
-              <span className={styles.operationToolIcon}>
-                <AlternativeIcon />
-              </span>
-              <span className={styles.operationToolLabel}>Alternative</span>
-            </button>
+              <button
+                type="button"
+                disabled
+                className={styles.operationToolButton}
+              >
+                <span className={styles.operationToolIcon}>
+                  <AlternativeIcon />
+                </span>
+                <span className={styles.operationToolLabel}>Alternative</span>
+              </button>
+              {renderTooltip(
+                "alternative-placeholder",
+                "Compare competing component options — coming soon",
+              )}
+            </div>
           </div>
         </div>
       </div>

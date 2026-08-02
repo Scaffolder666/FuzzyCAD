@@ -52,6 +52,7 @@ function applyEmissive(
 export function applyPathHighlight(
   scene: THREE.Object3D,
   highlightedPathKey: string | string[] | null | undefined,
+  hoveredPathKey?: string | null,
 ) {
   applyEmissive(scene, null, 1);
 
@@ -61,20 +62,35 @@ export function applyPathHighlight(
       ? [highlightedPathKey]
       : [];
 
-  if (highlightedPathKeys.length === 0) {
-    return;
+  const highlightedSet = new Set(highlightedPathKeys);
+
+  if (highlightedSet.size > 0) {
+    const targets: THREE.Object3D[] = [];
+
+    scene.traverse((object) => {
+      if (highlightedSet.has(object.userData?.fuzzyPathKey)) {
+        targets.push(object);
+      }
+    });
+
+    for (const target of targets) {
+      applyEmissive(target, 0x2b6cff, 0.7);
+    }
   }
 
-  const highlightedSet = new Set(highlightedPathKeys);
-  const targets: THREE.Object3D[] = [];
+  // Lighter glow for hover — a preview of the selected-highlight color, not
+  // the same intensity, so hovering never reads as "already selected".
+  if (hoveredPathKey && !highlightedSet.has(hoveredPathKey)) {
+    const hoverTargets: THREE.Object3D[] = [];
 
-  scene.traverse((object) => {
-    if (highlightedSet.has(object.userData?.fuzzyPathKey)) {
-      targets.push(object);
+    scene.traverse((object) => {
+      if (object.userData?.fuzzyPathKey === hoveredPathKey) {
+        hoverTargets.push(object);
+      }
+    });
+
+    for (const target of hoverTargets) {
+      applyEmissive(target, 0x2b6cff, 0.32);
     }
-  });
-
-  for (const target of targets) {
-    applyEmissive(target, 0x2b6cff, 0.7);
   }
 }

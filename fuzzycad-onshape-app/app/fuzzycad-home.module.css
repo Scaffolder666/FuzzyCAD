@@ -275,6 +275,52 @@
   gap: 8px;
 }
 
+.toolButtonWrap {
+  position: relative;
+  display: flex;
+}
+
+.toolTooltip {
+  position: absolute;
+  bottom: calc(100% + 10px);
+  left: 50%;
+  transform: translateX(-50%);
+  width: max-content;
+  max-width: 200px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.92);
+  color: #f1f5f9;
+  font-size: 11px;
+  line-height: 1.35;
+  text-align: center;
+  pointer-events: none;
+  z-index: 20;
+  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.28);
+  animation: toolTooltipFadeIn 90ms ease-out;
+}
+
+.toolTooltip::after {
+  content: "";
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  border: 5px solid transparent;
+  border-top-color: rgba(15, 23, 42, 0.92);
+}
+
+@keyframes toolTooltipFadeIn {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 4px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+
 .operationToolButton {
   width: 68px;
   height: 58px;
