@@ -68,6 +68,19 @@ function AngleIcon() {
   );
 }
 
+function MoveIcon() {
+  return (
+    <svg viewBox="0 0 32 32" aria-hidden="true">
+      <path d="M16 5V27" />
+      <path d="M5 16H27" />
+      <path d="M12 9L16 5L20 9" />
+      <path d="M12 23L16 27L20 23" />
+      <path d="M9 12L5 16L9 20" />
+      <path d="M23 12L27 16L23 20" />
+    </svg>
+  );
+}
+
 function AlternativeIcon() {
   return (
     <svg viewBox="0 0 32 32" aria-hidden="true">
@@ -117,6 +130,12 @@ const toolGroups: ToolGroup[] = [
         label: "Angle",
         title: "Drag to a specific angle",
         icon: <AngleIcon />,
+      },
+      {
+        id: "move",
+        label: "Move",
+        title: "Drag to a specific position and save it as a proposed move",
+        icon: <MoveIcon />,
       },
     ],
   },

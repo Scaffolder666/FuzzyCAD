@@ -83,10 +83,25 @@ export type AlternativeUncertaintyAnnotation = BaseAnnotationFields & {
   selectedOptionId?: string;
 };
 
+/**
+ * "Move": a proposed change in position rather than size — a world-space
+ * translation applied to the target and, if the user chose to include
+ * them, any mate-linked neighbors so the change doesn't leave the target
+ * disconnected from parts it was actually attached to.
+ */
+export type MoveUncertaintyAnnotation = BaseAnnotationFields & {
+  type: "move";
+  deltaWorld: [number, number, number];
+  followPathKeys: string[];
+  previousValueLabel: string;
+  proposedValueLabel: string;
+};
+
 export type FuzzyCADUncertaintyAnnotation =
   | SizeUncertaintyAnnotation
   | ProposalUncertaintyAnnotation
-  | AlternativeUncertaintyAnnotation;
+  | AlternativeUncertaintyAnnotation
+  | MoveUncertaintyAnnotation;
 
 export function createEmptyUncertaintyDocument(
   source: FuzzyCADUncertaintySource,
@@ -150,9 +165,9 @@ function removePathKeysFromAnnotation(
   pathKeysToRemove: Set<string>,
 ): FuzzyCADUncertaintyAnnotation | null {
   if (annotation.type !== "size") {
-    // Proposal/alternative removal isn't wired up yet (no tool creates them
-    // yet); leave them untouched rather than silently reconstructing them
-    // as a different annotation type.
+    // Proposal/alternative/move removal isn't wired up yet; leave them
+    // untouched rather than silently reconstructing them as a different
+    // annotation type.
     return annotation;
   }
 
@@ -500,5 +515,115 @@ export function toProposalPreviews(
       axisIndex: annotation.axisIndex,
       mode: annotation.mode,
       deltaMeters: annotation.deltaMeters,
+    }));
+}
+
+export function makeMoveAnnotationId(pathKey: string) {
+  return `move:${pathKey}`;
+}
+
+function createMoveAnnotation(input: {
+  pathKey: string;
+  followPathKeys: string[];
+  deltaWorld: [number, number, number];
+  previousValueLabel: string;
+  proposedValueLabel: string;
+  comment?: string;
+  author?: string;
+  assignee?: string;
+  status?: AnnotationStatus;
+  createdAt?: string;
+  updatedAt?: string;
+}): MoveUncertaintyAnnotation | null {
+  if (!input.pathKey) {
+    return null;
+  }
+
+  const now = new Date().toISOString();
+  const followPathKeys = normalizePathKeys(input.followPathKeys).filter(
+    (pathKey) => pathKey !== input.pathKey,
+  );
+
+  return {
+    id: makeMoveAnnotationId(input.pathKey),
+    type: "move",
+    target: {
+      pathKeys: [input.pathKey, ...followPathKeys],
+      referencePathKey: input.pathKey,
+      scope: followPathKeys.length > 0 ? "group" : "single",
+    },
+    deltaWorld: input.deltaWorld,
+    followPathKeys,
+    previousValueLabel: input.previousValueLabel,
+    proposedValueLabel: input.proposedValueLabel,
+    comment: input.comment,
+    author: input.author,
+    assignee: input.assignee,
+    status: input.status ?? "open",
+    createdAt: input.createdAt ?? now,
+    updatedAt: input.updatedAt ?? now,
+  };
+}
+
+/** One open move per object — a new save replaces it. */
+export function upsertMove(
+  document: FuzzyCADUncertaintyDocument,
+  input: {
+    pathKey: string;
+    followPathKeys: string[];
+    deltaWorld: [number, number, number];
+    previousValueLabel: string;
+    proposedValueLabel: string;
+    author?: string;
+  },
+): FuzzyCADUncertaintyDocument {
+  const id = makeMoveAnnotationId(input.pathKey);
+  const existing = document.annotations.find((annotation) => annotation.id === id);
+
+  const nextAnnotation = createMoveAnnotation({
+    pathKey: input.pathKey,
+    followPathKeys: input.followPathKeys,
+    deltaWorld: input.deltaWorld,
+    previousValueLabel: input.previousValueLabel,
+    proposedValueLabel: input.proposedValueLabel,
+    comment: existing?.comment,
+    author: existing?.author ?? input.author,
+    assignee: existing?.assignee,
+    status: "open",
+    createdAt: existing?.createdAt,
+  });
+
+  if (!nextAnnotation) {
+    return document;
+  }
+
+  return {
+    ...document,
+    annotations: [
+      ...document.annotations.filter((annotation) => annotation.id !== id),
+      nextAnnotation,
+    ],
+  };
+}
+
+export type MovePreview = {
+  pathKey: string;
+  followPathKeys: string[];
+  deltaWorld: [number, number, number];
+};
+
+/** Open moves, for the 3D viewer to render as a persistent ghost. */
+export function toMovePreviews(
+  document: FuzzyCADUncertaintyDocument,
+): MovePreview[] {
+  return document.annotations
+    .filter(
+      (annotation): annotation is MoveUncertaintyAnnotation =>
+        annotation.type === "move" && annotation.status === "open",
+    )
+    .map((annotation) => ({
+      pathKey: annotation.target.referencePathKey,
+      followPathKeys: annotation.followPathKeys,
+      deltaWorld: annotation.deltaWorld,
     }));
 }

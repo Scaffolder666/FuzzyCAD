@@ -14,9 +14,11 @@ import { useAssemblyPlacementTree } from "./hooks/useAssemblyPlacementTree";
 import type {
   AxialStretchObjectSummary,
   MeshGraphNode,
+  MoveDelta,
   RolePreviewPlan,
 } from "./components/FuzzyCADGeometryViewer";
 import { usePartGraph } from "./hooks/usePartGraph";
+import { getLinkedGroup } from "./lib/partGraph";
 import {
   fetchFuzzycadAssemblySummary,
   fetchFuzzycadRelationshipGraph,
@@ -70,6 +72,8 @@ const FuzzyCADGeometryViewer = dynamic(
 type LoadOptions = {
   force?: boolean;
 };
+
+const ZERO_MOVE_DELTA: MoveDelta = { x: 0, y: 0, z: 0 };
 
 function isElementArray(data: unknown): data is OnshapeElement[] {
   return (
@@ -175,6 +179,16 @@ export default function FuzzyCADHome() {
     useState<ProposalAxisMode>("positive");
   const [manipulationValue, setManipulationValue] = useState(0);
 
+  const [activeMovePlan, setActiveMovePlan] = useState<{
+    pathKey: string;
+    followPathKeys: string[];
+  } | null>(null);
+  const [moveDelta, setMoveDelta] = useState<MoveDelta>(ZERO_MOVE_DELTA);
+  const [moveCandidateOpen, setMoveCandidateOpen] = useState(false);
+  const [moveCandidatePathKeys, setMoveCandidatePathKeys] = useState<
+    string[]
+  >([]);
+
   const [heightPreviewOpen, setHeightPreviewOpen] = useState(false);
   const [pendingHeightAxis, setPendingHeightAxis] =
     useState<OperationAxis>("y");
@@ -218,6 +232,7 @@ export default function FuzzyCADHome() {
     uncertaintyDocumentWithCurrentSource,
     confidenceAnnotations,
     proposalPreviews,
+    movePreviews,
     resetUncertaintyDocument,
     upsertSizeMark,
     removeSizeMarks,
@@ -228,6 +243,7 @@ export default function FuzzyCADHome() {
     reopenAnnotation,
     selectAnnotationAlternativeOption,
     upsertProposal,
+    upsertMoveMark,
   } = useUncertaintyDocument(currentUncertaintySource);
 
   const assemblyElements = useMemo(() => {
@@ -262,6 +278,17 @@ export default function FuzzyCADHome() {
           summary !== undefined,
       );
   }, [heightCandidatePathKeys, objectSummaries]);
+
+  const moveCandidateSummaries = useMemo(() => {
+    return moveCandidatePathKeys
+      .map((pathKey) =>
+        objectSummaries.find((summary) => summary.pathKey === pathKey),
+      )
+      .filter(
+        (summary): summary is AxialStretchObjectSummary =>
+          summary !== undefined,
+      );
+  }, [moveCandidatePathKeys, objectSummaries]);
 
   const heightReferencePathKey =
     heightCandidatePathKeys[0] ?? highlightedPathKey ?? null;
@@ -325,6 +352,10 @@ export default function FuzzyCADHome() {
     setProposalAxisMode("positive");
     setManipulationValue(0);
     setHeightPreviewOpen(false);
+    setActiveMovePlan(null);
+    setMoveDelta(ZERO_MOVE_DELTA);
+    setMoveCandidateOpen(false);
+    setMoveCandidatePathKeys([]);
     closeSizeUncertaintyEditor();
   }
 
@@ -761,6 +792,104 @@ export default function FuzzyCADHome() {
     setActiveTool("select");
   }
 
+  function startMove() {
+    if (!selectedObjectSummary) {
+      return;
+    }
+
+    const pathKey = selectedObjectSummary.pathKey;
+
+    setActiveTool("move");
+    resetSizeOperationState();
+    setLassoPathKeys([]);
+
+    // Reuse the mate graph already fetched for the assembly (see
+    // usePartGraph) to find parts directly attached to the one being
+    // moved, so the user can decide whether they should move together
+    // instead of silently leaving the target disconnected.
+    const neighbors = partGraph
+      ? getLinkedGroup(pathKey, partGraph.byPathKey, 1).filter(
+          (key) => key !== pathKey,
+        )
+      : [];
+
+    if (neighbors.length > 0) {
+      setMoveCandidatePathKeys(neighbors);
+      setMoveCandidateOpen(true);
+      return;
+    }
+
+    setActiveMovePlan({ pathKey, followPathKeys: [] });
+    setMoveDelta(ZERO_MOVE_DELTA);
+  }
+
+  function confirmMoveWithNeighbors() {
+    if (!selectedObjectSummary) {
+      return;
+    }
+
+    setActiveMovePlan({
+      pathKey: selectedObjectSummary.pathKey,
+      followPathKeys: moveCandidatePathKeys,
+    });
+    setMoveDelta(ZERO_MOVE_DELTA);
+    setMoveCandidateOpen(false);
+  }
+
+  function confirmMoveAlone() {
+    if (!selectedObjectSummary) {
+      return;
+    }
+
+    setActiveMovePlan({
+      pathKey: selectedObjectSummary.pathKey,
+      followPathKeys: [],
+    });
+    setMoveDelta(ZERO_MOVE_DELTA);
+    setMoveCandidateOpen(false);
+  }
+
+  function cancelMoveCandidates() {
+    setMoveCandidateOpen(false);
+    setMoveCandidatePathKeys([]);
+    setActiveTool("select");
+  }
+
+  function cancelMove() {
+    setActiveMovePlan(null);
+    setMoveDelta(ZERO_MOVE_DELTA);
+    setActiveTool("select");
+  }
+
+  function applyMove() {
+    if (!activeMovePlan) {
+      return;
+    }
+
+    const { pathKey, followPathKeys } = activeMovePlan;
+    const deltaWorld: [number, number, number] = [
+      moveDelta.x,
+      moveDelta.y,
+      moveDelta.z,
+    ];
+    const totalMm =
+      Math.sqrt(moveDelta.x ** 2 + moveDelta.y ** 2 + moveDelta.z ** 2) * 1000;
+
+    upsertMoveMark({
+      pathKey,
+      followPathKeys,
+      deltaWorld,
+      previousValueLabel: "current position",
+      proposedValueLabel: `moved ${totalMm.toFixed(1)} mm${
+        followPathKeys.length > 0 ? ` (+${followPathKeys.length} linked)` : ""
+      }`,
+    });
+
+    setActiveMovePlan(null);
+    setMoveDelta(ZERO_MOVE_DELTA);
+    setActiveTool("select");
+  }
+
 async function saveProjectStateToOnshape() {
   if (!documentId || !workspaceId) {
     console.warn("Missing documentId or workspaceId");
@@ -922,9 +1051,15 @@ if (result.ok && result.state) {
           proposalAxisMode={proposalAxisMode}
           onSelectProposalAxis={selectProposalAxis}
           onProposalAxisModeChange={changeProposalAxisMode}
+          movePlan={activeMovePlan}
+          movePreviews={movePreviews}
+          moveDelta={moveDelta}
+          onMoveDeltaChange={setMoveDelta}
           enableManipulationHandles={
             !heightPreviewOpen &&
-            (Boolean(confirmedHeightPlan) || Boolean(proposalPlan))
+            (Boolean(confirmedHeightPlan) ||
+              Boolean(proposalPlan) ||
+              Boolean(activeMovePlan))
           }
           manipulationValue={manipulationValue}
           confidenceAnnotations={confidenceAnnotations}
@@ -972,6 +1107,11 @@ if (result.ok && result.state) {
               return;
             }
 
+            if (tool === "move") {
+              startMove();
+              return;
+            }
+
             setActiveTool(tool);
             resetSizeOperationState();
 
@@ -1003,6 +1143,33 @@ if (result.ok && result.state) {
               type="button"
               className={styles.manipulationResetButton}
               onClick={applySizeProposal}
+            >
+              Save proposal
+            </button>
+          </div>
+        ) : null}
+
+        {activeTool === "move" && activeMovePlan ? (
+          <div className={styles.manipulationReadout}>
+            <span className={styles.manipulationValue}>
+              Move: {formatLengthMeters(moveDelta.x)} /{" "}
+              {formatLengthMeters(moveDelta.y)} /{" "}
+              {formatLengthMeters(moveDelta.z)}
+              {activeMovePlan.followPathKeys.length > 0
+                ? ` (+${activeMovePlan.followPathKeys.length} linked)`
+                : ""}
+            </span>
+            <button
+              type="button"
+              className={styles.manipulationResetButton}
+              onClick={cancelMove}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              className={styles.manipulationResetButton}
+              onClick={applyMove}
             >
               Save proposal
             </button>
@@ -1099,6 +1266,25 @@ if (result.ok && result.state) {
               setHeightPreviewOpen(false);
               setActiveTool("select");
             }}
+          />
+        ) : null}
+
+        {moveCandidateOpen ? (
+          <OperationPreviewPanel
+            operation="move"
+            title="Connected parts found"
+            description={`This part is mated to ${
+              moveCandidatePathKeys.length
+            } other part${
+              moveCandidatePathKeys.length === 1 ? "" : "s"
+            }. Move them together, or just this one?`}
+            suggestedObjects={moveCandidateSummaries.map(getObjectDisplayName)}
+            confirmLabel="Move together"
+            secondaryConfirmLabel="Move alone"
+            cancelLabel="Cancel"
+            onConfirm={confirmMoveWithNeighbors}
+            onSecondaryConfirm={confirmMoveAlone}
+            onCancel={cancelMoveCandidates}
           />
         ) : null}
       </div>

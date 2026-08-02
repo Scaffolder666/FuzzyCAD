@@ -7,8 +7,10 @@ import {
   resolveUncertaintyAnnotation,
   selectAlternativeOption,
   toFuzzyConfidenceAnnotations,
+  toMovePreviews,
   toProposalPreviews,
   updateUncertaintyAnnotationComment,
+  upsertMove,
   upsertSizeAnnotation,
   upsertSizeProposal,
   type FuzzyCADUncertaintyDocument,
@@ -42,6 +44,11 @@ export function useUncertaintyDocument(source: FuzzyCADUncertaintySource) {
 
   const proposalPreviews = useMemo(
     () => toProposalPreviews(uncertaintyDocumentWithCurrentSource),
+    [uncertaintyDocumentWithCurrentSource],
+  );
+
+  const movePreviews = useMemo(
+    () => toMovePreviews(uncertaintyDocumentWithCurrentSource),
     [uncertaintyDocumentWithCurrentSource],
   );
 
@@ -155,6 +162,25 @@ export function useUncertaintyDocument(source: FuzzyCADUncertaintySource) {
     );
   }
 
+  function upsertMoveMark(input: {
+    pathKey: string;
+    followPathKeys: string[];
+    deltaWorld: [number, number, number];
+    previousValueLabel: string;
+    proposedValueLabel: string;
+    author?: string;
+  }) {
+    setUncertaintyDocument((previous) =>
+      upsertMove(
+        {
+          ...previous,
+          source,
+        },
+        input,
+      ),
+    );
+  }
+
   function selectAnnotationAlternativeOption(
     annotationId: string,
     optionId: string,
@@ -176,6 +202,7 @@ export function useUncertaintyDocument(source: FuzzyCADUncertaintySource) {
     uncertaintyDocumentWithCurrentSource,
     confidenceAnnotations,
     proposalPreviews,
+    movePreviews,
     resetUncertaintyDocument,
     replaceUncertaintyDocument,
     upsertSizeMark,
@@ -186,5 +213,6 @@ export function useUncertaintyDocument(source: FuzzyCADUncertaintySource) {
     reopenAnnotation,
     selectAnnotationAlternativeOption,
     upsertProposal,
+    upsertMoveMark,
   };
 }

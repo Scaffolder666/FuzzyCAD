@@ -41,6 +41,7 @@ import SizingHandle from "./viewer/SizingHandle";
 import AngleHandle from "./viewer/AngleHandle";
 import DimensionRuler from "./viewer/DimensionRuler";
 import AxisTriadHandle from "./viewer/AxisTriadHandle";
+import MoveTriadHandle, { type MoveDelta } from "./viewer/MoveTriadHandle";
 import {
   computeProposalTipSegments,
   type ProposalAxisIndex,
@@ -54,9 +55,16 @@ import {
   type AxialStretchPreviewSession,
   type AxialStretchRolePlan,
 } from "./viewer/axialStretchPreview";
+import {
+  createMoveTranslatePreviewSession,
+  disposeMoveTranslatePreviewSession,
+  updateMoveTranslatePreviewSession,
+  type MoveTranslatePreviewSession,
+} from "./viewer/moveTranslatePreview";
 
 export type { MeshGraphNode } from "./viewer/meshGraph";
 export type { PartPlacement, PlacementReport } from "./viewer/placement";
+export type { MoveDelta } from "./viewer/MoveTriadHandle";
 export type { AxialStretchObjectSummary } from "../lib/operations/axialStretchTypes";
 
 export type RolePreviewPlan = {
@@ -72,6 +80,19 @@ export type ProposalPreview = {
   axisIndex: ProposalAxisIndex;
   mode: ProposalAxisMode;
   deltaMeters: number;
+};
+
+/** A single-object plan for the "Move" tool's active drag session. */
+export type MoveRolePlan = {
+  pathKey: string;
+  followPathKeys: string[];
+};
+
+/** A saved move's delta, structurally the same shape as document.ts's. */
+export type MovePreview = {
+  pathKey: string;
+  followPathKeys: string[];
+  deltaWorld: [number, number, number];
 };
 
 export type FuzzyConfidenceEditor = {
@@ -117,6 +138,12 @@ type FuzzyCADGeometryViewerProps = {
   proposalAxisMode?: ProposalAxisMode;
   onSelectProposalAxis?: (axisIndex: ProposalAxisIndex) => void;
   onProposalAxisModeChange?: (mode: ProposalAxisMode) => void;
+  /** Single-object plan for the "Move" tool's active drag session. */
+  movePlan?: MoveRolePlan | null;
+  /** Other saved (not currently being dragged) moves, shown as static ghosts. */
+  movePreviews?: MovePreview[];
+  moveDelta?: MoveDelta;
+  onMoveDeltaChange?: (delta: MoveDelta) => void;
   onMeshGraph?: (nodes: MeshGraphNode[]) => void;
   onObjectSummaries?: (summaries: AxialStretchObjectSummary[]) => void;
   onSelectedNode?: (node: MeshGraphNode | null) => void;
@@ -703,6 +730,10 @@ function Model({
   proposalAxisMode = "positive",
   onSelectProposalAxis,
   onProposalAxisModeChange,
+  movePlan,
+  movePreviews,
+  moveDelta = { x: 0, y: 0, z: 0 },
+  onMoveDeltaChange,
   enableManipulationHandles = true,
   lassoPolygon,
 
@@ -731,6 +762,10 @@ function Model({
   proposalAxisMode?: ProposalAxisMode;
   onSelectProposalAxis?: (axisIndex: ProposalAxisIndex) => void;
   onProposalAxisModeChange?: (mode: ProposalAxisMode) => void;
+  movePlan?: MoveRolePlan | null;
+  movePreviews?: MovePreview[];
+  moveDelta?: MoveDelta;
+  onMoveDeltaChange?: (delta: MoveDelta) => void;
   enableManipulationHandles?: boolean;
   lassoPolygon?: ScreenPoint[] | null;
   onMeshGraph?: (nodes: MeshGraphNode[]) => void;
@@ -900,6 +935,102 @@ function Model({
       invalidate();
     };
   }, [scene, objectSummaries, persistentProposalPreviews, invalidate]);
+
+  // Active "Move" drag session — a rigid (non-deforming) translate of the
+  // target plus whichever mate-linked neighbors the user chose to include.
+  const activeMovePathKey = movePlan?.pathKey ?? null;
+  const activeMoveSummary = useMemo(
+    () =>
+      objectSummaries.find((item) => item.pathKey === activeMovePathKey) ??
+      null,
+    [objectSummaries, activeMovePathKey],
+  );
+
+  const moveTranslatePreviewSession = useMemo(() => {
+    if (!movePlan) {
+      return null;
+    }
+
+    return createMoveTranslatePreviewSession(scene, [
+      movePlan.pathKey,
+      ...movePlan.followPathKeys,
+    ]);
+  }, [scene, movePlan]);
+
+  useEffect(() => {
+    if (!moveTranslatePreviewSession) {
+      return;
+    }
+
+    scene.add(moveTranslatePreviewSession.group);
+    invalidate();
+
+    return () => {
+      disposeMoveTranslatePreviewSession(moveTranslatePreviewSession);
+      invalidate();
+    };
+  }, [scene, moveTranslatePreviewSession, invalidate]);
+
+  useEffect(() => {
+    if (!moveTranslatePreviewSession) {
+      return;
+    }
+
+    updateMoveTranslatePreviewSession(
+      moveTranslatePreviewSession,
+      new THREE.Vector3(moveDelta.x, moveDelta.y, moveDelta.z),
+    );
+    invalidate();
+  }, [moveTranslatePreviewSession, moveDelta, invalidate]);
+
+  // Every OTHER saved move (not the one currently being dragged) shows as a
+  // static ghost at its saved delta.
+  const persistentMovePreviews = useMemo(
+    () =>
+      (movePreviews ?? []).filter(
+        (preview) => preview.pathKey !== activeMovePathKey,
+      ),
+    [movePreviews, activeMovePathKey],
+  );
+
+  useEffect(() => {
+    const sessions = persistentMovePreviews
+      .map((preview) => {
+        const session = createMoveTranslatePreviewSession(scene, [
+          preview.pathKey,
+          ...preview.followPathKeys,
+        ]);
+
+        if (!session) {
+          return null;
+        }
+
+        updateMoveTranslatePreviewSession(
+          session,
+          new THREE.Vector3(...preview.deltaWorld),
+        );
+        scene.add(session.group);
+
+        return session;
+      })
+      .filter(
+        (session): session is MoveTranslatePreviewSession => session !== null,
+      );
+
+    if (sessions.length === 0) {
+      return;
+    }
+
+    invalidate();
+
+    return () => {
+      for (const session of sessions) {
+        disposeMoveTranslatePreviewSession(session);
+      }
+
+      invalidate();
+    };
+  }, [scene, persistentMovePreviews, invalidate]);
 
   const visualConfidenceAnnotations = useMemo(() => {
     const base = confidenceAnnotations ?? [];
@@ -1381,6 +1512,19 @@ function Model({
         />
       ))}
 
+      {enableManipulationHandles && movePlan && activeMoveSummary ? (
+        <MoveTriadHandle
+          centerWorld={new THREE.Vector3(...activeMoveSummary.aabbCenterWorld)}
+          armLength={Math.max(
+            Math.max(...activeMoveSummary.aabbSizeWorld) * 0.9,
+            1e-4,
+          )}
+          deltaWorld={moveDelta}
+          onDeltaChange={(delta) => onMoveDeltaChange?.(delta)}
+          onDragStateChange={handleDragStateChange}
+        />
+      ) : null}
+
       {handleConfig?.kind === "angle" ? (
         <AngleHandle
           pivotWorld={handleConfig.pivotWorld}
@@ -1414,6 +1558,10 @@ export default function FuzzyCADGeometryViewer({
   proposalAxisMode,
   onSelectProposalAxis,
   onProposalAxisModeChange,
+  movePlan,
+  movePreviews,
+  moveDelta,
+  onMoveDeltaChange,
   enableManipulationHandles = true,
   onMeshGraph,
   onObjectSummaries,
@@ -1480,6 +1628,10 @@ export default function FuzzyCADGeometryViewer({
                   proposalAxisMode={proposalAxisMode}
                   onSelectProposalAxis={onSelectProposalAxis}
                   onProposalAxisModeChange={onProposalAxisModeChange}
+                  movePlan={movePlan}
+                  movePreviews={movePreviews}
+                  moveDelta={moveDelta}
+                  onMoveDeltaChange={onMoveDeltaChange}
                   enableManipulationHandles={enableManipulationHandles}
                   lassoPolygon={lassoPolygon}
                   onMeshGraph={onMeshGraph}

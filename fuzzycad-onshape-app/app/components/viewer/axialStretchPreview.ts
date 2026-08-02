@@ -63,7 +63,7 @@ export type AxialStretchPreviewSession = {
   followPreviews: FollowPreview[];
 };
 
-type PreviewRole = "stretch" | "follow";
+type PreviewRole = "stretch" | "follow" | "move";
 
 function toVector(tuple: [number, number, number]) {
   return new THREE.Vector3(tuple[0], tuple[1], tuple[2]);
@@ -142,7 +142,7 @@ function createInvisiblePreviewMaterial(color: number) {
   });
 }
 
-function disposeMaterial(material: THREE.Material | THREE.Material[]) {
+export function disposeMaterial(material: THREE.Material | THREE.Material[]) {
   if (Array.isArray(material)) {
     for (const item of material) {
       item.dispose();
@@ -174,7 +174,7 @@ function collectMeshes(root: THREE.Object3D) {
   return meshes;
 }
 
-function cloneObjectForPreview(
+export function cloneObjectForPreview(
   scene: THREE.Object3D,
   original: THREE.Object3D,
   role: PreviewRole,

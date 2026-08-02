@@ -5,13 +5,14 @@ import type {
   AlternativeUncertaintyAnnotation,
   FuzzyCADUncertaintyAnnotation,
   FuzzyCADUncertaintyDocument,
+  MoveUncertaintyAnnotation,
   ProposalUncertaintyAnnotation,
   SizeUncertaintyAnnotation,
 } from "../lib/uncertainty/document";
 import type { ConfidenceAxis, ConfidenceLevel } from "../lib/uncertainty/types";
 import styles from "./UncertaintyMarksPanel.module.css";
 
-type FilterKey = "size" | "proposal" | "alternative";
+type FilterKey = "size" | "proposal" | "move" | "alternative";
 
 type UncertaintyMarksPanelProps = {
   document: FuzzyCADUncertaintyDocument;
@@ -29,6 +30,7 @@ type UncertaintyMarksPanelProps = {
 const FILTERS: { key: FilterKey; label: string }[] = [
   { key: "size", label: "Needs input" },
   { key: "proposal", label: "Proposed" },
+  { key: "move", label: "Moved" },
   { key: "alternative", label: "Alternatives" },
 ];
 
@@ -189,6 +191,85 @@ function ProposalCard({
               ? "←"
               : "↔"}
         </span>
+      </div>
+
+      <div className={styles.valueLine}>
+        <span className={styles.valueOld}>{annotation.previousValueLabel}</span>
+        <span className={styles.valueArrow}>&rarr;</span>
+        <span className={styles.valueNew}>{annotation.proposedValueLabel}</span>
+      </div>
+
+      {annotation.author ? (
+        <div className={styles.metaRow}>proposed by {annotation.author}</div>
+      ) : null}
+
+      <textarea
+        className={styles.comment}
+        value={annotation.comment ?? ""}
+        placeholder="Add a comment..."
+        onClick={(event) => event.stopPropagation()}
+        onChange={(event) => onCommentChange(event.target.value)}
+      />
+
+      <div className={styles.actions}>
+        <button
+          type="button"
+          className={styles.resolveButton}
+          onClick={(event) => {
+            event.stopPropagation();
+            onResolve();
+          }}
+        >
+          Accept
+        </button>
+        <button
+          type="button"
+          className={styles.deleteButton}
+          onClick={(event) => {
+            event.stopPropagation();
+            onDelete();
+          }}
+        >
+          Reject
+        </button>
+      </div>
+    </article>
+  );
+}
+
+function MoveCard({
+  annotation,
+  selected,
+  onSelect,
+  onDelete,
+  onCommentChange,
+  onResolve,
+}: {
+  annotation: MoveUncertaintyAnnotation;
+  selected: boolean;
+  onSelect: () => void;
+  onDelete: () => void;
+  onCommentChange: (comment: string) => void;
+  onResolve: () => void;
+}) {
+  return (
+    <article
+      className={`${styles.card} ${selected ? styles.cardSelected : ""}`}
+      onClick={onSelect}
+    >
+      <div className={styles.cardHeader}>
+        <span className={`${styles.kindPill} ${styles.kindPillProposal}`}>
+          Proposed move
+        </span>
+      </div>
+
+      <div className={styles.cardTitle}>
+        {annotation.target.referencePathKey}
+        {annotation.followPathKeys.length > 0 ? (
+          <span className={styles.proposalModeTag}>
+            +{annotation.followPathKeys.length} linked
+          </span>
+        ) : null}
       </div>
 
       <div className={styles.valueLine}>
@@ -436,6 +517,22 @@ export default function UncertaintyMarksPanel({
               );
             }
 
+            if (annotation.type === "move") {
+              return (
+                <MoveCard
+                  key={annotation.id}
+                  annotation={annotation}
+                  selected={selected}
+                  onSelect={() => onSelectAnnotation(annotation.id)}
+                  onDelete={() => onDeleteAnnotation(annotation.id)}
+                  onCommentChange={(comment) =>
+                    onCommentChange(annotation.id, comment)
+                  }
+                  onResolve={() => onResolveAnnotation(annotation.id)}
+                />
+              );
+            }
+
             return (
               <AlternativeCard
                 key={annotation.id}
@@ -475,7 +572,9 @@ export default function UncertaintyMarksPanel({
                         ? annotation.target.referencePathKey
                         : annotation.type === "proposal"
                           ? annotation.dimension
-                          : "Alternative"}
+                          : annotation.type === "move"
+                            ? `Move: ${annotation.target.referencePathKey}`
+                            : "Alternative"}
                     </span>
                     <button
                       type="button"
