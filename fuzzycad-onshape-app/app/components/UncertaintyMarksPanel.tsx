@@ -72,6 +72,12 @@ function matchesFilter(
   currentUserName: string,
 ) {
   if (filter === "mine") {
+    // Assignment only makes sense for "needs input" marks — a proposal or
+    // alternative isn't delegated to someone, it's put up for review.
+    if (annotation.type !== "size") {
+      return false;
+    }
+
     const name = currentUserName.trim().toLowerCase();
 
     return name.length > 0 && (annotation.assignee ?? "").trim().toLowerCase() === name;

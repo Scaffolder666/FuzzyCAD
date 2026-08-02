@@ -67,9 +67,35 @@ function findSummary(
   return objectSummaries.find((summary) => summary.pathKey === pathKey) ?? null;
 }
 
-function getUpperLowerEnds(summary: AxialStretchObjectSummary) {
+/**
+ * Which end is "fixed" and which end "moves" when the handle is dragged.
+ *
+ * With multiple stretch targets (the "height" tool's legs), sorting by
+ * world Y means each leg's upper attachment stays put and its lower foot
+ * is the one that moves — that's the intended "pull the legs down" feel.
+ *
+ * With a single stretch target (the "Propose" tool, no legs, no shared
+ * drag), there's no such "upper anchor" concept, and picking by world Y
+ * forced the moving end to always sit below the fixed end - so dragging
+ * the handle always appeared to pull straight down, no matter which way
+ * the object actually points. Instead we keep the object's own axis
+ * convention: negativeEndWorld stays fixed, positiveEndWorld moves. That
+ * direction is derived per-object from its own geometry (see
+ * objectSummary.ts), not from world Y, so it no longer defaults downward.
+ */
+function getUpperLowerEnds(
+  summary: AxialStretchObjectSummary,
+  preferNaturalAxis: boolean,
+) {
   const a = toVector(summary.negativeEndWorld);
   const b = toVector(summary.positiveEndWorld);
+
+  if (preferNaturalAxis) {
+    return {
+      upperEndWorld: a,
+      lowerEndWorld: b,
+    };
+  }
 
   if (a.y >= b.y) {
     return {
@@ -306,6 +332,7 @@ function createStretchPreview(
   group: THREE.Group,
   objectSummaries: AxialStretchObjectSummary[],
   pathKey: string,
+  preferNaturalAxis: boolean,
 ): StretchPreview | null {
   const summary = findSummary(objectSummaries, pathKey);
 
@@ -326,7 +353,10 @@ function createStretchPreview(
     return null;
   }
 
-  const { upperEndWorld, lowerEndWorld } = getUpperLowerEnds(summary);
+  const { upperEndWorld, lowerEndWorld } = getUpperLowerEnds(
+    summary,
+    preferNaturalAxis,
+  );
   const axisFromFixedToMoving = lowerEndWorld.clone().sub(upperEndWorld);
   const axisLength = Math.max(axisFromFixedToMoving.length(), 1e-6);
 
@@ -453,9 +483,17 @@ export function createAxialStretchPreviewSession(
   group.name = "FuzzyCAD Height Preview";
   group.userData.fuzzycadPreview = true;
 
+  const preferNaturalAxis = plan.stretchTargetPathKeys.length === 1;
+
   const stretchPreviews = plan.stretchTargetPathKeys
     .map((pathKey) =>
-      createStretchPreview(scene, group, objectSummaries, pathKey),
+      createStretchPreview(
+        scene,
+        group,
+        objectSummaries,
+        pathKey,
+        preferNaturalAxis,
+      ),
     )
     .filter((item): item is StretchPreview => item !== null);
 

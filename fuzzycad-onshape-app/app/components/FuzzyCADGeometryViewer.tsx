@@ -39,6 +39,7 @@ import {
 } from "./viewer/manipulation";
 import SizingHandle from "./viewer/SizingHandle";
 import AngleHandle from "./viewer/AngleHandle";
+import DimensionRuler from "./viewer/DimensionRuler";
 import {
   createAxialStretchPreviewSession,
   disposeAxialStretchPreviewSession,
@@ -124,6 +125,7 @@ type HandleConfig =
       axisWorld: THREE.Vector3;
       length: number;
       session: AxialStretchPreviewSession;
+      isProposal: boolean;
     }
   | {
       kind: "angle";
@@ -809,6 +811,48 @@ function Model({
     [proposalPreviews, activeProposalPathKey],
   );
 
+  // Dimension-ruler geometry for every saved-but-not-actively-edited
+  // proposal, derived straight from the object's own measured axis (no
+  // preview session needed just to draw the ruler).
+  const persistentProposalRulers = useMemo(() => {
+    return persistentProposalPreviews
+      .map((preview) => {
+        const summary = objectSummaries.find(
+          (item) => item.pathKey === preview.pathKey,
+        );
+
+        if (!summary) {
+          return null;
+        }
+
+        const negativeEnd = new THREE.Vector3(...summary.negativeEndWorld);
+        const positiveEnd = new THREE.Vector3(...summary.positiveEndWorld);
+        const axisWorld = positiveEnd
+          .clone()
+          .sub(negativeEnd)
+          .normalize();
+
+        return {
+          pathKey: preview.pathKey,
+          baseWorld: negativeEnd,
+          axisWorld,
+          originalLength: summary.axisLength,
+          deltaMeters: preview.deltaMeters,
+        };
+      })
+      .filter(
+        (
+          item,
+        ): item is {
+          pathKey: string;
+          baseWorld: THREE.Vector3;
+          axisWorld: THREE.Vector3;
+          originalLength: number;
+          deltaMeters: number;
+        } => item !== null,
+      );
+  }, [persistentProposalPreviews, objectSummaries]);
+
   useEffect(() => {
     const sessions = persistentProposalPreviews
       .map((preview) => {
@@ -947,6 +991,7 @@ function Model({
         axisWorld: handle.axisWorld,
         length: handle.length,
         session: heightPreviewSession,
+        isProposal: false,
       };
     }
 
@@ -963,6 +1008,7 @@ function Model({
         axisWorld: handle.axisWorld,
         length: handle.length,
         session: proposalPreviewSession,
+        isProposal: true,
       };
     }
 
@@ -1264,6 +1310,26 @@ function Model({
           onDragStateChange={handleDragStateChange}
         />
       ) : null}
+
+      {handleConfig?.kind === "heightStretch" && handleConfig.isProposal ? (
+        <DimensionRuler
+          baseWorld={handleConfig.baseWorld}
+          axisWorld={handleConfig.axisWorld}
+          originalLength={handleConfig.length}
+          deltaMeters={manipulationValueOrZero}
+        />
+      ) : null}
+
+      {persistentProposalRulers.map((ruler) => (
+        <DimensionRuler
+          key={ruler.pathKey}
+          baseWorld={ruler.baseWorld}
+          axisWorld={ruler.axisWorld}
+          originalLength={ruler.originalLength}
+          deltaMeters={ruler.deltaMeters}
+          color="#94a3b8"
+        />
+      ))}
 
       {handleConfig?.kind === "angle" ? (
         <AngleHandle
