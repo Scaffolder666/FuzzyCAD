@@ -184,6 +184,11 @@
   color: #6d28d9;
 }
 
+.kindPillScale {
+  background: rgba(219, 39, 119, 0.12);
+  color: #be185d;
+}
+
 .confidencePill {
   padding: 2px 7px;
   border-radius: 999px;

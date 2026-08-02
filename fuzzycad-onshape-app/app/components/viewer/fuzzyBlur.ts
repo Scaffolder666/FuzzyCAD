@@ -1477,9 +1477,17 @@ const PROPOSAL_MARKER_COLOR = 0xea580c;
 /** Marker color for move-target objects — distinct from Proposal's orange, so a moved part doesn't read as a length change. */
 const MOVE_MARKER_COLOR = 0x7c3aed;
 
+/** Marker color for scale-target objects — distinct from Proposal/Move so a resize doesn't read as either. */
+const SCALE_MARKER_COLOR = 0x0d9488;
+
 export type MoveMarkerTarget = {
   pathKey: string;
   deltaWorld: [number, number, number];
+};
+
+export type ScaleMarkerTarget = {
+  pathKey: string;
+  factor: number;
 };
 
 /**
@@ -1551,6 +1559,7 @@ export function applyFuzzyConfidence(
   axisFramesByPathKey?: Map<string, ConfidenceAxisFrame>,
   proposalTargets?: ProposalMarkerTarget[],
   moveTargets?: MoveMarkerTarget[],
+  scaleTargets?: ScaleMarkerTarget[],
 ) {
   scene.updateMatrixWorld(true);
 
@@ -1577,10 +1586,22 @@ export function applyFuzzyConfidence(
       .map((target) => [target.pathKey, target]),
   );
 
+  const scaleByPathKey = new Map(
+    (scaleTargets ?? [])
+      .filter(
+        (target) =>
+          !annotationByPathKey.has(target.pathKey) &&
+          !proposalByPathKey.has(target.pathKey) &&
+          !moveByPathKey.has(target.pathKey),
+      )
+      .map((target) => [target.pathKey, target]),
+  );
+
   if (
     annotationByPathKey.size === 0 &&
     proposalByPathKey.size === 0 &&
-    moveByPathKey.size === 0
+    moveByPathKey.size === 0 &&
+    scaleByPathKey.size === 0
   ) {
     return;
   }
@@ -1589,6 +1610,7 @@ export function applyFuzzyConfidence(
     ...annotationByPathKey.keys(),
     ...proposalByPathKey.keys(),
     ...moveByPathKey.keys(),
+    ...scaleByPathKey.keys(),
   ]);
 
   for (const object of targetObjects) {
@@ -1646,13 +1668,27 @@ export function applyFuzzyConfidence(
 
     const moveTarget = moveByPathKey.get(pathKey);
 
-    if (!moveTarget) {
+    if (moveTarget) {
+      applyTintedMaterials(object, MOVE_MARKER_COLOR, 0.16);
+
+      const overlay = createWireframeMarkerOverlay(object, MOVE_MARKER_COLOR);
+
+      if (overlay) {
+        object.add(overlay);
+      }
+
       continue;
     }
 
-    applyTintedMaterials(object, MOVE_MARKER_COLOR, 0.16);
+    const scaleTarget = scaleByPathKey.get(pathKey);
 
-    const overlay = createWireframeMarkerOverlay(object, MOVE_MARKER_COLOR);
+    if (!scaleTarget) {
+      continue;
+    }
+
+    applyTintedMaterials(object, SCALE_MARKER_COLOR, 0.16);
+
+    const overlay = createWireframeMarkerOverlay(object, SCALE_MARKER_COLOR);
 
     if (overlay) {
       object.add(overlay);

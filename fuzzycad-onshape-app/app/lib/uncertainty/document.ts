@@ -97,11 +97,25 @@ export type MoveUncertaintyAnnotation = BaseAnnotationFields & {
   proposedValueLabel: string;
 };
 
+/**
+ * "Scale": a proposed uniform resize of the target, grown/shrunk around its
+ * own bounding-box center rather than along a single local axis — for "this
+ * whole part might need to be bigger/smaller" instead of "this one
+ * dimension changes."
+ */
+export type ScaleUncertaintyAnnotation = BaseAnnotationFields & {
+  type: "scale";
+  factor: number;
+  previousValueLabel: string;
+  proposedValueLabel: string;
+};
+
 export type FuzzyCADUncertaintyAnnotation =
   | SizeUncertaintyAnnotation
   | ProposalUncertaintyAnnotation
   | AlternativeUncertaintyAnnotation
-  | MoveUncertaintyAnnotation;
+  | MoveUncertaintyAnnotation
+  | ScaleUncertaintyAnnotation;
 
 export function createEmptyUncertaintyDocument(
   source: FuzzyCADUncertaintySource,
@@ -165,9 +179,9 @@ function removePathKeysFromAnnotation(
   pathKeysToRemove: Set<string>,
 ): FuzzyCADUncertaintyAnnotation | null {
   if (annotation.type !== "size") {
-    // Proposal/alternative/move removal isn't wired up yet; leave them
-    // untouched rather than silently reconstructing them as a different
-    // annotation type.
+    // Proposal/alternative/move/scale removal isn't wired up yet; leave
+    // them untouched rather than silently reconstructing them as a
+    // different annotation type.
     return annotation;
   }
 
@@ -625,5 +639,106 @@ export function toMovePreviews(
       pathKey: annotation.target.referencePathKey,
       followPathKeys: annotation.followPathKeys,
       deltaWorld: annotation.deltaWorld,
+    }));
+}
+
+export function makeScaleAnnotationId(pathKey: string) {
+  return `scale:${pathKey}`;
+}
+
+function createScaleAnnotation(input: {
+  pathKey: string;
+  factor: number;
+  previousValueLabel: string;
+  proposedValueLabel: string;
+  comment?: string;
+  author?: string;
+  assignee?: string;
+  status?: AnnotationStatus;
+  createdAt?: string;
+  updatedAt?: string;
+}): ScaleUncertaintyAnnotation | null {
+  if (!input.pathKey) {
+    return null;
+  }
+
+  const now = new Date().toISOString();
+
+  return {
+    id: makeScaleAnnotationId(input.pathKey),
+    type: "scale",
+    target: {
+      pathKeys: [input.pathKey],
+      referencePathKey: input.pathKey,
+      scope: "single",
+    },
+    factor: input.factor,
+    previousValueLabel: input.previousValueLabel,
+    proposedValueLabel: input.proposedValueLabel,
+    comment: input.comment,
+    author: input.author,
+    assignee: input.assignee,
+    status: input.status ?? "open",
+    createdAt: input.createdAt ?? now,
+    updatedAt: input.updatedAt ?? now,
+  };
+}
+
+/** One open scale proposal per object — a new save replaces it. */
+export function upsertScale(
+  document: FuzzyCADUncertaintyDocument,
+  input: {
+    pathKey: string;
+    factor: number;
+    previousValueLabel: string;
+    proposedValueLabel: string;
+    author?: string;
+  },
+): FuzzyCADUncertaintyDocument {
+  const id = makeScaleAnnotationId(input.pathKey);
+  const existing = document.annotations.find((annotation) => annotation.id === id);
+
+  const nextAnnotation = createScaleAnnotation({
+    pathKey: input.pathKey,
+    factor: input.factor,
+    previousValueLabel: input.previousValueLabel,
+    proposedValueLabel: input.proposedValueLabel,
+    comment: existing?.comment,
+    author: existing?.author ?? input.author,
+    assignee: existing?.assignee,
+    status: "open",
+    createdAt: existing?.createdAt,
+  });
+
+  if (!nextAnnotation) {
+    return document;
+  }
+
+  return {
+    ...document,
+    annotations: [
+      ...document.annotations.filter((annotation) => annotation.id !== id),
+      nextAnnotation,
+    ],
+  };
+}
+
+export type ScalePreview = {
+  pathKey: string;
+  factor: number;
+};
+
+/** Open scale proposals, for the 3D viewer to render as a persistent ghost. */
+export function toScalePreviews(
+  document: FuzzyCADUncertaintyDocument,
+): ScalePreview[] {
+  return document.annotations
+    .filter(
+      (annotation): annotation is ScaleUncertaintyAnnotation =>
+        annotation.type === "scale" && annotation.status === "open",
+    )
+    .map((annotation) => ({
+      pathKey: annotation.target.referencePathKey,
+      factor: annotation.factor,
     }));
 }

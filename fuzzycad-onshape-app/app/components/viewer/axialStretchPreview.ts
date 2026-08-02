@@ -63,7 +63,7 @@ export type AxialStretchPreviewSession = {
   followPreviews: FollowPreview[];
 };
 
-type PreviewRole = "stretch" | "follow" | "move";
+type PreviewRole = "stretch" | "follow" | "move" | "scale";
 
 function toVector(tuple: [number, number, number]) {
   return new THREE.Vector3(tuple[0], tuple[1], tuple[2]);

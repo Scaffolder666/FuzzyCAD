@@ -30,6 +30,7 @@ import {
   applyFuzzyConfidence,
   type ConfidenceAxisFrame,
   type FuzzyConfidenceAnnotation,
+  type ScaleMarkerTarget,
 } from "./viewer/fuzzyBlur";
 
 import LassoOverlay from "./viewer/LassoOverlay";
@@ -49,6 +50,7 @@ import AngleHandle from "./viewer/AngleHandle";
 import DimensionRuler from "./viewer/DimensionRuler";
 import AxisTriadHandle from "./viewer/AxisTriadHandle";
 import MoveTriadHandle, { type MoveDelta } from "./viewer/MoveTriadHandle";
+import ScaleHandle from "./viewer/ScaleHandle";
 import {
   computeProposalTipSegments,
   type ProposalAxisIndex,
@@ -68,6 +70,12 @@ import {
   updateMoveTranslatePreviewSession,
   type MoveTranslatePreviewSession,
 } from "./viewer/moveTranslatePreview";
+import {
+  createScalePreviewSession,
+  disposeScalePreviewSession,
+  updateScalePreviewSession,
+  type ScalePreviewSession,
+} from "./viewer/scalePreview";
 
 export type { MeshGraphNode } from "./viewer/meshGraph";
 export type { PartPlacement, PlacementReport } from "./viewer/placement";
@@ -111,6 +119,17 @@ export type MovePreview = {
   pathKey: string;
   followPathKeys: string[];
   deltaWorld: [number, number, number];
+};
+
+/** A single-object plan for the "Scale" tool's active drag session. */
+export type ScaleRolePlan = {
+  pathKey: string;
+};
+
+/** A saved scale proposal's factor, structurally the same shape as document.ts's. */
+export type ScalePreview = {
+  pathKey: string;
+  factor: number;
 };
 
 export type FuzzyConfidenceEditor = {
@@ -162,6 +181,12 @@ type FuzzyCADGeometryViewerProps = {
   movePreviews?: MovePreview[];
   moveDelta?: MoveDelta;
   onMoveDeltaChange?: (delta: MoveDelta) => void;
+  /** Single-object plan for the "Scale" tool's active drag session. */
+  scalePlan?: ScaleRolePlan | null;
+  /** Other saved (not currently being dragged) scale proposals, shown as static ghosts. */
+  scalePreviews?: ScalePreview[];
+  scaleFactor?: number;
+  onScaleFactorChange?: (factor: number) => void;
   /** Path key currently under the mouse in the 3D view, for linking to the marks panel. */
   hoveredPathKey?: string | null;
   onHoveredPathKeyChange?: (pathKey: string | null) => void;
@@ -304,6 +329,8 @@ function getBadgePosition(
 const PROPOSAL_ACCENT_COLOR_MUTED = "#fdba74";
 const MOVE_ACCENT_COLOR = "#7c3aed";
 const MOVE_ACCENT_COLOR_MUTED = "#c4b5fd";
+const SCALE_ACCENT_COLOR = "#0d9488";
+const SCALE_ACCENT_COLOR_MUTED = "#99f6e4";
 
 // How long one full there-and-back cycle of a saved-preview loop animation
 // (move ghosts, propose/stretch ghosts) takes, in seconds.
@@ -798,6 +825,10 @@ function Model({
   movePreviews,
   moveDelta = { x: 0, y: 0, z: 0 },
   onMoveDeltaChange,
+  scalePlan,
+  scalePreviews,
+  scaleFactor = 1,
+  onScaleFactorChange,
   hoveredPathKey,
   onHoveredPathKeyChange,
   focusRequest,
@@ -833,6 +864,10 @@ function Model({
   movePreviews?: MovePreview[];
   moveDelta?: MoveDelta;
   onMoveDeltaChange?: (delta: MoveDelta) => void;
+  scalePlan?: ScaleRolePlan | null;
+  scalePreviews?: ScalePreview[];
+  scaleFactor?: number;
+  onScaleFactorChange?: (factor: number) => void;
   hoveredPathKey?: string | null;
   onHoveredPathKeyChange?: (pathKey: string | null) => void;
   focusRequest?: FocusRequest | null;
@@ -1265,6 +1300,211 @@ function Model({
     });
   }, [persistentMovePreviews, objectSummaries]);
 
+  // Active "Scale" drag session — a rigid uniform resize of the target
+  // around its own bounding-box center, no per-vertex deformation needed.
+  const activeScalePathKey = scalePlan?.pathKey ?? null;
+  const activeScaleSummary = useMemo(
+    () =>
+      objectSummaries.find((item) => item.pathKey === activeScalePathKey) ??
+      null,
+    [objectSummaries, activeScalePathKey],
+  );
+
+  // Direction from the object's center toward a corner of its bounding
+  // box, and the distance to that corner at factor 1 — used both as the
+  // scale handle's position and as the pivot/axis for the ghost preview.
+  const activeScaleFrame = useMemo(() => {
+    if (!activeScaleSummary) {
+      return null;
+    }
+
+    const halfSize = new THREE.Vector3(
+      ...activeScaleSummary.aabbSizeWorld,
+    ).multiplyScalar(0.5);
+    const referenceLength = Math.max(halfSize.length(), 1e-6);
+    const axisWorld =
+      halfSize.lengthSq() > 1e-12
+        ? halfSize.clone().normalize()
+        : new THREE.Vector3(1, 1, 1).normalize();
+    const pivotWorld = new THREE.Vector3(
+      ...activeScaleSummary.aabbCenterWorld,
+    );
+
+    return { pivotWorld, axisWorld, referenceLength };
+  }, [activeScaleSummary]);
+
+  const scalePreviewSession = useMemo(() => {
+    if (!scalePlan) {
+      return null;
+    }
+
+    return createScalePreviewSession(scene, objectSummaries, scalePlan.pathKey);
+  }, [scene, objectSummaries, scalePlan]);
+
+  useEffect(() => {
+    if (!scalePreviewSession) {
+      return;
+    }
+
+    scene.add(scalePreviewSession.group);
+    invalidate();
+
+    return () => {
+      disposeScalePreviewSession(scalePreviewSession);
+      invalidate();
+    };
+  }, [scene, scalePreviewSession, invalidate]);
+
+  useEffect(() => {
+    if (!scalePreviewSession) {
+      return;
+    }
+
+    updateScalePreviewSession(scalePreviewSession, scaleFactor);
+    invalidate();
+  }, [scalePreviewSession, scaleFactor, invalidate]);
+
+  // Every OTHER saved scale proposal (not the one currently being dragged)
+  // shows as a static ghost at its saved factor.
+  const persistentScalePreviews = useMemo(
+    () =>
+      (scalePreviews ?? []).filter(
+        (preview) => preview.pathKey !== activeScalePathKey,
+      ),
+    [scalePreviews, activeScalePathKey],
+  );
+
+  // Saved (non-active) scale proposals loop back and forth between their
+  // original and proposed size, same as saved moves/proposals — only while
+  // hovered or selected in the marks panel.
+  const persistentScaleLoopRef = useRef<
+    {
+      session: ScalePreviewSession;
+      factor: number;
+      pathKeys: string[];
+    }[]
+  >([]);
+  const settledScaleSessionsRef = useRef<Set<ScalePreviewSession>>(new Set());
+
+  useEffect(() => {
+    const entries = persistentScalePreviews
+      .map((preview) => {
+        const session = createScalePreviewSession(
+          scene,
+          objectSummaries,
+          preview.pathKey,
+        );
+
+        if (!session) {
+          return null;
+        }
+
+        scene.add(session.group);
+
+        return {
+          session,
+          factor: preview.factor,
+          pathKeys: [preview.pathKey],
+        };
+      })
+      .filter(
+        (
+          entry,
+        ): entry is {
+          session: ScalePreviewSession;
+          factor: number;
+          pathKeys: string[];
+        } => entry !== null,
+      );
+
+    const settledSessions = settledScaleSessionsRef.current;
+
+    persistentScaleLoopRef.current = entries;
+    settledSessions.clear();
+
+    if (entries.length === 0) {
+      return;
+    }
+
+    invalidate();
+
+    return () => {
+      persistentScaleLoopRef.current = [];
+      settledSessions.clear();
+
+      for (const entry of entries) {
+        disposeScalePreviewSession(entry.session);
+      }
+
+      invalidate();
+    };
+  }, [scene, objectSummaries, persistentScalePreviews, invalidate]);
+
+  useFrame(({ clock }) => {
+    const entries = persistentScaleLoopRef.current;
+
+    if (entries.length === 0) {
+      return;
+    }
+
+    const phase =
+      (clock.elapsedTime / PREVIEW_LOOP_PERIOD_SECONDS) * Math.PI * 2;
+    const loopT = (Math.sin(phase) + 1) / 2;
+
+    for (const entry of entries) {
+      const active = isPathKeysUnderInspection(
+        entry.pathKeys,
+        hoveredPathKey,
+        highlightedPathKey,
+        selectedPathKeys,
+      );
+
+      if (!active && settledScaleSessionsRef.current.has(entry.session)) {
+        continue;
+      }
+
+      // At rest (loopT irrelevant) sit exactly at the proposed factor; while
+      // animating, ease between the original (1) and proposed factor.
+      const restFactor = entry.factor;
+      const appliedFactor = active
+        ? 1 + (restFactor - 1) * loopT
+        : restFactor;
+
+      updateScalePreviewSession(entry.session, appliedFactor);
+
+      if (active) {
+        settledScaleSessionsRef.current.delete(entry.session);
+      } else {
+        settledScaleSessionsRef.current.add(entry.session);
+      }
+    }
+  });
+
+  // A small "130%" badge above every saved-but-not-actively-edited scale
+  // proposal, so the change reads as an explicit number, the same way a
+  // Move/Propose delta gets a ruler label.
+  const persistentScaleBadges = useMemo(() => {
+    return persistentScalePreviews.flatMap((preview) => {
+      const summary = objectSummaries.find(
+        (item) => item.pathKey === preview.pathKey,
+      );
+
+      if (!summary) {
+        return [];
+      }
+
+      const halfSize = new THREE.Vector3(...summary.aabbSizeWorld).multiplyScalar(
+        0.5,
+      );
+      const center = new THREE.Vector3(...summary.aabbCenterWorld);
+      const position = center
+        .clone()
+        .add(new THREE.Vector3(0, halfSize.length() * preview.factor + 0.02, 0));
+
+      return [{ key: preview.pathKey, position, factor: preview.factor }];
+    });
+  }, [persistentScalePreviews, objectSummaries]);
+
   const visualConfidenceAnnotations = useMemo(() => {
     const base = confidenceAnnotations ?? [];
 
@@ -1433,6 +1673,16 @@ function Model({
     [movePreviews],
   );
 
+  // Every open scale proposal's target gets the same marker treatment too.
+  const scaleMarkerTargets = useMemo<ScaleMarkerTarget[]>(
+    () =>
+      (scalePreviews ?? []).map((preview) => ({
+        pathKey: preview.pathKey,
+        factor: preview.factor,
+      })),
+    [scalePreviews],
+  );
+
   useEffect(() => {
     applyFuzzyConfidence(
       scene,
@@ -1440,6 +1690,7 @@ function Model({
       axisFramesByPathKey,
       proposalMarkerTargets,
       moveMarkerTargets,
+      scaleMarkerTargets,
     );
     invalidate();
 
@@ -1453,6 +1704,7 @@ function Model({
     axisFramesByPathKey,
     proposalMarkerTargets,
     moveMarkerTargets,
+    scaleMarkerTargets,
     invalidate,
   ]);
 
@@ -1916,6 +2168,43 @@ function Model({
         />
       ))}
 
+      {enableManipulationHandles && scalePlan && activeScaleFrame ? (
+        <ScaleHandle
+          pivotWorld={activeScaleFrame.pivotWorld}
+          axisWorld={activeScaleFrame.axisWorld}
+          referenceLength={activeScaleFrame.referenceLength}
+          factor={scaleFactor}
+          onChange={(factor) => onScaleFactorChange?.(factor)}
+          onDragStateChange={handleDragStateChange}
+        />
+      ) : null}
+
+      {persistentScaleBadges.map((badge) => (
+        <Html
+          key={badge.key}
+          position={badge.position}
+          center
+          zIndexRange={[40, 0]}
+          style={{ pointerEvents: "none" }}
+        >
+          <div
+            style={{
+              padding: "3px 8px",
+              borderRadius: 999,
+              background: "rgba(255,255,255,0.95)",
+              border: `1.5px solid ${SCALE_ACCENT_COLOR_MUTED}`,
+              color: SCALE_ACCENT_COLOR,
+              fontSize: 12,
+              fontWeight: 700,
+              fontFamily: "monospace",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {Math.round(badge.factor * 100)}%
+          </div>
+        </Html>
+      ))}
+
       {handleConfig?.kind === "angle" ? (
         <AngleHandle
           pivotWorld={handleConfig.pivotWorld}
@@ -1953,6 +2242,10 @@ export default function FuzzyCADGeometryViewer({
   movePreviews,
   moveDelta,
   onMoveDeltaChange,
+  scalePlan,
+  scalePreviews,
+  scaleFactor,
+  onScaleFactorChange,
   hoveredPathKey,
   onHoveredPathKeyChange,
   focusRequest,
@@ -2042,6 +2335,10 @@ export default function FuzzyCADGeometryViewer({
                   movePreviews={movePreviews}
                   moveDelta={moveDelta}
                   onMoveDeltaChange={onMoveDeltaChange}
+                  scalePlan={scalePlan}
+                  scalePreviews={scalePreviews}
+                  scaleFactor={scaleFactor}
+                  onScaleFactorChange={onScaleFactorChange}
                   hoveredPathKey={hoveredPathKey}
                   onHoveredPathKeyChange={onHoveredPathKeyChange}
                   focusRequest={focusRequest}

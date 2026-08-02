@@ -81,6 +81,18 @@ function MoveIcon() {
   );
 }
 
+function ScaleIcon() {
+  return (
+    <svg viewBox="0 0 32 32" aria-hidden="true">
+      <rect x="12" y="12" width="8" height="8" rx="1" />
+      <path d="M20 12L27 5" />
+      <path d="M22 5H27V10" />
+      <path d="M12 20L5 27" />
+      <path d="M10 27H5V22" />
+    </svg>
+  );
+}
+
 function AlternativeIcon() {
   return (
     <svg viewBox="0 0 32 32" aria-hidden="true">
@@ -136,6 +148,12 @@ const toolGroups: ToolGroup[] = [
         label: "Move",
         title: "Drag this part to a new position and save the change",
         icon: <MoveIcon />,
+      },
+      {
+        id: "scale",
+        label: "Scale",
+        title: "Grow or shrink this part uniformly and save the change",
+        icon: <ScaleIcon />,
       },
     ],
   },

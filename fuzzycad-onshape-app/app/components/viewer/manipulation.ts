@@ -121,6 +121,55 @@ export function rotateObjectsAroundWorldAxis(
 }
 
 /**
+ * Uniformly scale a set of objects around a fixed world-space pivot: each
+ * object's own scale AND its distance from the pivot both multiply by
+ * `factor`, so the group grows/shrinks as a whole around that point instead
+ * of each object just inflating in place around its own local origin.
+ */
+export function scaleObjectsAroundWorldPivot(
+  objects: THREE.Object3D[],
+  pivotWorld: THREE.Vector3,
+  factor: number,
+) {
+  if (!Number.isFinite(factor) || factor <= 0) {
+    return;
+  }
+
+  for (const object of objects) {
+    object.updateMatrixWorld(true);
+
+    const parent = object.parent;
+    const parentMatrix = parent ? parent.matrixWorld : new THREE.Matrix4();
+    const parentInverse = parentMatrix.clone().invert();
+
+    const worldPos = new THREE.Vector3();
+    const worldQuat = new THREE.Quaternion();
+    const worldScale = new THREE.Vector3();
+    object.matrixWorld.decompose(worldPos, worldQuat, worldScale);
+
+    const newWorldPos = worldPos
+      .clone()
+      .sub(pivotWorld)
+      .multiplyScalar(factor)
+      .add(pivotWorld);
+    const newWorldScale = worldScale.clone().multiplyScalar(factor);
+
+    const newWorldMatrix = new THREE.Matrix4().compose(
+      newWorldPos,
+      worldQuat,
+      newWorldScale,
+    );
+    const newLocalMatrix = new THREE.Matrix4().multiplyMatrices(
+      parentInverse,
+      newWorldMatrix,
+    );
+
+    newLocalMatrix.decompose(object.position, object.quaternion, object.scale);
+    object.matrixWorldNeedsUpdate = true;
+  }
+}
+
+/**
  * Project a world-space point to pixel coordinates within a canvas-sized
  * rect. Returns null if the point is behind the camera (outside NDC z range).
  * Adapted from lassoObjectSelection.ts's projectWorldPoint.

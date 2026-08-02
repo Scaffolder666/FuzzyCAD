@@ -196,6 +196,11 @@ export default function FuzzyCADHome() {
     string[]
   >([]);
 
+  const [activeScalePlan, setActiveScalePlan] = useState<{
+    pathKey: string;
+  } | null>(null);
+  const [scaleFactor, setScaleFactor] = useState(1);
+
   const [heightPreviewOpen, setHeightPreviewOpen] = useState(false);
   const [pendingHeightAxis, setPendingHeightAxis] =
     useState<OperationAxis>("y");
@@ -240,6 +245,7 @@ export default function FuzzyCADHome() {
     confidenceAnnotations,
     proposalPreviews,
     movePreviews,
+    scalePreviews,
     resetUncertaintyDocument,
     upsertSizeMark,
     removeSizeMarks,
@@ -251,6 +257,7 @@ export default function FuzzyCADHome() {
     selectAnnotationAlternativeOption,
     upsertProposal,
     upsertMoveMark,
+    upsertScaleMark,
   } = useUncertaintyDocument(currentUncertaintySource);
 
   const assemblyElements = useMemo(() => {
@@ -363,6 +370,8 @@ export default function FuzzyCADHome() {
     setMoveDelta(ZERO_MOVE_DELTA);
     setMoveCandidateOpen(false);
     setMoveCandidatePathKeys([]);
+    setActiveScalePlan(null);
+    setScaleFactor(1);
     closeSizeUncertaintyEditor();
   }
 
@@ -903,6 +912,41 @@ export default function FuzzyCADHome() {
     setActiveTool("select");
   }
 
+  function startScale() {
+    if (!selectedObjectSummary) {
+      return;
+    }
+
+    setActiveTool("scale");
+    resetSizeOperationState();
+    setLassoPathKeys([]);
+    setActiveScalePlan({ pathKey: selectedObjectSummary.pathKey });
+    setScaleFactor(1);
+  }
+
+  function cancelScale() {
+    setActiveScalePlan(null);
+    setScaleFactor(1);
+    setActiveTool("select");
+  }
+
+  function applyScale() {
+    if (!activeScalePlan) {
+      return;
+    }
+
+    upsertScaleMark({
+      pathKey: activeScalePlan.pathKey,
+      factor: scaleFactor,
+      previousValueLabel: "100%",
+      proposedValueLabel: `${Math.round(scaleFactor * 100)}%`,
+    });
+
+    setActiveScalePlan(null);
+    setScaleFactor(1);
+    setActiveTool("select");
+  }
+
 async function saveProjectStateToOnshape() {
   if (!documentId || !workspaceId) {
     console.warn("Missing documentId or workspaceId");
@@ -1068,6 +1112,10 @@ if (result.ok && result.state) {
           movePreviews={movePreviews}
           moveDelta={moveDelta}
           onMoveDeltaChange={setMoveDelta}
+          scalePlan={activeScalePlan}
+          scalePreviews={scalePreviews}
+          scaleFactor={scaleFactor}
+          onScaleFactorChange={setScaleFactor}
           hoveredPathKey={hoveredPathKey}
           onHoveredPathKeyChange={setHoveredPathKey}
           focusRequest={focusRequest}
@@ -1075,7 +1123,8 @@ if (result.ok && result.state) {
             !heightPreviewOpen &&
             (Boolean(confirmedHeightPlan) ||
               Boolean(proposalPlan) ||
-              Boolean(activeMovePlan))
+              Boolean(activeMovePlan) ||
+              Boolean(activeScalePlan))
           }
           manipulationValue={manipulationValue}
           confidenceAnnotations={confidenceAnnotations}
@@ -1125,6 +1174,11 @@ if (result.ok && result.state) {
 
             if (tool === "move") {
               startMove();
+              return;
+            }
+
+            if (tool === "scale") {
+              startScale();
               return;
             }
 
@@ -1186,6 +1240,28 @@ if (result.ok && result.state) {
               type="button"
               className={styles.manipulationResetButton}
               onClick={applyMove}
+            >
+              Save proposal
+            </button>
+          </div>
+        ) : null}
+
+        {activeTool === "scale" && activeScalePlan ? (
+          <div className={styles.manipulationReadout}>
+            <span className={styles.manipulationValue}>
+              Scale: {Math.round(scaleFactor * 100)}%
+            </span>
+            <button
+              type="button"
+              className={styles.manipulationResetButton}
+              onClick={cancelScale}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              className={styles.manipulationResetButton}
+              onClick={applyScale}
             >
               Save proposal
             </button>
