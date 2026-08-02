@@ -1499,11 +1499,64 @@ function createProposalMarkerOverlay({
   });
 }
 
+export type MoveMarkerTarget = {
+  pathKey: string;
+  deltaWorld: [number, number, number];
+};
+
+const MOVE_DELTA_EPSILON = 1e-5;
+
+/**
+ * A move's delta is a genuine world-space vector (not tied to the object's
+ * own orientation the way a Propose axis is), so — unlike the proposal
+ * marker — this always uses the plain world X/Y/Z frame rather than the
+ * object's local axisFrame, and marks whichever axes actually moved.
+ */
+function buildMoveConfidenceMap(
+  deltaWorld: [number, number, number],
+): AxisConfidenceMap {
+  return {
+    x: Math.abs(deltaWorld[0]) > MOVE_DELTA_EPSILON ? "medium" : "high",
+    y: Math.abs(deltaWorld[1]) > MOVE_DELTA_EPSILON ? "medium" : "high",
+    z: Math.abs(deltaWorld[2]) > MOVE_DELTA_EPSILON ? "medium" : "high",
+  };
+}
+
+function buildMoveDirectionMap(
+  deltaWorld: [number, number, number],
+): AxisDirectionMap {
+  return {
+    x: deltaWorld[0] >= 0 ? "positive" : "negative",
+    y: deltaWorld[1] >= 0 ? "positive" : "negative",
+    z: deltaWorld[2] >= 0 ? "positive" : "negative",
+  };
+}
+
+function createMoveMarkerOverlay({
+  object,
+  deltaWorld,
+}: {
+  object: THREE.Object3D;
+  deltaWorld: [number, number, number];
+}) {
+  return createSelectedObjectLineOverlay({
+    object,
+    annotation: {
+      pathKey: "",
+      confidence: buildMoveConfidenceMap(deltaWorld),
+      directions: buildMoveDirectionMap(deltaWorld),
+    },
+    axisFrame: undefined,
+    colorHex: PROPOSAL_MARKER_COLOR,
+  });
+}
+
 export function applyFuzzyConfidence(
   scene: THREE.Object3D,
   annotations: FuzzyConfidenceAnnotation[],
   axisFramesByPathKey?: Map<string, ConfidenceAxisFrame>,
   proposalTargets?: ProposalMarkerTarget[],
+  moveTargets?: MoveMarkerTarget[],
 ) {
   scene.updateMatrixWorld(true);
 
@@ -1520,13 +1573,28 @@ export function applyFuzzyConfidence(
       .map((target) => [target.pathKey, target]),
   );
 
-  if (annotationByPathKey.size === 0 && proposalByPathKey.size === 0) {
+  const moveByPathKey = new Map(
+    (moveTargets ?? [])
+      .filter(
+        (target) =>
+          !annotationByPathKey.has(target.pathKey) &&
+          !proposalByPathKey.has(target.pathKey),
+      )
+      .map((target) => [target.pathKey, target]),
+  );
+
+  if (
+    annotationByPathKey.size === 0 &&
+    proposalByPathKey.size === 0 &&
+    moveByPathKey.size === 0
+  ) {
     return;
   }
 
   const targetObjects = findTopLevelObjectsByPathKeys(scene, [
     ...annotationByPathKey.keys(),
     ...proposalByPathKey.keys(),
+    ...moveByPathKey.keys(),
   ]);
 
   for (const object of targetObjects) {
@@ -1570,17 +1638,34 @@ export function applyFuzzyConfidence(
 
     const proposalTarget = proposalByPathKey.get(pathKey);
 
-    if (!proposalTarget) {
+    if (proposalTarget) {
+      hideOriginalMaterials(object);
+
+      const overlay = createProposalMarkerOverlay({
+        object,
+        axisIndex: proposalTarget.axisIndex,
+        mode: proposalTarget.mode,
+        axisFrame: axisFramesByPathKey?.get(pathKey),
+      });
+
+      if (overlay) {
+        object.add(overlay);
+      }
+
+      continue;
+    }
+
+    const moveTarget = moveByPathKey.get(pathKey);
+
+    if (!moveTarget) {
       continue;
     }
 
     hideOriginalMaterials(object);
 
-    const overlay = createProposalMarkerOverlay({
+    const overlay = createMoveMarkerOverlay({
       object,
-      axisIndex: proposalTarget.axisIndex,
-      mode: proposalTarget.mode,
-      axisFrame: axisFramesByPathKey?.get(pathKey),
+      deltaWorld: moveTarget.deltaWorld,
     });
 
     if (overlay) {

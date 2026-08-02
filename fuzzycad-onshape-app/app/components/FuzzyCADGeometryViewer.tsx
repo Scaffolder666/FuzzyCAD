@@ -1032,6 +1032,27 @@ function Model({
     };
   }, [scene, persistentMovePreviews, invalidate]);
 
+  // Dimension-ruler for every saved-but-not-actively-edited move, from the
+  // target's original center to where it would end up, so "moved this far"
+  // reads as an explicit measurement the same way a Propose delta does.
+  const persistentMoveRulers = useMemo(() => {
+    return persistentMovePreviews.flatMap((preview) => {
+      const summary = objectSummaries.find(
+        (item) => item.pathKey === preview.pathKey,
+      );
+
+      if (!summary) {
+        return [];
+      }
+
+      const from = new THREE.Vector3(...summary.aabbCenterWorld);
+      const to = from.clone().add(new THREE.Vector3(...preview.deltaWorld));
+      const deltaMeters = to.distanceTo(from);
+
+      return [{ key: preview.pathKey, from, to, deltaMeters }];
+    });
+  }, [persistentMovePreviews, objectSummaries]);
+
   const visualConfidenceAnnotations = useMemo(() => {
     const base = confidenceAnnotations ?? [];
 
@@ -1111,12 +1132,28 @@ function Model({
     [proposalPreviews],
   );
 
+  // Every open move's target (and any mate-linked followers) gets the same
+  // marker treatment, so a proposed move reads as "flagged" on the real
+  // geometry too.
+  const moveMarkerTargets = useMemo(
+    () =>
+      (movePreviews ?? []).flatMap((preview) => [
+        { pathKey: preview.pathKey, deltaWorld: preview.deltaWorld },
+        ...preview.followPathKeys.map((pathKey) => ({
+          pathKey,
+          deltaWorld: preview.deltaWorld,
+        })),
+      ]),
+    [movePreviews],
+  );
+
   useEffect(() => {
     applyFuzzyConfidence(
       scene,
       visualConfidenceAnnotations,
       axisFramesByPathKey,
       proposalMarkerTargets,
+      moveMarkerTargets,
     );
     invalidate();
 
@@ -1129,6 +1166,7 @@ function Model({
     visualConfidenceAnnotations,
     axisFramesByPathKey,
     proposalMarkerTargets,
+    moveMarkerTargets,
     invalidate,
   ]);
 
@@ -1524,6 +1562,35 @@ function Model({
           onDragStateChange={handleDragStateChange}
         />
       ) : null}
+
+      {movePlan && activeMoveSummary
+        ? (() => {
+            const from = new THREE.Vector3(
+              ...activeMoveSummary.aabbCenterWorld,
+            );
+            const to = from
+              .clone()
+              .add(new THREE.Vector3(moveDelta.x, moveDelta.y, moveDelta.z));
+
+            return (
+              <DimensionRuler
+                fromWorld={from}
+                toWorld={to}
+                deltaMeters={to.distanceTo(from)}
+              />
+            );
+          })()
+        : null}
+
+      {persistentMoveRulers.map((ruler) => (
+        <DimensionRuler
+          key={ruler.key}
+          fromWorld={ruler.from}
+          toWorld={ruler.to}
+          deltaMeters={ruler.deltaMeters}
+          color="#94a3b8"
+        />
+      ))}
 
       {handleConfig?.kind === "angle" ? (
         <AngleHandle

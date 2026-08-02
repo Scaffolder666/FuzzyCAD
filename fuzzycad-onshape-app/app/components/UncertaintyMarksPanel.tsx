@@ -12,7 +12,7 @@ import type {
 import type { ConfidenceAxis, ConfidenceLevel } from "../lib/uncertainty/types";
 import styles from "./UncertaintyMarksPanel.module.css";
 
-type FilterKey = "size" | "proposal" | "move" | "alternative";
+type FilterKey = "size" | "proposal" | "alternative";
 
 type UncertaintyMarksPanelProps = {
   document: FuzzyCADUncertaintyDocument;
@@ -30,7 +30,6 @@ type UncertaintyMarksPanelProps = {
 const FILTERS: { key: FilterKey; label: string }[] = [
   { key: "size", label: "Needs input" },
   { key: "proposal", label: "Proposed" },
-  { key: "move", label: "Moved" },
   { key: "alternative", label: "Alternatives" },
 ];
 
@@ -68,6 +67,13 @@ function matchesFilter(
   annotation: FuzzyCADUncertaintyAnnotation,
   filter: FilterKey,
 ) {
+  if (filter === "proposal") {
+    // Move is a kind of proposed change (a position instead of a
+    // dimension) — it shares the "Proposed" filter rather than getting
+    // its own top-level tab.
+    return annotation.type === "proposal" || annotation.type === "move";
+  }
+
   return annotation.type === filter;
 }
 

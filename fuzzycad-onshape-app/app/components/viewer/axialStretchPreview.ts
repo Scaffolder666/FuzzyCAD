@@ -227,19 +227,19 @@ export function cloneObjectForPreview(
   return clone;
 }
 
-const PREVIEW_LINE_COLOR = 0x111111;
+const PREVIEW_LINE_COLOR = 0x475569;
 
 function createWideDashedMaterial() {
   return new LineMaterial({
     color: PREVIEW_LINE_COLOR,
-    linewidth: 3.5,
+    linewidth: 2,
     dashed: true,
-    dashSize: 8,
-    gapSize: 5,
+    dashSize: 7,
+    gapSize: 6,
     dashScale: 1,
     worldUnits: false,
     transparent: true,
-    opacity: 0.98,
+    opacity: 0.72,
     depthTest: false,
     depthWrite: false,
     alphaToCoverage: true,
