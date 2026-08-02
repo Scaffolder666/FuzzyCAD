@@ -11,18 +11,15 @@ import type {
 import type { ConfidenceAxis, ConfidenceLevel } from "../lib/uncertainty/types";
 import styles from "./UncertaintyMarksPanel.module.css";
 
-type FilterKey = "mine" | "size" | "proposal" | "alternative";
+type FilterKey = "size" | "proposal" | "alternative";
 
 type UncertaintyMarksPanelProps = {
   document: FuzzyCADUncertaintyDocument;
   selectedAnnotationId: string | null;
-  currentUserName: string;
-  onCurrentUserNameChange: (name: string) => void;
   onSelectAnnotation: (annotationId: string | null) => void;
   onEditSizeAnnotation: (annotation: SizeUncertaintyAnnotation) => void;
   onDeleteAnnotation: (annotationId: string) => void;
   onCommentChange: (annotationId: string, comment: string) => void;
-  onAssigneeChange: (annotationId: string, assignee: string) => void;
   onResolveAnnotation: (annotationId: string) => void;
   onReopenAnnotation: (annotationId: string) => void;
   onSelectAlternativeOption: (annotationId: string, optionId: string) => void;
@@ -30,7 +27,6 @@ type UncertaintyMarksPanelProps = {
 };
 
 const FILTERS: { key: FilterKey; label: string }[] = [
-  { key: "mine", label: "Assigned to me" },
   { key: "size", label: "Needs input" },
   { key: "proposal", label: "Proposed" },
   { key: "alternative", label: "Alternatives" },
@@ -69,20 +65,7 @@ function getMarkCountLabel(count: number) {
 function matchesFilter(
   annotation: FuzzyCADUncertaintyAnnotation,
   filter: FilterKey,
-  currentUserName: string,
 ) {
-  if (filter === "mine") {
-    // Assignment only makes sense for "needs input" marks — a proposal or
-    // alternative isn't delegated to someone, it's put up for review.
-    if (annotation.type !== "size") {
-      return false;
-    }
-
-    const name = currentUserName.trim().toLowerCase();
-
-    return name.length > 0 && (annotation.assignee ?? "").trim().toLowerCase() === name;
-  }
-
   return annotation.type === filter;
 }
 
@@ -93,7 +76,6 @@ function SizeCard({
   onEdit,
   onDelete,
   onCommentChange,
-  onAssigneeChange,
   onResolve,
 }: {
   annotation: SizeUncertaintyAnnotation;
@@ -102,7 +84,6 @@ function SizeCard({
   onEdit: () => void;
   onDelete: () => void;
   onCommentChange: (comment: string) => void;
-  onAssigneeChange: (assignee: string) => void;
   onResolve: () => void;
 }) {
   const worst = getWorstConfidence(annotation.confidence);
@@ -128,14 +109,6 @@ function SizeCard({
           ? `${annotation.target.pathKeys.length} objects`
           : annotation.target.referencePathKey}
       </div>
-
-      <input
-        className={styles.assigneeInput}
-        value={annotation.assignee ?? ""}
-        placeholder="Assign to..."
-        onClick={(event) => event.stopPropagation()}
-        onChange={(event) => onAssigneeChange(event.target.value)}
-      />
 
       <textarea
         className={styles.comment}
@@ -342,13 +315,10 @@ function AlternativeCard({
 export default function UncertaintyMarksPanel({
   document,
   selectedAnnotationId,
-  currentUserName,
-  onCurrentUserNameChange,
   onSelectAnnotation,
   onEditSizeAnnotation,
   onDeleteAnnotation,
   onCommentChange,
-  onAssigneeChange,
   onResolveAnnotation,
   onReopenAnnotation,
   onSelectAlternativeOption,
@@ -366,7 +336,7 @@ export default function UncertaintyMarksPanel({
 
   const visibleAnnotations = activeFilter
     ? openAnnotations.filter((annotation) =>
-        matchesFilter(annotation, activeFilter, currentUserName),
+        matchesFilter(annotation, activeFilter),
       )
     : openAnnotations;
 
@@ -390,16 +360,6 @@ export default function UncertaintyMarksPanel({
               Show all
             </button>
           ) : null}
-        </div>
-
-        <div className={styles.identityRow}>
-          <span className={styles.identityLabel}>You:</span>
-          <input
-            className={styles.identityInput}
-            value={currentUserName}
-            placeholder="your name"
-            onChange={(event) => onCurrentUserNameChange(event.target.value)}
-          />
         </div>
 
         <div className={styles.filterRow}>
@@ -454,9 +414,6 @@ export default function UncertaintyMarksPanel({
                   onDelete={() => onDeleteAnnotation(annotation.id)}
                   onCommentChange={(comment) =>
                     onCommentChange(annotation.id, comment)
-                  }
-                  onAssigneeChange={(assignee) =>
-                    onAssigneeChange(annotation.id, assignee)
                   }
                   onResolve={() => onResolveAnnotation(annotation.id)}
                 />

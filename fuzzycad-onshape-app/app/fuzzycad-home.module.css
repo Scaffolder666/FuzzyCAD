@@ -231,11 +231,11 @@
 
 .operationToolbar {
   display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px;
+  align-items: flex-end;
+  gap: 4px;
+  padding: 10px 14px 10px;
   border: 1px solid rgba(104, 165, 255, 0.58);
-  border-radius: 18px;
+  border-radius: 20px;
   background:
     linear-gradient(
       180deg,
@@ -247,6 +247,32 @@
     0 0 0 1px rgba(255, 255, 255, 0.55) inset;
   backdrop-filter: blur(18px);
   pointer-events: auto;
+}
+
+.toolGroup {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 0 12px;
+}
+
+.toolGroup + .toolGroup {
+  border-left: 1px solid rgba(104, 165, 255, 0.28);
+}
+
+.toolGroupLabel {
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #5b7bd8;
+  white-space: nowrap;
+}
+
+.toolGroupButtons {
+  display: flex;
+  gap: 8px;
 }
 
 .operationToolButton {

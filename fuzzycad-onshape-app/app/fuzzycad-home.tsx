@@ -57,7 +57,6 @@ import {
 } from "./lib/uncertainty/document";
 import { AXIS_LABEL } from "./components/viewer/AxisTriadHandle";
 import { useUncertaintyDocument } from "./hooks/useUncertaintyDocument";
-import { useLocalIdentity } from "./hooks/useLocalIdentity";
 import { buildFuzzyCADProjectState } from "./lib/fuzzycad/projectState";
 import { exportAnnotatedSelectionStl } from "./lib/fuzzycad/exportAnnotatedSelectionStl";
 
@@ -225,15 +224,11 @@ export default function FuzzyCADHome() {
     deleteAnnotation,
     replaceUncertaintyDocument,
     updateAnnotationComment,
-    updateAnnotationAssignee,
     resolveAnnotation,
     reopenAnnotation,
     selectAnnotationAlternativeOption,
     upsertProposal,
   } = useUncertaintyDocument(currentUncertaintySource);
-
-  const { name: currentUserName, setName: setCurrentUserName } =
-    useLocalIdentity();
 
   const assemblyElements = useMemo(() => {
     const data = elementsResult?.data;
@@ -598,7 +593,6 @@ export default function FuzzyCADHome() {
       pathKeys: targetPathKeys,
       confidence: confidenceDraft,
       directions: confidenceDirectionDraft,
-      author: currentUserName.trim().length > 0 ? currentUserName.trim() : undefined,
     });
 
     setSelectedUncertaintyId(makeSizeAnnotationId(targetPathKeys));
@@ -758,8 +752,6 @@ export default function FuzzyCADHome() {
       previousValueLabel: formatLengthMeters(previousLength),
       proposedValueLabel: formatLengthMeters(proposedLength),
       deltaMeters,
-      author:
-        currentUserName.trim().length > 0 ? currentUserName.trim() : undefined,
     });
 
     setProposalPlan(null);
@@ -1020,13 +1012,10 @@ if (result.ok && result.state) {
         <UncertaintyMarksPanel
           document={uncertaintyDocumentWithCurrentSource}
           selectedAnnotationId={selectedUncertaintyId}
-          currentUserName={currentUserName}
-          onCurrentUserNameChange={setCurrentUserName}
           onSelectAnnotation={selectUncertaintyCard}
           onEditSizeAnnotation={editSizeUncertaintyCard}
           onDeleteAnnotation={deleteUncertaintyCard}
           onCommentChange={updateUncertaintyCardComment}
-          onAssigneeChange={updateAnnotationAssignee}
           onResolveAnnotation={resolveAnnotation}
           onReopenAnnotation={reopenAnnotation}
           onSelectAlternativeOption={selectAnnotationAlternativeOption}

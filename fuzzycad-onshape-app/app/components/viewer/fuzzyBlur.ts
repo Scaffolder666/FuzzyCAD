@@ -7,6 +7,13 @@ import type {
   ConfidenceLevel,
   FuzzyConfidenceAnnotation,
 } from "../../lib/uncertainty/types";
+import type { ProposalAxisIndex, ProposalAxisMode } from "./proposalAxis";
+
+export type ProposalMarkerTarget = {
+  pathKey: string;
+  axisIndex: ProposalAxisIndex;
+  mode: ProposalAxisMode;
+};
 
 export type { FuzzyConfidenceAnnotation };
 
@@ -696,10 +703,12 @@ function createLineOverlayMaterial({
   measure,
   confidence,
   directions,
+  colorHex,
 }: {
   measure: DirectionalMeasure;
   confidence: AxisConfidenceMap;
   directions: AxisDirectionMap;
+  colorHex?: number;
 }) {
   const profile = getVisualProfile(confidence);
 
@@ -711,7 +720,7 @@ function createLineOverlayMaterial({
     vertexShader: LINE_OVERLAY_VERTEX_SHADER,
     fragmentShader: LINE_OVERLAY_FRAGMENT_SHADER,
     uniforms: {
-      uLineColor: { value: new THREE.Color(0x111827) },
+      uLineColor: { value: new THREE.Color(colorHex ?? 0x111827) },
 
       uOpacity: { value: profile.lineOpacity },
       uSpacing: { value: profile.lineSpacing },
@@ -776,16 +785,18 @@ function getGeometryOutlineWidth(
 function createOuterOutlineMaterial({
   outlineWidth,
   profile,
+  colorHex,
 }: {
   outlineWidth: number;
   profile: { outlineOpacity: number };
+  colorHex?: number;
 }) {
   const material = new THREE.ShaderMaterial({
     vertexShader: OUTER_OUTLINE_VERTEX_SHADER,
     fragmentShader: OUTER_OUTLINE_FRAGMENT_SHADER,
     uniforms: {
       uOutlineWidth: { value: outlineWidth },
-      uOutlineColor: { value: new THREE.Color(0x111827) },
+      uOutlineColor: { value: new THREE.Color(colorHex ?? 0x111827) },
       uOutlineOpacity: { value: profile.outlineOpacity },
     },
     transparent: true,
@@ -1208,10 +1219,12 @@ function createSelectedObjectLineOverlay({
   object,
   annotation,
   axisFrame,
+  colorHex,
 }: {
   object: THREE.Object3D;
   annotation: FuzzyConfidenceAnnotation;
   axisFrame: ConfidenceAxisFrame | undefined;
+  colorHex?: number;
 }) {
   const measure = measureObjectDirectionality(object, axisFrame);
 
@@ -1257,6 +1270,7 @@ function createSelectedObjectLineOverlay({
     const outlineMaterial = createOuterOutlineMaterial({
       outlineWidth,
       profile,
+      colorHex,
     });
 
     const outlineMesh = new THREE.Mesh(outlineGeometry, outlineMaterial);
@@ -1274,6 +1288,7 @@ function createSelectedObjectLineOverlay({
       measure,
       confidence: annotation.confidence,
       directions,
+      colorHex,
     });
 
     const overlayMesh = new THREE.Mesh(overlayGeometry, overlayMaterial);
@@ -1412,28 +1427,107 @@ function createSectionedRangeEnvelope({
   return envelopeGroup;
 }
 
+/** Marker color for proposal-target objects — distinct from Size marks' near-black hatching. */
+const PROPOSAL_MARKER_COLOR = 0xea580c;
+
+/**
+ * Maps a proposal's local axis (0=length/1=width/2=height) onto the
+ * confidence shader's x/y/z labels. axisIndex 0 is always the object's
+ * principal axis, which getObjectAxisFrame also always maps to "y" — so
+ * this lines up exactly with the frame the caller passes in.
+ */
+const PROPOSAL_AXIS_TO_CONFIDENCE_AXIS: Record<ProposalAxisIndex, ConfidenceAxis> = {
+  0: "y",
+  1: "x",
+  2: "z",
+};
+
+function buildProposalConfidenceMap(
+  axisIndex: ProposalAxisIndex,
+): AxisConfidenceMap {
+  const activeAxis = PROPOSAL_AXIS_TO_CONFIDENCE_AXIS[axisIndex];
+
+  return {
+    x: activeAxis === "x" ? "medium" : "high",
+    y: activeAxis === "y" ? "medium" : "high",
+    z: activeAxis === "z" ? "medium" : "high",
+  };
+}
+
+function buildProposalDirectionMap(
+  axisIndex: ProposalAxisIndex,
+  mode: ProposalAxisMode,
+): AxisDirectionMap {
+  const activeAxis = PROPOSAL_AXIS_TO_CONFIDENCE_AXIS[axisIndex];
+  const direction: ConfidenceDirection = mode === "symmetric" ? "both" : mode;
+
+  return {
+    x: activeAxis === "x" ? direction : "both",
+    y: activeAxis === "y" ? direction : "both",
+    z: activeAxis === "z" ? direction : "both",
+  };
+}
+
+/**
+ * The hatched-line + outline marker that flags a Size mark's target object
+ * also applied to a Proposal's target — same visual language ("this part
+ * has an open annotation"), tinted orange to read as "proposed" rather than
+ * "needs input", and without the nested range-envelope shell (that
+ * specifically depicts a fuzzy range, which doesn't apply to a proposal
+ * that already has a specific value in mind).
+ */
+function createProposalMarkerOverlay({
+  object,
+  axisIndex,
+  mode,
+  axisFrame,
+}: {
+  object: THREE.Object3D;
+  axisIndex: ProposalAxisIndex;
+  mode: ProposalAxisMode;
+  axisFrame: ConfidenceAxisFrame | undefined;
+}) {
+  return createSelectedObjectLineOverlay({
+    object,
+    annotation: {
+      pathKey: "",
+      confidence: buildProposalConfidenceMap(axisIndex),
+      directions: buildProposalDirectionMap(axisIndex, mode),
+    },
+    axisFrame,
+    colorHex: PROPOSAL_MARKER_COLOR,
+  });
+}
+
 export function applyFuzzyConfidence(
   scene: THREE.Object3D,
   annotations: FuzzyConfidenceAnnotation[],
   axisFramesByPathKey?: Map<string, ConfidenceAxisFrame>,
+  proposalTargets?: ProposalMarkerTarget[],
 ) {
   scene.updateMatrixWorld(true);
 
   clearFuzzyVisualChildren(scene);
   restoreOriginalMaterials(scene);
 
-  if (annotations.length === 0) {
-    return;
-  }
-
   const annotationByPathKey = new Map(
     annotations.map((annotation) => [annotation.pathKey, annotation]),
   );
 
-  const targetObjects = findTopLevelObjectsByPathKeys(
-    scene,
-    annotations.map((annotation) => annotation.pathKey),
+  const proposalByPathKey = new Map(
+    (proposalTargets ?? [])
+      .filter((target) => !annotationByPathKey.has(target.pathKey))
+      .map((target) => [target.pathKey, target]),
   );
+
+  if (annotationByPathKey.size === 0 && proposalByPathKey.size === 0) {
+    return;
+  }
+
+  const targetObjects = findTopLevelObjectsByPathKeys(scene, [
+    ...annotationByPathKey.keys(),
+    ...proposalByPathKey.keys(),
+  ]);
 
   for (const object of targetObjects) {
     const pathKey = object.userData?.fuzzyPathKey;
@@ -1444,25 +1538,48 @@ export function applyFuzzyConfidence(
 
     const annotation = annotationByPathKey.get(pathKey);
 
-    if (!annotation || !hasUncertainty(annotation.confidence)) {
+    if (annotation) {
+      if (!hasUncertainty(annotation.confidence)) {
+        continue;
+      }
+
+      hideOriginalMaterials(object);
+
+      const envelope = createSectionedRangeEnvelope({
+        object,
+        annotation,
+        axisFrame: axisFramesByPathKey?.get(pathKey),
+      });
+
+      if (envelope) {
+        object.add(envelope);
+      }
+
+      const overlay = createSelectedObjectLineOverlay({
+        object,
+        annotation,
+        axisFrame: axisFramesByPathKey?.get(pathKey),
+      });
+
+      if (overlay) {
+        object.add(overlay);
+      }
+
+      continue;
+    }
+
+    const proposalTarget = proposalByPathKey.get(pathKey);
+
+    if (!proposalTarget) {
       continue;
     }
 
     hideOriginalMaterials(object);
 
-    const envelope = createSectionedRangeEnvelope({
+    const overlay = createProposalMarkerOverlay({
       object,
-      annotation,
-      axisFrame: axisFramesByPathKey?.get(pathKey),
-    });
-
-    if (envelope) {
-      object.add(envelope);
-    }
-
-    const overlay = createSelectedObjectLineOverlay({
-      object,
-      annotation,
+      axisIndex: proposalTarget.axisIndex,
+      mode: proposalTarget.mode,
       axisFrame: axisFramesByPathKey?.get(pathKey),
     });
 

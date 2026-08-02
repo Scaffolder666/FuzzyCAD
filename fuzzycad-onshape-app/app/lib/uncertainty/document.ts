@@ -313,30 +313,6 @@ export function updateUncertaintyAnnotationComment(
   };
 }
 
-export function updateUncertaintyAnnotationAssignee(
-  document: FuzzyCADUncertaintyDocument,
-  annotationId: string,
-  assignee: string,
-): FuzzyCADUncertaintyDocument {
-  const now = new Date().toISOString();
-  const trimmed = assignee.trim();
-
-  return {
-    ...document,
-    annotations: document.annotations.map((annotation) => {
-      if (annotation.id !== annotationId) {
-        return annotation;
-      }
-
-      return {
-        ...annotation,
-        assignee: trimmed.length > 0 ? trimmed : undefined,
-        updatedAt: now,
-      };
-    }),
-  };
-}
-
 function setAnnotationStatus(
   document: FuzzyCADUncertaintyDocument,
   annotationId: string,

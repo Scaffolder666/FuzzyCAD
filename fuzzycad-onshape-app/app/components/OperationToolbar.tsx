@@ -68,20 +68,18 @@ function AngleIcon() {
   );
 }
 
-function MoveIcon() {
+function AlternativeIcon() {
   return (
     <svg viewBox="0 0 32 32" aria-hidden="true">
-      <path d="M16 5V27" />
-      <path d="M5 16H27" />
-      <path d="M12 9L16 5L20 9" />
-      <path d="M12 23L16 27L20 23" />
-      <path d="M9 12L5 16L9 20" />
-      <path d="M23 12L27 16L23 20" />
+      <rect x="5" y="8" width="10" height="10" rx="1.5" />
+      <rect x="17" y="14" width="10" height="10" rx="1.5" />
+      <path d="M15 11L21 11" />
+      <path d="M19 8L22 11L19 14" />
     </svg>
   );
 }
 
-const tools: ToolItem[] = [
+const generalTools: ToolItem[] = [
   {
     id: "select",
     label: "Select",
@@ -95,25 +93,45 @@ const tools: ToolItem[] = [
     icon: <LassoIcon />,
     hidden: true,
   },
+];
+
+type ToolGroup = {
+  key: string;
+  label: string;
+  tools: ToolItem[];
+};
+
+const toolGroups: ToolGroup[] = [
   {
-    id: "height",
-    label: "Size",
-    title: "Add size/height uncertainty mark",
-    icon: <SizeIcon />,
+    key: "proposed",
+    label: "Proposed",
+    tools: [
+      {
+        id: "extend",
+        label: "Propose",
+        title: "Drag to a specific length and save it as a proposed change",
+        icon: <ExtendIcon />,
+      },
+      {
+        id: "angle",
+        label: "Angle",
+        title: "Drag to a specific angle",
+        icon: <AngleIcon />,
+      },
+    ],
   },
   {
-    id: "extend",
-    label: "Propose",
-    title: "Drag to a specific length and save it as a proposed change",
-    icon: <ExtendIcon />,
+    key: "needsInput",
+    label: "Needs input",
+    tools: [
+      {
+        id: "height",
+        label: "Size",
+        title: "Add size/height uncertainty mark",
+        icon: <SizeIcon />,
+      },
+    ],
   },
-  {
-    id: "angle",
-    label: "Angle",
-    title: "Adjust support arm angle",
-    icon: <AngleIcon />,
-  },
- 
 ];
 
 export default function OperationToolbar({
@@ -121,34 +139,65 @@ export default function OperationToolbar({
   disabled = false,
   onToolChange,
 }: OperationToolbarProps) {
+  function renderButton(tool: ToolItem) {
+    const active = activeTool === tool.id;
+
+    return (
+      <button
+        key={tool.id}
+        type="button"
+        title={tool.title}
+        disabled={disabled}
+        className={
+          active
+            ? `${styles.operationToolButton} ${styles.operationToolButtonActive}`
+            : styles.operationToolButton
+        }
+        onClick={() => {
+          onToolChange(tool.id);
+        }}
+      >
+        <span className={styles.operationToolIcon}>{tool.icon}</span>
+        <span className={styles.operationToolLabel}>{tool.label}</span>
+      </button>
+    );
+  }
+
   return (
     <div className={styles.operationToolbarWrap}>
       <div className={styles.operationToolbar} aria-label="FuzzyCAD tools">
-        {tools
-          .filter((tool) => !tool.hidden)
-          .map((tool) => {
-            const active = activeTool === tool.id;
+        <div className={styles.toolGroup}>
+          <span className={styles.toolGroupLabel}>General</span>
+          <div className={styles.toolGroupButtons}>
+            {generalTools.filter((tool) => !tool.hidden).map(renderButton)}
+          </div>
+        </div>
 
-            return (
-              <button
-                key={tool.id}
-                type="button"
-                title={tool.title}
-                disabled={disabled}
-                className={
-                  active
-                    ? `${styles.operationToolButton} ${styles.operationToolButtonActive}`
-                    : styles.operationToolButton
-                }
-                onClick={() => {
-                  onToolChange(tool.id);
-                }}
-              >
-                <span className={styles.operationToolIcon}>{tool.icon}</span>
-                <span className={styles.operationToolLabel}>{tool.label}</span>
-              </button>
-            );
-          })}
+        {toolGroups.map((group) => (
+          <div key={group.key} className={styles.toolGroup}>
+            <span className={styles.toolGroupLabel}>{group.label}</span>
+            <div className={styles.toolGroupButtons}>
+              {group.tools.map(renderButton)}
+            </div>
+          </div>
+        ))}
+
+        <div className={styles.toolGroup}>
+          <span className={styles.toolGroupLabel}>Alternative</span>
+          <div className={styles.toolGroupButtons}>
+            <button
+              type="button"
+              title="Compare competing component options — coming soon"
+              disabled
+              className={styles.operationToolButton}
+            >
+              <span className={styles.operationToolIcon}>
+                <AlternativeIcon />
+              </span>
+              <span className={styles.operationToolLabel}>Alternative</span>
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   );

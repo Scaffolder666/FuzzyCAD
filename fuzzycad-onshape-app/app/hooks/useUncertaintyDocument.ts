@@ -8,7 +8,6 @@ import {
   selectAlternativeOption,
   toFuzzyConfidenceAnnotations,
   toProposalPreviews,
-  updateUncertaintyAnnotationAssignee,
   updateUncertaintyAnnotationComment,
   upsertSizeAnnotation,
   upsertSizeProposal,
@@ -111,19 +110,6 @@ export function useUncertaintyDocument(source: FuzzyCADUncertaintySource) {
     );
   }
 
-  function updateAnnotationAssignee(annotationId: string, assignee: string) {
-    setUncertaintyDocument((previous) =>
-      updateUncertaintyAnnotationAssignee(
-        {
-          ...previous,
-          source,
-        },
-        annotationId,
-        assignee,
-      ),
-    );
-  }
-
   function resolveAnnotation(annotationId: string) {
     setUncertaintyDocument((previous) =>
       resolveUncertaintyAnnotation(
@@ -196,7 +182,6 @@ export function useUncertaintyDocument(source: FuzzyCADUncertaintySource) {
     removeSizeMarks,
     deleteAnnotation,
     updateAnnotationComment,
-    updateAnnotationAssignee,
     resolveAnnotation,
     reopenAnnotation,
     selectAnnotationAlternativeOption,

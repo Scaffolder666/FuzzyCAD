@@ -443,30 +443,20 @@ function ConfidenceEditorWidget({
   );
 }
 
+/**
+ * axisIndex 0 (principal/length) always maps to "y" here, matching the
+ * proposal-marker overlay's PROPOSAL_AXIS_TO_CONFIDENCE_AXIS convention, so
+ * a Proposal's axis lines up exactly with the same real, PCA-derived
+ * direction the Size tool's confidence shell uses — not an arbitrary
+ * cross-product perpendicular.
+ */
 function getObjectAxisFrame(
   summary: AxialStretchObjectSummary,
 ): ConfidenceAxisFrame {
-  const yAxis = new THREE.Vector3(...summary.principalAxisWorld);
-
-  if (yAxis.lengthSq() < 1e-10) {
-    yAxis.set(0, 1, 0);
-  } else {
-    yAxis.normalize();
-  }
-
-  const worldUp = new THREE.Vector3(0, 1, 0);
-  const worldX = new THREE.Vector3(1, 0, 0);
-
-  const helper = Math.abs(yAxis.dot(worldUp)) > 0.92 ? worldX : worldUp;
-
-  const xAxis = new THREE.Vector3().crossVectors(helper, yAxis).normalize();
-
-  const zAxis = new THREE.Vector3().crossVectors(yAxis, xAxis).normalize();
-
   return {
-    x: [xAxis.x, xAxis.y, xAxis.z],
-    y: [yAxis.x, yAxis.y, yAxis.z],
-    z: [zAxis.x, zAxis.y, zAxis.z],
+    x: summary.localAxes[1].directionWorld,
+    y: summary.localAxes[0].directionWorld,
+    z: summary.localAxes[2].directionWorld,
   };
 }
 
@@ -977,11 +967,25 @@ function Model({
     applyPathHighlight(scene, activeHighlights);
   }, [scene, highlightedPathKey, selectedPathKeys]);
 
+  // Every open proposal's target object gets the same hatched-marker
+  // treatment Size marks get (see applyFuzzyConfidence), so it reads as
+  // "flagged" on the real geometry, not just via the ghost preview/ruler.
+  const proposalMarkerTargets = useMemo(
+    () =>
+      (proposalPreviews ?? []).map((preview) => ({
+        pathKey: preview.pathKey,
+        axisIndex: preview.axisIndex,
+        mode: preview.mode,
+      })),
+    [proposalPreviews],
+  );
+
   useEffect(() => {
     applyFuzzyConfidence(
       scene,
       visualConfidenceAnnotations,
       axisFramesByPathKey,
+      proposalMarkerTargets,
     );
     invalidate();
 
@@ -989,7 +993,13 @@ function Model({
       applyFuzzyConfidence(scene, []);
       invalidate();
     };
-  }, [scene, visualConfidenceAnnotations, axisFramesByPathKey, invalidate]);
+  }, [
+    scene,
+    visualConfidenceAnnotations,
+    axisFramesByPathKey,
+    proposalMarkerTargets,
+    invalidate,
+  ]);
 
   // --- Sizing / angle handle setup -------------------------------------
 
