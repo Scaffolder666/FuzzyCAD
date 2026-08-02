@@ -199,6 +199,32 @@ function midpoint(a: [number, number, number], b: [number, number, number]) {
   ];
 }
 
+/**
+ * Whether a saved-preview's loop animation should be playing right now:
+ * only while its object is hovered in the viewport, or its card is
+ * selected/hovered in the marks panel — not all the time.
+ */
+function isPathKeysUnderInspection(
+  pathKeys: string[],
+  hoveredPathKey: string | null | undefined,
+  highlightedPathKey: string | null | undefined,
+  selectedPathKeys: string[] | undefined,
+): boolean {
+  if (hoveredPathKey && pathKeys.includes(hoveredPathKey)) {
+    return true;
+  }
+
+  if (highlightedPathKey && pathKeys.includes(highlightedPathKey)) {
+    return true;
+  }
+
+  if (selectedPathKeys?.some((pathKey) => pathKeys.includes(pathKey))) {
+    return true;
+  }
+
+  return false;
+}
+
 function getLowerEnd(summary: AxialStretchObjectSummary) {
   return summary.negativeEndWorld[1] <= summary.positiveEndWorld[1]
     ? summary.negativeEndWorld
@@ -275,6 +301,10 @@ const MOVE_ACCENT_COLOR_MUTED = "#c4b5fd";
 // How long one full there-and-back cycle of a saved-preview loop animation
 // (move ghosts, propose/stretch ghosts) takes, in seconds.
 const PREVIEW_LOOP_PERIOD_SECONDS = 2.6;
+
+// Matches the blue emissive glow applyPathHighlight uses for a selection, so
+// the bounding box and the glow read as the same "this is selected" signal.
+const SELECTION_BOX_COLOR = "#2b6cff";
 
 const CONFIDENCE_ORDER: ConfidenceLevel[] = ["high", "medium", "low"];
 
@@ -928,9 +958,15 @@ function Model({
 
   // Saved (non-active) proposals loop back and forth between their original
   // size and the proposed stretch, same as saved moves, so "this dimension
-  // was proposed to change" reads at a glance.
+  // was proposed to change" reads clearly — but only while the object is
+  // actually being looked at (hovered, or its card selected in the marks
+  // panel); otherwise it just sits at the proposed size.
   const persistentProposalLoopRef = useRef<
-    { session: AxialStretchPreviewSession; deltaMeters: number }[]
+    {
+      session: AxialStretchPreviewSession;
+      deltaMeters: number;
+      pathKeys: string[];
+    }[]
   >([]);
 
   useEffect(() => {
@@ -955,7 +991,11 @@ function Model({
 
         scene.add(session.group);
 
-        return { session, deltaMeters: preview.deltaMeters };
+        return {
+          session,
+          deltaMeters: preview.deltaMeters,
+          pathKeys: [preview.pathKey],
+        };
       })
       .filter(
         (
@@ -963,6 +1003,7 @@ function Model({
         ): entry is {
           session: AxialStretchPreviewSession;
           deltaMeters: number;
+          pathKeys: string[];
         } => entry !== null,
       );
 
@@ -994,9 +1035,18 @@ function Model({
 
     const phase =
       (clock.elapsedTime / PREVIEW_LOOP_PERIOD_SECONDS) * Math.PI * 2;
-    const t = (Math.sin(phase) + 1) / 2;
+    const loopT = (Math.sin(phase) + 1) / 2;
 
     for (const entry of entries) {
+      const t = isPathKeysUnderInspection(
+        entry.pathKeys,
+        hoveredPathKey,
+        highlightedPathKey,
+        selectedPathKeys,
+      )
+        ? loopT
+        : 1;
+
       updateAxialStretchPreviewSession(entry.session, entry.deltaMeters * t);
     }
   });
@@ -1059,10 +1109,15 @@ function Model({
   );
 
   // Saved (non-active) moves loop back and forth between their original spot
-  // and the proposed one, so "this was moved" reads at a glance without
-  // needing to hover or click anything.
+  // and the proposed one — but, like saved proposals, only while the object
+  // is hovered or its card is selected in the marks panel, so the viewport
+  // isn't constantly animating unprompted.
   const persistentMoveLoopRef = useRef<
-    { session: MoveTranslatePreviewSession; deltaWorld: THREE.Vector3 }[]
+    {
+      session: MoveTranslatePreviewSession;
+      deltaWorld: THREE.Vector3;
+      pathKeys: string[];
+    }[]
   >([]);
 
   useEffect(() => {
@@ -1082,6 +1137,7 @@ function Model({
         return {
           session,
           deltaWorld: new THREE.Vector3(...preview.deltaWorld),
+          pathKeys: [preview.pathKey, ...preview.followPathKeys],
         };
       })
       .filter(
@@ -1090,6 +1146,7 @@ function Model({
         ): entry is {
           session: MoveTranslatePreviewSession;
           deltaWorld: THREE.Vector3;
+          pathKeys: string[];
         } => entry !== null,
       );
 
@@ -1121,9 +1178,18 @@ function Model({
 
     const phase =
       (clock.elapsedTime / PREVIEW_LOOP_PERIOD_SECONDS) * Math.PI * 2;
-    const t = (Math.sin(phase) + 1) / 2;
+    const loopT = (Math.sin(phase) + 1) / 2;
 
     for (const entry of entries) {
+      const t = isPathKeysUnderInspection(
+        entry.pathKeys,
+        hoveredPathKey,
+        highlightedPathKey,
+        selectedPathKeys,
+      )
+        ? loopT
+        : 1;
+
       updateMoveTranslatePreviewSession(
         entry.session,
         entry.deltaWorld.clone().multiplyScalar(t),
@@ -1218,6 +1284,55 @@ function Model({
     applyPathHighlight(scene, activeHighlights, hoveredPathKey);
     invalidate();
   }, [scene, highlightedPathKey, selectedPathKeys, hoveredPathKey, invalidate]);
+
+  // A SketchUp-style blue bounding box around each currently selected
+  // object, on top of the emissive glow above, so a selection reads
+  // unambiguously even on parts whose material barely picks up the glow.
+  const selectionBoxHelpers = useMemo(() => {
+    const activeHighlights =
+      selectedPathKeys && selectedPathKeys.length > 0
+        ? selectedPathKeys
+        : highlightedPathKey
+          ? [highlightedPathKey]
+          : [];
+
+    return activeHighlights.flatMap((pathKey) => {
+      const [target] = findObjectsByPathKeys(scene, [pathKey]);
+
+      if (!target) {
+        return [];
+      }
+
+      const box = new THREE.Box3().setFromObject(target);
+
+      if (box.isEmpty()) {
+        return [];
+      }
+
+      const helper = new THREE.Box3Helper(
+        box,
+        new THREE.Color(SELECTION_BOX_COLOR),
+      );
+      const material = helper.material as THREE.LineBasicMaterial;
+      material.transparent = true;
+      material.opacity = 0.9;
+      material.depthTest = false;
+      helper.renderOrder = 998;
+
+      return [{ key: pathKey, helper }];
+    });
+  }, [scene, selectedPathKeys, highlightedPathKey]);
+
+  useEffect(() => {
+    invalidate();
+
+    return () => {
+      for (const { helper } of selectionBoxHelpers) {
+        helper.geometry.dispose();
+        (helper.material as THREE.Material).dispose();
+      }
+    };
+  }, [selectionBoxHelpers, invalidate]);
 
   // Smoothly fly the camera to frame a specific object — e.g. clicking a
   // card in the marks panel, so the panel visibly "does something" even
@@ -1616,6 +1731,10 @@ function Model({
         onPointerOver={handlePointerOver}
         onPointerOut={handlePointerOut}
       />
+
+      {selectionBoxHelpers.map(({ key, helper }) => (
+        <primitive key={key} object={helper} />
+      ))}
 
       {roleBadges.map((badge) => (
         <RoleBadge
