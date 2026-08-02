@@ -276,10 +276,9 @@ export default function OperationToolbar({
         key={tool.id}
         className={styles.toolButtonWrap}
         onMouseEnter={() => setHoveredKey(tool.id)}
-        onMouseLeave={() => {
-          setHoveredKey((current) => (current === tool.id ? null : current));
-          setOpenFlyoutKey((current) => (current === tool.id ? null : current));
-        }}
+        onMouseLeave={() =>
+          setHoveredKey((current) => (current === tool.id ? null : current))
+        }
       >
         <button
           type="button"

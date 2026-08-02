@@ -394,14 +394,16 @@
 }
 
 .variantTriangle {
+  /* Top corner, pointing up, because the flyout opens upward (the toolbar
+     sits near the bottom of the viewport — there's no room to open it
+     downward) — the mark should point toward where the panel appears. */
   position: absolute;
   right: 0;
-  bottom: 0;
-  /* Hit area is bigger than the visible mark (a corner clip-path shrinks
-     the clickable region along with the visual one) so it's actually easy
-     to click, not just a few visible pixels wide. */
-  width: 16px;
-  height: 16px;
+  top: 0;
+  /* Hit area is bigger than the visible mark so it's actually easy to
+     click, not just the few visible pixels of the triangle itself. */
+  width: 18px;
+  height: 18px;
   padding: 0;
   border: none;
   background: transparent;
@@ -412,16 +414,17 @@
 .variantTriangle::after {
   content: "";
   position: absolute;
-  right: 3px;
-  bottom: 3px;
-  width: 9px;
-  height: 9px;
-  background: rgba(43, 108, 255, 0.75);
-  clip-path: polygon(100% 0, 100% 100%, 0 100%);
+  right: 4px;
+  top: 4px;
+  width: 0;
+  height: 0;
+  border-left: 4.5px solid transparent;
+  border-right: 4.5px solid transparent;
+  border-bottom: 7px solid rgba(43, 108, 255, 0.75);
 }
 
 .variantTriangle:hover::after {
-  background: #2b6cff;
+  border-bottom-color: #2b6cff;
 }
 
 .variantFlyout {
