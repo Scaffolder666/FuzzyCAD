@@ -1531,6 +1531,9 @@ function createWireframeMarkerOverlay(object: THREE.Object3D, colorHex: number) 
     line.renderOrder = 1600;
     line.frustumCulled = false;
     line.userData[FUZZY_VISUAL_CHILD] = true;
+    // Decorative outline traced on top of the real mesh — must not
+    // intercept clicks meant for the mesh underneath it.
+    line.raycast = () => {};
 
     group.add(line);
   });

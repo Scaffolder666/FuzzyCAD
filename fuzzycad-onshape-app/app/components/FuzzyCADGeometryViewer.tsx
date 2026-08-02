@@ -1,7 +1,14 @@
 "use client";
 
 import { Canvas, type ThreeEvent, useFrame, useThree } from "@react-three/fiber";
-import { Bounds, Html, OrbitControls, useBounds, useGLTF } from "@react-three/drei";
+import {
+  Bounds,
+  Grid,
+  Html,
+  OrbitControls,
+  useBounds,
+  useGLTF,
+} from "@react-three/drei";
 import RoleBadge, { type RoleBadgeRole } from "./viewer/RoleBadge";
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
@@ -968,6 +975,12 @@ function Model({
       pathKeys: string[];
     }[]
   >([]);
+  // Sessions currently resting at their proposed (non-looping) size, kept
+  // separate from the ref above so the per-frame loop can mark/unmark rest
+  // state without mutating anything the creation effect depends on.
+  const settledProposalSessionsRef = useRef<Set<AxialStretchPreviewSession>>(
+    new Set(),
+  );
 
   useEffect(() => {
     const entries = persistentProposalPreviews
@@ -1007,7 +1020,10 @@ function Model({
         } => entry !== null,
       );
 
+    const settledSessions = settledProposalSessionsRef.current;
+
     persistentProposalLoopRef.current = entries;
+    settledSessions.clear();
 
     if (entries.length === 0) {
       return;
@@ -1017,6 +1033,7 @@ function Model({
 
     return () => {
       persistentProposalLoopRef.current = [];
+      settledSessions.clear();
 
       for (const entry of entries) {
         disposeAxialStretchPreviewSession(entry.session);
@@ -1038,16 +1055,31 @@ function Model({
     const loopT = (Math.sin(phase) + 1) / 2;
 
     for (const entry of entries) {
-      const t = isPathKeysUnderInspection(
+      const active = isPathKeysUnderInspection(
         entry.pathKeys,
         hoveredPathKey,
         highlightedPathKey,
         selectedPathKeys,
-      )
-        ? loopT
-        : 1;
+      );
 
-      updateAxialStretchPreviewSession(entry.session, entry.deltaMeters * t);
+      // Re-deform the ghost's geometry every frame only while it's actually
+      // being looked at; once it settles back at the proposed size, leave
+      // its (already GPU-uploaded) geometry alone instead of re-uploading
+      // an unchanged deformation 60x/second forever.
+      if (!active && settledProposalSessionsRef.current.has(entry.session)) {
+        continue;
+      }
+
+      updateAxialStretchPreviewSession(
+        entry.session,
+        entry.deltaMeters * (active ? loopT : 1),
+      );
+
+      if (active) {
+        settledProposalSessionsRef.current.delete(entry.session);
+      } else {
+        settledProposalSessionsRef.current.add(entry.session);
+      }
     }
   });
 
@@ -1119,6 +1151,9 @@ function Model({
       pathKeys: string[];
     }[]
   >([]);
+  const settledMoveSessionsRef = useRef<Set<MoveTranslatePreviewSession>>(
+    new Set(),
+  );
 
   useEffect(() => {
     const entries = persistentMovePreviews
@@ -1150,7 +1185,10 @@ function Model({
         } => entry !== null,
       );
 
+    const settledSessions = settledMoveSessionsRef.current;
+
     persistentMoveLoopRef.current = entries;
+    settledSessions.clear();
 
     if (entries.length === 0) {
       return;
@@ -1160,6 +1198,7 @@ function Model({
 
     return () => {
       persistentMoveLoopRef.current = [];
+      settledSessions.clear();
 
       for (const entry of entries) {
         disposeMoveTranslatePreviewSession(entry.session);
@@ -1181,19 +1220,27 @@ function Model({
     const loopT = (Math.sin(phase) + 1) / 2;
 
     for (const entry of entries) {
-      const t = isPathKeysUnderInspection(
+      const active = isPathKeysUnderInspection(
         entry.pathKeys,
         hoveredPathKey,
         highlightedPathKey,
         selectedPathKeys,
-      )
-        ? loopT
-        : 1;
+      );
+
+      if (!active && settledMoveSessionsRef.current.has(entry.session)) {
+        continue;
+      }
 
       updateMoveTranslatePreviewSession(
         entry.session,
-        entry.deltaWorld.clone().multiplyScalar(t),
+        entry.deltaWorld.clone().multiplyScalar(active ? loopT : 1),
       );
+
+      if (active) {
+        settledMoveSessionsRef.current.delete(entry.session);
+      } else {
+        settledMoveSessionsRef.current.add(entry.session);
+      }
     }
   });
 
@@ -1318,6 +1365,9 @@ function Model({
       material.opacity = 0.9;
       material.depthTest = false;
       helper.renderOrder = 998;
+      // Purely decorative — must never steal clicks meant for the geometry
+      // it surrounds (or anything else near/behind it in screen space).
+      helper.raycast = () => {};
 
       return [{ key: pathKey, helper }];
     });
@@ -1949,7 +1999,23 @@ export default function FuzzyCADGeometryViewer({
           >
             <ambientLight intensity={0.8} />
             <directionalLight position={[5, 6, 5]} intensity={1.2} />
-            <gridHelper args={[2, 20]} />
+            {/* Tinkercad-style ground grid: fine 1mm cells with a bolder
+                line every 10mm, fading out toward the edges instead of
+                stopping abruptly, and re-centering under the camera so it
+                always reads as an infinite work surface. */}
+            <Grid
+              position={[0, -0.001, 0]}
+              cellSize={0.001}
+              cellThickness={0.4}
+              cellColor="#d6dde6"
+              sectionSize={0.01}
+              sectionThickness={1.2}
+              sectionColor="#94a3b8"
+              followCamera
+              infiniteGrid
+              fadeDistance={2.5}
+              fadeStrength={1.5}
+            />
             <axesHelper args={[0.25]} />
 
             <Suspense fallback={null}>

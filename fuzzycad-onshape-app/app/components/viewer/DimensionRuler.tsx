@@ -157,7 +157,12 @@ function Arrowhead({
   }, [tipWorld, directionWorld, size]);
 
   return (
-    <mesh geometry={geometry} renderOrder={999} frustumCulled={false}>
+    <mesh
+      geometry={geometry}
+      renderOrder={999}
+      frustumCulled={false}
+      raycast={() => null}
+    >
       <meshBasicMaterial
         color={color}
         transparent

@@ -201,6 +201,10 @@ export function cloneObjectForPreview(
     // Prevent preview clones from being selected/highlighted as real objects.
     delete object.userData.fuzzyPathKey;
 
+    // Ghost previews are decoration only — never let them steal a click
+    // meant for the real geometry they're drawn on top of/near.
+    object.raycast = () => {};
+
     if (isPreviewLine(object)) {
       return;
     }
@@ -276,6 +280,7 @@ function addWideDashedOverlay(mesh: THREE.Mesh) {
   line.userData.fuzzycadPreviewLine = true;
   line.computeLineDistances();
   line.renderOrder = 999;
+  line.raycast = () => {};
 
   // Important: line is child of mesh, so it uses the mesh's local coordinate system.
   mesh.add(line);
