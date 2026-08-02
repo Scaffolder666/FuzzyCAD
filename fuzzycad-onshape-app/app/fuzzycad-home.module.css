@@ -395,25 +395,41 @@
 
 .variantTriangle {
   position: absolute;
-  right: 3px;
-  bottom: 3px;
-  width: 9px;
-  height: 9px;
+  right: 0;
+  bottom: 0;
+  /* Hit area is bigger than the visible mark (a corner clip-path shrinks
+     the clickable region along with the visual one) so it's actually easy
+     to click, not just a few visible pixels wide. */
+  width: 16px;
+  height: 16px;
   padding: 0;
   border: none;
-  background: rgba(43, 108, 255, 0.75);
-  clip-path: polygon(100% 0, 100% 100%, 0 100%);
+  background: transparent;
   cursor: pointer;
   z-index: 2;
 }
 
-.variantTriangle:hover {
+.variantTriangle::after {
+  content: "";
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  width: 9px;
+  height: 9px;
+  background: rgba(43, 108, 255, 0.75);
+  clip-path: polygon(100% 0, 100% 100%, 0 100%);
+}
+
+.variantTriangle:hover::after {
   background: #2b6cff;
 }
 
 .variantFlyout {
+  /* Opens upward, same direction as .toolTooltip — the toolbar sits near
+     the bottom of the viewport, so opening downward rendered this off
+     the bottom of the screen and made it look like clicking did nothing. */
   position: absolute;
-  top: calc(100% + 8px);
+  bottom: calc(100% + 10px);
   left: 50%;
   transform: translateX(-50%);
   display: flex;

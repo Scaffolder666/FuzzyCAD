@@ -1,3 +1,4 @@
+import { gunzipSync } from "node:zlib";
 import { NextRequest, NextResponse } from "next/server";
 import {
   clearElementsCache,
@@ -41,6 +42,24 @@ function getStringFormField(formData: FormData, key: string) {
   return typeof value === "string" ? value : "";
 }
 
+/**
+ * The client gzips the annotated-selection STL before upload (it's mostly
+ * repeated float patterns, so it compresses well) to stay clear of Vercel's
+ * hard ~4.5MB serverless request body limit — decompress it back to plain
+ * STL bytes before anything downstream (Onshape's blob upload, the
+ * selection-signature/manifest code) touches it.
+ */
+function decompressGzipBlob(blob: Blob) {
+  return blob
+    .arrayBuffer()
+    .then(
+      (arrayBuffer) =>
+        new Blob([new Uint8Array(gunzipSync(Buffer.from(arrayBuffer)))], {
+          type: "model/stl",
+        }),
+    );
+}
+
 async function parseSaveProjectRequest(
   req: NextRequest,
 ): Promise<ParsedSaveProjectRequest> {
@@ -57,8 +76,16 @@ async function parseSaveProjectRequest(
     }
 
     const stlValue = formData.get("annotatedSelectionStl");
-    const annotatedSelectionStl =
+    const stlEncoding = getStringFormField(
+      formData,
+      "annotatedSelectionStlEncoding",
+    );
+    const rawAnnotatedSelectionStl =
       stlValue instanceof Blob && stlValue.size > 0 ? stlValue : null;
+    const annotatedSelectionStl =
+      rawAnnotatedSelectionStl && stlEncoding === "gzip"
+        ? await decompressGzipBlob(rawAnnotatedSelectionStl)
+        : rawAnnotatedSelectionStl;
 
     return {
       body: {

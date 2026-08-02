@@ -70,6 +70,30 @@ async function parseApiResult(res: Response): Promise<ApiResult> {
   }
 }
 
+/**
+ * Vercel's serverless functions reject request bodies past a hard platform
+ * limit (~4.5MB) with a 413 before our route handler ever runs — no Next.js
+ * config can raise that ceiling. Binary STL is mostly repeated float
+ * patterns (especially with many duplicate parts, like a dozen identical
+ * screws), so gzip typically shrinks it well past that line. Falls back to
+ * sending the blob as-is if the browser lacks CompressionStream.
+ */
+async function gzipBlob(blob: Blob): Promise<Blob | null> {
+  if (typeof CompressionStream === "undefined") {
+    return null;
+  }
+
+  try {
+    const compressedStream = blob
+      .stream()
+      .pipeThrough(new CompressionStream("gzip"));
+
+    return await new Response(compressedStream).blob();
+  } catch {
+    return null;
+  }
+}
+
 export async function saveFuzzycadProject(
   query: DocumentQuery,
   projectState: unknown,
@@ -78,16 +102,21 @@ export async function saveFuzzycadProject(
   } = {},
 ): Promise<ApiResult> {
   if (options.annotatedSelectionStl) {
+    const gzipped = await gzipBlob(options.annotatedSelectionStl);
+
     const formData = new FormData();
 
     formData.append("documentId", query.documentId);
     formData.append("workspaceId", query.workspaceId);
     formData.append("server", query.server);
     formData.append("projectState", JSON.stringify(projectState));
+    formData.append("annotatedSelectionStlEncoding", gzipped ? "gzip" : "identity");
     formData.append(
       "annotatedSelectionStl",
-      options.annotatedSelectionStl,
-      "fuzzycad-annotated-selection.stl",
+      gzipped ?? options.annotatedSelectionStl,
+      gzipped
+        ? "fuzzycad-annotated-selection.stl.gz"
+        : "fuzzycad-annotated-selection.stl",
     );
 
     const res = await fetch("/api/fuzzycad/save-project", {
