@@ -224,7 +224,7 @@ function RulerLabel({
           borderRadius: 999,
           background: "rgba(255,255,255,0.95)",
           border: `1.5px solid ${color}`,
-          color,
+          color: "#0f172a",
           fontSize: 12,
           fontWeight: 700,
           fontFamily: "monospace",

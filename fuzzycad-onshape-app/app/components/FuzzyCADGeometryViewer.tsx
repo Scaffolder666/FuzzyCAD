@@ -834,6 +834,7 @@ function Model({
   focusRequest,
   enableManipulationHandles = true,
   lassoPolygon,
+  onSceneMinY,
 
   onMeshGraph,
   onObjectSummaries,
@@ -873,6 +874,8 @@ function Model({
   focusRequest?: FocusRequest | null;
   enableManipulationHandles?: boolean;
   lassoPolygon?: ScreenPoint[] | null;
+  /** Reports the model's lowest world-space Y each time the scene changes, so the ground grid can stay under it. */
+  onSceneMinY?: (y: number) => void;
   onMeshGraph?: (nodes: MeshGraphNode[]) => void;
   onObjectSummaries?: (summaries: AxialStretchObjectSummary[]) => void;
   onSelectedNode?: (node: MeshGraphNode | null) => void;
@@ -1548,6 +1551,11 @@ function Model({
   }, [objectSummaries, onObjectSummaries]);
 
   useEffect(() => {
+    const box = new THREE.Box3().setFromObject(scene);
+    onSceneMinY?.(box.isEmpty() ? 0 : box.min.y);
+  }, [scene, onSceneMinY]);
+
+  useEffect(() => {
     if (!lassoPolygon || lassoPolygon.length < 3) {
       return;
     }
@@ -2174,6 +2182,7 @@ function Model({
           axisWorld={activeScaleFrame.axisWorld}
           referenceLength={activeScaleFrame.referenceLength}
           factor={scaleFactor}
+          color={SCALE_ACCENT_COLOR}
           onChange={(factor) => onScaleFactorChange?.(factor)}
           onDragStateChange={handleDragStateChange}
         />
@@ -2193,7 +2202,7 @@ function Model({
               borderRadius: 999,
               background: "rgba(255,255,255,0.95)",
               border: `1.5px solid ${SCALE_ACCENT_COLOR_MUTED}`,
-              color: SCALE_ACCENT_COLOR,
+              color: "#0f172a",
               fontSize: 12,
               fontWeight: 700,
               fontFamily: "monospace",
@@ -2259,6 +2268,10 @@ export default function FuzzyCADGeometryViewer({
 }: FuzzyCADGeometryViewerProps) {
   const [lassoPolygon, setLassoPolygon] = useState<ScreenPoint[] | null>(null);
   const [manipulationDragging, setManipulationDragging] = useState(false);
+  // Lowest world-space Y across the whole loaded model, so the ground grid
+  // can always sit just beneath it instead of at a fixed guessed offset —
+  // some assemblies don't place their lowest point exactly at y=0.
+  const [sceneMinY, setSceneMinY] = useState(0);
 
   function clearSelection() {
     onSelectedNode?.(null);
@@ -2297,7 +2310,7 @@ export default function FuzzyCADGeometryViewer({
                 stopping abruptly, and re-centering under the camera so it
                 always reads as an infinite work surface. */}
             <Grid
-              position={[0, -0.001, 0]}
+              position={[0, sceneMinY - 0.002, 0]}
               cellSize={0.001}
               cellThickness={0.4}
               cellColor="#d6dde6"
@@ -2344,6 +2357,7 @@ export default function FuzzyCADGeometryViewer({
                   focusRequest={focusRequest}
                   enableManipulationHandles={enableManipulationHandles}
                   lassoPolygon={lassoPolygon}
+                  onSceneMinY={setSceneMinY}
                   onMeshGraph={onMeshGraph}
                   onObjectSummaries={onObjectSummaries}
                   onSelectedNode={onSelectedNode}

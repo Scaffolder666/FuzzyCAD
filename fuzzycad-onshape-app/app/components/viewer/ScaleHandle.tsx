@@ -2,9 +2,10 @@
 
 import { useState } from "react";
 import * as THREE from "three";
-import { Html, Line } from "@react-three/drei";
+import { Html } from "@react-three/drei";
 import styles from "../FuzzyCADGeometryViewer.module.css";
 import HandleValueInput from "./HandleValueInput";
+import FatArrow from "./FatArrow";
 
 /** Pixels of horizontal drag that equal a 1% change in scale factor. */
 const PX_PER_PERCENT = 2.2;
@@ -22,6 +23,7 @@ type ScaleHandleProps = {
   referenceLength: number;
   /** Current scale factor, 1 = original size. */
   factor: number;
+  color?: string;
   onChange: (factor: number) => void;
   onDragStateChange?: (dragging: boolean) => void;
 };
@@ -31,6 +33,7 @@ export default function ScaleHandle({
   axisWorld,
   referenceLength,
   factor,
+  color = "#0d9488",
   onChange,
   onDragStateChange,
 }: ScaleHandleProps) {
@@ -74,7 +77,7 @@ export default function ScaleHandle({
 
   return (
     <group>
-      <Line points={[pivotWorld, tipWorld]} color="#0d9488" lineWidth={2} />
+      <FatArrow fromWorld={pivotWorld} toWorld={tipWorld} color={color} />
       <Html position={tipWorld} center zIndexRange={[100, 0]}>
         <div
           className={`${styles.scaleHandle} ${dragging ? styles.scaleHandleActive : ""}`}
