@@ -1333,9 +1333,6 @@ function Model({
           axisWorld={handleConfig.axisWorld}
           length={handleConfig.length}
           value={manipulationValueOrZero}
-          label={`${manipulationValueOrZero >= 0 ? "+" : ""}${(
-            manipulationValueOrZero * 1000
-          ).toFixed(1)} mm`}
           onChange={(value) => onManipulationChange?.(value)}
           onDragStateChange={handleDragStateChange}
         />

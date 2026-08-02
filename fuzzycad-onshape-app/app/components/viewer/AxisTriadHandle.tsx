@@ -4,6 +4,7 @@ import * as THREE from "three";
 import { Html, Line } from "@react-three/drei";
 import styles from "../FuzzyCADGeometryViewer.module.css";
 import type { AxialStretchObjectSummary } from "../../lib/operations/axialStretchTypes";
+import HandleValueInput from "./HandleValueInput";
 import {
   resolveProposalAxisFrame,
   type ProposalAxisIndex,
@@ -12,7 +13,7 @@ import {
 
 /** Pixels of horizontal drag that equal 1 mm of change (0.001 m). */
 const PX_PER_MM = 1.5;
-const TRACK_WIDTH = 220;
+const TRACK_WIDTH = 260;
 const TRACK_HALF = TRACK_WIDTH / 2;
 
 const AXIS_COLOR: Record<ProposalAxisIndex, string> = {
@@ -112,9 +113,12 @@ export default function AxisTriadHandle({
               <Line
                 points={[toVector(summary.localAxes[axisIndex].negativeEndWorld), toVector(summary.localAxes[axisIndex].positiveEndWorld)]}
                 color={color}
-                lineWidth={1.4}
+                lineWidth={1.2}
+                dashed
+                dashSize={0.02}
+                gapSize={0.015}
                 transparent
-                opacity={0.5}
+                opacity={0.32}
               />
               <Html position={tipWorld} center zIndexRange={[90, 0]}>
                 <button
@@ -142,7 +146,12 @@ export default function AxisTriadHandle({
             <Line
               points={[frame.pivotWorld, tipWorld]}
               color={color}
-              lineWidth={2.4}
+              lineWidth={2}
+              dashed
+              dashSize={0.028}
+              gapSize={0.016}
+              transparent
+              opacity={0.75}
             />
             <Html position={tipWorld} center zIndexRange={[100, 0]}>
               <div className={styles.axisTriadActive}>
@@ -183,7 +192,12 @@ export default function AxisTriadHandle({
                   </div>
                   <div className={styles.sizingHandleLabel}>
                     {AXIS_LABEL[axisIndex]}: {value >= 0 ? "+" : ""}
-                    {(value * 1000).toFixed(1)} mm
+                    <HandleValueInput
+                      valueMm={valueInMm}
+                      onCommit={(mm) => onChange(mm * 0.001)}
+                      className={styles.sizingHandleValueInput}
+                    />
+                    {" mm"}
                   </div>
                 </div>
               </div>

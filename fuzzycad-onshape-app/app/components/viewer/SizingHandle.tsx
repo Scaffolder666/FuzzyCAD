@@ -4,10 +4,11 @@ import { useState } from "react";
 import * as THREE from "three";
 import { Html, Line } from "@react-three/drei";
 import styles from "../FuzzyCADGeometryViewer.module.css";
+import HandleValueInput from "./HandleValueInput";
 
 /** Pixels of horizontal drag that equal 1 mm of change (0.001 m). */
 const PX_PER_MM = 1.5;
-const TRACK_WIDTH = 220;
+const TRACK_WIDTH = 260;
 const TRACK_HALF = TRACK_WIDTH / 2;
 
 type SizingHandleProps = {
@@ -15,7 +16,6 @@ type SizingHandleProps = {
   axisWorld: THREE.Vector3;
   length: number;
   value: number;
-  label: string;
   onChange: (value: number) => void;
   onDragStateChange?: (dragging: boolean) => void;
 };
@@ -25,7 +25,6 @@ export default function SizingHandle({
   axisWorld,
   length,
   value,
-  label,
   onChange,
   onDragStateChange,
 }: SizingHandleProps) {
@@ -82,7 +81,15 @@ export default function SizingHandle({
               style={{ left: `${knobLeft}px` }}
             />
           </div>
-          <div className={styles.sizingHandleLabel}>{label}</div>
+          <div className={styles.sizingHandleLabel}>
+            {value >= 0 ? "+" : ""}
+            <HandleValueInput
+              valueMm={valueInMm}
+              onCommit={(mm) => onChange(mm * 0.001)}
+              className={styles.sizingHandleValueInput}
+            />
+            {" mm"}
+          </div>
         </div>
       </Html>
     </group>

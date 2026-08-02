@@ -64,9 +64,9 @@
 
 .sizingHandleTrack {
   position: relative;
-  width: 220px;
-  height: 6px;
-  border-radius: 3px;
+  width: 260px;
+  height: 8px;
+  border-radius: 4px;
   background: rgba(43, 108, 255, 0.18);
   border: 1px solid rgba(43, 108, 255, 0.45);
   box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.55) inset;
@@ -75,14 +75,14 @@
 .sizingHandleKnob {
   position: absolute;
   top: 50%;
-  width: 18px;
-  height: 18px;
+  width: 24px;
+  height: 24px;
   border-radius: 50%;
   background: #2b6cff;
-  border: 2px solid #ffffff;
+  border: 2.5px solid #ffffff;
   box-shadow:
     0 0 0 1px rgba(43, 108, 255, 0.55),
-    0 4px 10px rgba(43, 108, 255, 0.35);
+    0 4px 12px rgba(43, 108, 255, 0.4);
   transform: translate(-50%, -50%);
   transition: box-shadow 120ms ease;
   pointer-events: none;
@@ -91,18 +91,42 @@
 .sizingHandleActive .sizingHandleKnob {
   box-shadow:
     0 0 0 3px rgba(43, 108, 255, 0.3),
-    0 4px 14px rgba(43, 108, 255, 0.5);
+    0 4px 16px rgba(43, 108, 255, 0.55);
 }
 
 .sizingHandleLabel {
-  padding: 2px 8px;
-  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: 9px;
   background: rgba(20, 30, 48, 0.82);
   color: #ffffff;
-  font-size: 11px;
+  font-size: 13px;
   font-family: monospace;
   white-space: nowrap;
   pointer-events: none;
+}
+
+.sizingHandleValueInput {
+  width: 3.6em;
+  padding: 0;
+  border: none;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.5);
+  background: transparent;
+  color: inherit;
+  font-size: inherit;
+  font-family: inherit;
+  text-align: right;
+  pointer-events: auto;
+  outline: none;
+  /* Hide the native up/down spinner so it reads as a plain value, not a stepper. */
+  appearance: textfield;
+}
+
+.sizingHandleValueInput::-webkit-outer-spin-button,
+.sizingHandleValueInput::-webkit-inner-spin-button {
+  appearance: none;
+  margin: 0;
 }
 
 .axisTriadDot {
