@@ -23,8 +23,12 @@ type MovePlaneHandleProps = {
   centerWorld: THREE.Vector3;
   /** How far each in-plane arm reaches at delta = 0, sized off the object's own extent. */
   armLength: number;
-  /** Unit normal of the constraint face — movement stays confined to this plane. */
+  /** Unit normal of the constraint face at pick time — seeds the drag basis and the probe direction for re-raycasting. */
   normalWorld: THREE.Vector3;
+  /** The specific mesh the face was picked on. When set, every drag step re-raycasts against it so a curved face gets followed, not just its initial tangent plane. */
+  constraintMesh?: THREE.Object3D | null;
+  /** How far the object's center sat from the picked point, along the picked normal, at pick time — preserved as it slides. */
+  constraintStandoff?: number;
   deltaWorld: MoveDelta;
   onDeltaChange: (delta: MoveDelta) => void;
   onDragStateChange?: (dragging: boolean) => void;
@@ -57,6 +61,8 @@ export default function MovePlaneHandle({
   centerWorld,
   armLength,
   normalWorld,
+  constraintMesh = null,
+  constraintStandoff = 0,
   deltaWorld,
   onDeltaChange,
   onDragStateChange,
@@ -78,11 +84,62 @@ export default function MovePlaneHandle({
     { key: "v", label: "V", color: PLANE_AXIS_COLORS.v, vector: v },
   ];
 
+  /**
+   * Re-raycasts the candidate position against the ACTUAL constraint mesh
+   * (probing from above it along the picked normal, back down toward it)
+   * so a curved face gets followed as the drag continues instead of the
+   * object just sliding away along its one initial flat tangent plane. No
+   * hit nearby (dragged off the edge of the surface, or no mesh known) —
+   * falls back to the raw in-plane position.
+   */
+  function projectOntoConstraintSurface(candidateCenter: THREE.Vector3) {
+    if (!constraintMesh) {
+      return candidateCenter;
+    }
+
+    const probeDistance = Math.max(armLength * 1.5, 0.01);
+    const origin = candidateCenter
+      .clone()
+      .add(normalWorld.clone().multiplyScalar(probeDistance));
+    const direction = normalWorld.clone().negate();
+
+    const raycaster = new THREE.Raycaster(
+      origin,
+      direction,
+      0,
+      probeDistance * 3,
+    );
+
+    const hits = raycaster.intersectObject(constraintMesh, true);
+    const hit = hits.find((candidate) => candidate.face);
+
+    if (!hit || !hit.face) {
+      return candidateCenter;
+    }
+
+    const normalMatrix = new THREE.Matrix3().getNormalMatrix(
+      hit.object.matrixWorld,
+    );
+    const hitNormalWorld = hit.face.normal
+      .clone()
+      .applyMatrix3(normalMatrix)
+      .normalize();
+
+    return hit.point
+      .clone()
+      .add(hitNormalWorld.multiplyScalar(constraintStandoff));
+  }
+
   function applyAxisValue(axisVector: THREE.Vector3, oldValue: number, newValue: number) {
-    const nextVec = deltaVec
+    const rawVec = deltaVec
       .clone()
       .sub(axisVector.clone().multiplyScalar(oldValue))
       .add(axisVector.clone().multiplyScalar(newValue));
+
+    const correctedCenter = projectOntoConstraintSurface(
+      centerWorld.clone().add(rawVec),
+    );
+    const nextVec = correctedCenter.clone().sub(centerWorld);
 
     onDeltaChange({ x: nextVec.x, y: nextVec.y, z: nextVec.z });
   }

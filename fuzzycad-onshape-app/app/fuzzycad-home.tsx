@@ -197,14 +197,21 @@ export default function FuzzyCADHome() {
   } | null>(null);
   const [moveDelta, setMoveDelta] = useState<MoveDelta>(ZERO_MOVE_DELTA);
   // "Move (along face)": the pre-selected object slides along a face picked
-  // in the 3D view instead of moving freely — captures just the face's
-  // world normal, since the plane also needs a point but the object's own
-  // current position already sits on (or near) it.
+  // in the 3D view instead of moving freely. The normal seeds the initial
+  // drag plane; the mesh uuid + standoff (how far the object's center sat
+  // from the picked point, along the normal, at pick time) let the viewer
+  // re-raycast against the ACTUAL surface on every drag step, so a curved
+  // face gets followed instead of just its one initial tangent plane.
   const [moveFacePicking, setMoveFacePicking] = useState(false);
   const [moveConstraintNormal, setMoveConstraintNormal] = useState<
     [number, number, number] | null
   >(null);
+  const [moveConstraintMeshUuid, setMoveConstraintMeshUuid] = useState<
+    string | null
+  >(null);
+  const [moveConstraintStandoff, setMoveConstraintStandoff] = useState(0);
   const lastWorldNormalRef = useRef<[number, number, number] | null>(null);
+  const lastWorldObjectUuidRef = useRef<string | null>(null);
   const [moveCandidateOpen, setMoveCandidateOpen] = useState(false);
   const [moveCandidatePathKeys, setMoveCandidatePathKeys] = useState<
     string[]
@@ -454,6 +461,8 @@ export default function FuzzyCADHome() {
     setMoveDelta(ZERO_MOVE_DELTA);
     setMoveFacePicking(false);
     setMoveConstraintNormal(null);
+    setMoveConstraintMeshUuid(null);
+    setMoveConstraintStandoff(0);
     setMoveCandidateOpen(false);
     setMoveCandidatePathKeys([]);
     setActiveScalePlan(null);
@@ -975,6 +984,8 @@ export default function FuzzyCADHome() {
     setMoveDelta(ZERO_MOVE_DELTA);
     setMoveFacePicking(false);
     setMoveConstraintNormal(null);
+    setMoveConstraintMeshUuid(null);
+    setMoveConstraintStandoff(0);
     setActiveTool("select");
   }
 
@@ -991,19 +1002,31 @@ export default function FuzzyCADHome() {
 
   /** Click routing while "Move (along face)" is waiting for its constraint
    * face: any click on geometry (the moved part itself, or another part
-   * entirely) captures that face's world normal and starts the drag —
-   * skips the mate-neighbor prompt regular Move shows, since sliding along
-   * a face is inherently a single-object move. */
+   * entirely) captures that face's world normal, the specific mesh it
+   * belongs to (so the viewer can keep re-raycasting against that exact
+   * surface as the drag continues, following it even if it curves), and
+   * how far the object's center currently sits from that point along the
+   * normal — preserving that same standoff as it slides. Skips the
+   * mate-neighbor prompt regular Move shows, since sliding along a face is
+   * inherently a single-object move. */
   function handleMoveFacePick() {
     if (!selectedObjectSummary || !moveFacePicking) {
       return;
     }
 
     const normal = lastWorldNormalRef.current;
+    const point = lastWorldPointRef.current;
+    const meshUuid = lastWorldObjectUuidRef.current;
 
-    if (!normal) {
+    if (!normal || !point || !meshUuid) {
       return;
     }
+
+    const center = selectedObjectSummary.aabbCenterWorld;
+    const standoff =
+      (center[0] - point[0]) * normal[0] +
+      (center[1] - point[1]) * normal[1] +
+      (center[2] - point[2]) * normal[2];
 
     setActiveMovePlan({
       pathKey: selectedObjectSummary.pathKey,
@@ -1011,6 +1034,8 @@ export default function FuzzyCADHome() {
     });
     setMoveDelta(ZERO_MOVE_DELTA);
     setMoveConstraintNormal(normal);
+    setMoveConstraintMeshUuid(meshUuid);
+    setMoveConstraintStandoff(standoff);
     setMoveFacePicking(false);
   }
 
@@ -1475,6 +1500,10 @@ if (result.ok && result.state) {
     lastWorldNormalRef.current = normal ? [normal.x, normal.y, normal.z] : null;
   }
 
+  function handleViewerSelectedWorldObjectUuid(uuid: string | null) {
+    lastWorldObjectUuidRef.current = uuid;
+  }
+
   function handleAssemblyChange(assemblyId: string) {
     setSelectedAssemblyId(assemblyId);
     resetGeometryState();
@@ -1532,6 +1561,8 @@ if (result.ok && result.state) {
           moveDelta={moveDelta}
           onMoveDeltaChange={setMoveDelta}
           moveConstraintNormal={moveConstraintNormal}
+          moveConstraintMeshUuid={moveConstraintMeshUuid}
+          moveConstraintStandoff={moveConstraintStandoff}
           scalePlan={activeScalePlan}
           scalePreviews={scalePreviews}
           scaleFactor={scaleFactor}
@@ -1583,6 +1614,7 @@ if (result.ok && result.state) {
           onSelectedPathKey={handleViewerSelectedPathKey}
           onSelectedWorldPoint={handleViewerSelectedWorldPoint}
           onSelectedWorldNormal={handleViewerSelectedWorldNormal}
+          onSelectedWorldObjectUuid={handleViewerSelectedWorldObjectUuid}
           onObjectLassoSelection={(pathKeys) => {
             setLassoPathKeys(pathKeys);
             setHighlightedPathKey(pathKeys[0] ?? null);

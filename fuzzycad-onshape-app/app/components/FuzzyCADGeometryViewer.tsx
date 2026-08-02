@@ -237,6 +237,10 @@ type FuzzyCADGeometryViewerProps = {
   onMoveDeltaChange?: (delta: MoveDelta) => void;
   /** Set while the "Move (along face)" tool has a picked constraint face — renders MovePlaneHandle instead of the free 3-axis MoveTriadHandle. */
   moveConstraintNormal?: [number, number, number] | null;
+  /** uuid of the specific mesh the constraint face was picked on, so the drag can keep re-raycasting against that exact surface (follows a curved face, not just its initial tangent plane). */
+  moveConstraintMeshUuid?: string | null;
+  /** How far the moved object's center sat from the picked point, along the picked normal, at pick time — preserved as the object slides across the (possibly curved) surface. */
+  moveConstraintStandoff?: number;
   /** Single-object plan for the "Scale" tool's active drag session. */
   scalePlan?: ScaleRolePlan | null;
   /** Other saved (not currently being dragged) scale proposals, shown as static ghosts. */
@@ -267,6 +271,8 @@ type FuzzyCADGeometryViewerProps = {
   onSelectedWorldPoint?: (point: THREE.Vector3 | null) => void;
   /** World-space normal of the face under the last click — used by tools that constrain movement to a picked face (e.g. Move's "along face" mode). */
   onSelectedWorldNormal?: (normal: THREE.Vector3 | null) => void;
+  /** uuid of the specific mesh object under the last click — lets a tool re-raycast against exactly that surface later (e.g. Move's "along face" mode following a curved face as it drags), not just remember a point/normal from the moment of the click. */
+  onSelectedWorldObjectUuid?: (uuid: string | null) => void;
   onObjectLassoSelection?: (pathKeys: string[]) => void;
   onManipulationChange?: (value: number) => void;
 };
@@ -961,6 +967,8 @@ function Model({
   moveDelta = { x: 0, y: 0, z: 0 },
   onMoveDeltaChange,
   moveConstraintNormal,
+  moveConstraintMeshUuid,
+  moveConstraintStandoff = 0,
   scalePlan,
   scalePreviews,
   scaleFactor = 1,
@@ -985,6 +993,7 @@ function Model({
   onSelectedPathKey,
   onSelectedWorldPoint,
   onSelectedWorldNormal,
+  onSelectedWorldObjectUuid,
   onObjectLassoSelection,
   onManipulationChange,
   onManipulationDragStateChange,
@@ -1011,6 +1020,8 @@ function Model({
   moveDelta?: MoveDelta;
   onMoveDeltaChange?: (delta: MoveDelta) => void;
   moveConstraintNormal?: [number, number, number] | null;
+  moveConstraintMeshUuid?: string | null;
+  moveConstraintStandoff?: number;
   scalePlan?: ScaleRolePlan | null;
   scalePreviews?: ScalePreview[];
   scaleFactor?: number;
@@ -1035,6 +1046,7 @@ function Model({
   onSelectedPathKey?: (pathKey: string | null) => void;
   onSelectedWorldPoint?: (point: THREE.Vector3 | null) => void;
   onSelectedWorldNormal?: (normal: THREE.Vector3 | null) => void;
+  onSelectedWorldObjectUuid?: (uuid: string | null) => void;
   onObjectLassoSelection?: (pathKeys: string[]) => void;
   onManipulationChange?: (value: number) => void;
   onManipulationDragStateChange?: (dragging: boolean) => void;
@@ -1285,6 +1297,17 @@ function Model({
       null,
     [objectSummaries, activeMovePathKey],
   );
+
+  // Resolves the actual mesh the "Move (along face)" constraint was picked
+  // on, so MovePlaneHandle can keep re-raycasting against that exact
+  // surface every drag step instead of just its one initial tangent plane.
+  const moveConstraintMesh = useMemo(() => {
+    if (!moveConstraintMeshUuid) {
+      return null;
+    }
+
+    return scene.getObjectByProperty("uuid", moveConstraintMeshUuid) ?? null;
+  }, [scene, moveConstraintMeshUuid]);
 
   const moveTranslatePreviewSession = useMemo(() => {
     if (!movePlan) {
@@ -2775,10 +2798,11 @@ function Model({
     const selectedPathKey = findFuzzyPathKey(selectedObject);
 
     onSelectedNode?.(selectedNode);
-    // Both fire before onSelectedPathKey so a handler reacting to the path
-    // key can synchronously read the matching world point/normal from this
-    // same click.
+    // All fire before onSelectedPathKey so a handler reacting to the path
+    // key can synchronously read the matching world point/normal/object
+    // from this same click.
     onSelectedWorldPoint?.(event.point.clone());
+    onSelectedWorldObjectUuid?.(event.object.uuid);
 
     if (event.face) {
       const normalMatrix = new THREE.Matrix3().getNormalMatrix(
@@ -2932,6 +2956,8 @@ function Model({
               1e-4,
             )}
             normalWorld={new THREE.Vector3(...moveConstraintNormal)}
+            constraintMesh={moveConstraintMesh}
+            constraintStandoff={moveConstraintStandoff}
             deltaWorld={moveDelta}
             onDeltaChange={(delta) => onMoveDeltaChange?.(delta)}
             onDragStateChange={handleDragStateChange}
@@ -3146,6 +3172,8 @@ export default function FuzzyCADGeometryViewer({
   moveDelta,
   onMoveDeltaChange,
   moveConstraintNormal,
+  moveConstraintMeshUuid,
+  moveConstraintStandoff,
   scalePlan,
   scalePreviews,
   scaleFactor,
@@ -3167,6 +3195,7 @@ export default function FuzzyCADGeometryViewer({
   onSelectedPathKey,
   onSelectedWorldPoint,
   onSelectedWorldNormal,
+  onSelectedWorldObjectUuid,
   onObjectLassoSelection,
   onManipulationChange,
 }: FuzzyCADGeometryViewerProps) {
@@ -3253,6 +3282,8 @@ export default function FuzzyCADGeometryViewer({
                   moveDelta={moveDelta}
                   onMoveDeltaChange={onMoveDeltaChange}
                   moveConstraintNormal={moveConstraintNormal}
+                  moveConstraintMeshUuid={moveConstraintMeshUuid}
+                  moveConstraintStandoff={moveConstraintStandoff}
                   scalePlan={scalePlan}
                   scalePreviews={scalePreviews}
                   scaleFactor={scaleFactor}
@@ -3276,6 +3307,7 @@ export default function FuzzyCADGeometryViewer({
                   onSelectedPathKey={onSelectedPathKey}
                   onSelectedWorldPoint={onSelectedWorldPoint}
                   onSelectedWorldNormal={onSelectedWorldNormal}
+                  onSelectedWorldObjectUuid={onSelectedWorldObjectUuid}
                   onObjectLassoSelection={onObjectLassoSelection}
                   onManipulationChange={onManipulationChange}
                   onManipulationDragStateChange={setManipulationDragging}
