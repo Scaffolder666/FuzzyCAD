@@ -1433,125 +1433,69 @@ const PROPOSAL_MARKER_COLOR = 0xea580c;
 /** Marker color for move-target objects — distinct from Proposal's orange, so a moved part doesn't read as a length change. */
 const MOVE_MARKER_COLOR = 0x7c3aed;
 
-/**
- * Maps a proposal's local axis (0=length/1=width/2=height) onto the
- * confidence shader's x/y/z labels. axisIndex 0 is always the object's
- * principal axis, which getObjectAxisFrame also always maps to "y" — so
- * this lines up exactly with the frame the caller passes in.
- */
-const PROPOSAL_AXIS_TO_CONFIDENCE_AXIS: Record<ProposalAxisIndex, ConfidenceAxis> = {
-  0: "y",
-  1: "x",
-  2: "z",
-};
-
-function buildProposalConfidenceMap(
-  axisIndex: ProposalAxisIndex,
-): AxisConfidenceMap {
-  const activeAxis = PROPOSAL_AXIS_TO_CONFIDENCE_AXIS[axisIndex];
-
-  return {
-    x: activeAxis === "x" ? "medium" : "high",
-    y: activeAxis === "y" ? "medium" : "high",
-    z: activeAxis === "z" ? "medium" : "high",
-  };
-}
-
-function buildProposalDirectionMap(
-  axisIndex: ProposalAxisIndex,
-  mode: ProposalAxisMode,
-): AxisDirectionMap {
-  const activeAxis = PROPOSAL_AXIS_TO_CONFIDENCE_AXIS[axisIndex];
-  const direction: ConfidenceDirection = mode === "symmetric" ? "both" : mode;
-
-  return {
-    x: activeAxis === "x" ? direction : "both",
-    y: activeAxis === "y" ? direction : "both",
-    z: activeAxis === "z" ? direction : "both",
-  };
-}
-
-/**
- * The hatched-line + outline marker that flags a Size mark's target object
- * also applied to a Proposal's target — same visual language ("this part
- * has an open annotation"), tinted orange to read as "proposed" rather than
- * "needs input", and without the nested range-envelope shell (that
- * specifically depicts a fuzzy range, which doesn't apply to a proposal
- * that already has a specific value in mind).
- */
-function createProposalMarkerOverlay({
-  object,
-  axisIndex,
-  mode,
-  axisFrame,
-}: {
-  object: THREE.Object3D;
-  axisIndex: ProposalAxisIndex;
-  mode: ProposalAxisMode;
-  axisFrame: ConfidenceAxisFrame | undefined;
-}) {
-  return createSelectedObjectLineOverlay({
-    object,
-    annotation: {
-      pathKey: "",
-      confidence: buildProposalConfidenceMap(axisIndex),
-      directions: buildProposalDirectionMap(axisIndex, mode),
-    },
-    axisFrame,
-    colorHex: PROPOSAL_MARKER_COLOR,
-  });
-}
-
 export type MoveMarkerTarget = {
   pathKey: string;
   deltaWorld: [number, number, number];
 };
 
-const MOVE_DELTA_EPSILON = 1e-5;
-
 /**
- * A move's delta is a genuine world-space vector (not tied to the object's
- * own orientation the way a Propose axis is), so — unlike the proposal
- * marker — this always uses the plain world X/Y/Z frame rather than the
- * object's local axisFrame, and marks whichever axes actually moved.
+ * A clean, solid-colored edge wireframe over the real object — like
+ * SketchUp's blueprint-style preview line work — instead of the hatched
+ * shader + range envelope Size marks use. A Proposal or Move already has a
+ * specific value in mind (not a fuzzy range), so the object doesn't need to
+ * look "uncertain"; it just needs a crisp, unambiguous "this has an open
+ * annotation" flag, leaving the actual proposed change to the dashed ghost
+ * preview + ruler/arrow instead.
  */
-function buildMoveConfidenceMap(
-  deltaWorld: [number, number, number],
-): AxisConfidenceMap {
-  return {
-    x: Math.abs(deltaWorld[0]) > MOVE_DELTA_EPSILON ? "medium" : "high",
-    y: Math.abs(deltaWorld[1]) > MOVE_DELTA_EPSILON ? "medium" : "high",
-    z: Math.abs(deltaWorld[2]) > MOVE_DELTA_EPSILON ? "medium" : "high",
-  };
-}
+function createWireframeMarkerOverlay(object: THREE.Object3D, colorHex: number) {
+  object.updateWorldMatrix(true, true);
 
-function buildMoveDirectionMap(
-  deltaWorld: [number, number, number],
-): AxisDirectionMap {
-  return {
-    x: deltaWorld[0] >= 0 ? "positive" : "negative",
-    y: deltaWorld[1] >= 0 ? "positive" : "negative",
-    z: deltaWorld[2] >= 0 ? "positive" : "negative",
-  };
-}
+  const objectWorldInverse = object.matrixWorld.clone().invert();
+  const group = new THREE.Group();
 
-function createMoveMarkerOverlay({
-  object,
-  deltaWorld,
-}: {
-  object: THREE.Object3D;
-  deltaWorld: [number, number, number];
-}) {
-  return createSelectedObjectLineOverlay({
-    object,
-    annotation: {
-      pathKey: "",
-      confidence: buildMoveConfidenceMap(deltaWorld),
-      directions: buildMoveDirectionMap(deltaWorld),
-    },
-    axisFrame: undefined,
-    colorHex: MOVE_MARKER_COLOR,
+  group.userData[FUZZY_VISUAL_CHILD] = true;
+  group.renderOrder = 1600;
+
+  object.traverse((child) => {
+    if (!(child instanceof THREE.Mesh)) {
+      return;
+    }
+
+    if (child.userData?.[FUZZY_VISUAL_CHILD]) {
+      return;
+    }
+
+    child.updateWorldMatrix(true, false);
+
+    const childToObjectMatrix = objectWorldInverse
+      .clone()
+      .multiply(child.matrixWorld);
+
+    const edgesGeometry = new THREE.EdgesGeometry(child.geometry, 25);
+    const material = new THREE.LineBasicMaterial({
+      color: colorHex,
+      transparent: true,
+      opacity: 0.85,
+      depthTest: true,
+      depthWrite: false,
+    });
+
+    const line = new THREE.LineSegments(edgesGeometry, material);
+
+    line.matrixAutoUpdate = false;
+    line.matrix.copy(childToObjectMatrix);
+    line.renderOrder = 1600;
+    line.frustumCulled = false;
+    line.userData[FUZZY_VISUAL_CHILD] = true;
+
+    group.add(line);
   });
+
+  if (group.children.length === 0) {
+    return null;
+  }
+
+  return group;
 }
 
 export function applyFuzzyConfidence(
@@ -1644,12 +1588,7 @@ export function applyFuzzyConfidence(
     if (proposalTarget) {
       hideOriginalMaterials(object);
 
-      const overlay = createProposalMarkerOverlay({
-        object,
-        axisIndex: proposalTarget.axisIndex,
-        mode: proposalTarget.mode,
-        axisFrame: axisFramesByPathKey?.get(pathKey),
-      });
+      const overlay = createWireframeMarkerOverlay(object, PROPOSAL_MARKER_COLOR);
 
       if (overlay) {
         object.add(overlay);
@@ -1666,10 +1605,7 @@ export function applyFuzzyConfidence(
 
     hideOriginalMaterials(object);
 
-    const overlay = createMoveMarkerOverlay({
-      object,
-      deltaWorld: moveTarget.deltaWorld,
-    });
+    const overlay = createWireframeMarkerOverlay(object, MOVE_MARKER_COLOR);
 
     if (overlay) {
       object.add(overlay);

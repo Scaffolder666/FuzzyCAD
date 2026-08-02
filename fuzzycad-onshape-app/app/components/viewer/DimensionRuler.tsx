@@ -3,6 +3,7 @@
 import { Html, Line } from "@react-three/drei";
 import * as THREE from "three";
 import { useMemo } from "react";
+import FatArrow from "./FatArrow";
 
 type DimensionRulerProps = {
   /** Where this end of the object was before the proposed change. */
@@ -109,28 +110,14 @@ function ArrowRuler({
   deltaMeters: number;
   color: string;
 }) {
-  const { direction, length, headLength, headWidth, labelPosition } =
-    useMemo(() => {
-      const span = toWorld.clone().sub(fromWorld);
-      const length = Math.max(span.length(), 1e-6);
-      const direction = span.clone().normalize();
-      const headLength = Math.min(length * 0.28, 0.05);
-      const headWidth = Math.min(headLength * 0.6, 0.03);
-
-      return {
-        direction,
-        length,
-        headLength,
-        headWidth,
-        labelPosition: fromWorld.clone().lerp(toWorld, 0.5),
-      };
-    }, [fromWorld, toWorld]);
+  const labelPosition = useMemo(
+    () => fromWorld.clone().lerp(toWorld, 0.5),
+    [fromWorld, toWorld],
+  );
 
   return (
     <>
-      <arrowHelper
-        args={[direction, fromWorld, length, color, headLength, headWidth]}
-      />
+      <FatArrow fromWorld={fromWorld} toWorld={toWorld} color={color} />
       <RulerLabel position={labelPosition} deltaMeters={deltaMeters} color={color} />
     </>
   );
