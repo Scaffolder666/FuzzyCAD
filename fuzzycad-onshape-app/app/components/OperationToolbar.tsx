@@ -47,6 +47,18 @@ function SizeIcon() {
   );
 }
 
+function DistanceIcon() {
+  return (
+    <svg viewBox="0 0 32 32" aria-hidden="true">
+      <rect x="4" y="12" width="6" height="8" rx="1" />
+      <rect x="22" y="12" width="6" height="8" rx="1" />
+      <path d="M10 16H22" />
+      <path d="M13 13L10 16L13 19" />
+      <path d="M19 13L22 16L19 19" />
+    </svg>
+  );
+}
+
 function ExtendIcon() {
   return (
     <svg viewBox="0 0 32 32" aria-hidden="true">
@@ -166,6 +178,12 @@ const toolGroups: ToolGroup[] = [
         label: "Size",
         title: "Add size/height uncertainty mark",
         icon: <SizeIcon />,
+      },
+      {
+        id: "distance",
+        label: "Distance",
+        title: "Click two parts to flag the gap between them as worth checking",
+        icon: <DistanceIcon />,
       },
     ],
   },

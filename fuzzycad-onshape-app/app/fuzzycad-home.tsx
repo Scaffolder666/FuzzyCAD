@@ -42,6 +42,7 @@ import OperationPreviewPanel, {
 import { buildCompactAxialStretchContext } from "./lib/operations/compactAxialStretchContext";
 import { inferCompactAxialStretchPlan } from "./lib/operations/inferCompactAxialStretchPlan";
 import { resolveCompactAxialStretchPlan } from "./lib/operations/resolveCompactAxialStretchPlan";
+import { closestPointsBetweenAabbs } from "./lib/operations/clearanceMeasure";
 import {
   DEFAULT_HEIGHT_CONFIDENCE,
   DEFAULT_HEIGHT_DIRECTIONS,
@@ -201,6 +202,22 @@ export default function FuzzyCADHome() {
   } | null>(null);
   const [scaleFactor, setScaleFactor] = useState(1);
 
+  // "Distance" tool: click one part, then a second, to flag the gap
+  // between them. distanceFirstPathKey holds the first pick while waiting
+  // for the second; once both are in, distanceDraftPathKeys holds the pair
+  // and the bottom readout bar shows the confidence/direction controls.
+  const [distanceFirstPathKey, setDistanceFirstPathKey] = useState<
+    string | null
+  >(null);
+  const [distanceDraftPathKeys, setDistanceDraftPathKeys] = useState<
+    [string, string] | null
+  >(null);
+  const [distanceMeasuredMeters, setDistanceMeasuredMeters] = useState(0);
+  const [distanceConfidenceDraft, setDistanceConfidenceDraft] =
+    useState<ConfidenceLevel>("medium");
+  const [distanceDirectionDraft, setDistanceDirectionDraft] =
+    useState<ConfidenceDirection>("both");
+
   const [heightPreviewOpen, setHeightPreviewOpen] = useState(false);
   const [pendingHeightAxis, setPendingHeightAxis] =
     useState<OperationAxis>("y");
@@ -246,6 +263,7 @@ export default function FuzzyCADHome() {
     proposalPreviews,
     movePreviews,
     scalePreviews,
+    distancePreviews,
     resetUncertaintyDocument,
     upsertSizeMark,
     removeSizeMarks,
@@ -258,6 +276,8 @@ export default function FuzzyCADHome() {
     upsertProposal,
     upsertMoveMark,
     upsertScaleMark,
+    upsertDistanceMark,
+    answerDistanceMark,
   } = useUncertaintyDocument(currentUncertaintySource);
 
   const assemblyElements = useMemo(() => {
@@ -328,11 +348,21 @@ export default function FuzzyCADHome() {
       return heightCandidatePathKeys;
     }
 
+    if (distanceDraftPathKeys) {
+      return distanceDraftPathKeys;
+    }
+
+    if (distanceFirstPathKey) {
+      return [distanceFirstPathKey];
+    }
+
     return lassoPathKeys;
   }, [
     heightCandidateOpen,
     heightConfidenceOpen,
     heightCandidatePathKeys,
+    distanceDraftPathKeys,
+    distanceFirstPathKey,
     lassoPathKeys,
   ]);
 
@@ -372,6 +402,10 @@ export default function FuzzyCADHome() {
     setMoveCandidatePathKeys([]);
     setActiveScalePlan(null);
     setScaleFactor(1);
+    setDistanceFirstPathKey(null);
+    setDistanceDraftPathKeys(null);
+    setDistanceConfidenceDraft("medium");
+    setDistanceDirectionDraft("both");
     closeSizeUncertaintyEditor();
   }
 
@@ -947,6 +981,79 @@ export default function FuzzyCADHome() {
     setActiveTool("select");
   }
 
+  function startDistance() {
+    setActiveTool("distance");
+    resetSizeOperationState();
+    setLassoPathKeys([]);
+  }
+
+  /** Click routing while the Distance tool is active: first click picks
+   * object A, second click (a different object) picks B and opens the
+   * confidence/direction editor in the bottom readout bar. */
+  function handleDistancePick(pathKey: string | null) {
+    if (!pathKey) {
+      return;
+    }
+
+    setHighlightedPathKey(pathKey);
+
+    if (!distanceFirstPathKey) {
+      setDistanceFirstPathKey(pathKey);
+      return;
+    }
+
+    if (pathKey === distanceFirstPathKey) {
+      return;
+    }
+
+    const summaryA = objectSummaries.find(
+      (summary) => summary.pathKey === distanceFirstPathKey,
+    );
+    const summaryB = objectSummaries.find((summary) => summary.pathKey === pathKey);
+
+    if (!summaryA || !summaryB) {
+      return;
+    }
+
+    const { distanceMeters } = closestPointsBetweenAabbs(
+      summaryA.aabbCenterWorld,
+      summaryA.aabbSizeWorld,
+      summaryB.aabbCenterWorld,
+      summaryB.aabbSizeWorld,
+    );
+
+    setDistanceDraftPathKeys([distanceFirstPathKey, pathKey]);
+    setDistanceMeasuredMeters(distanceMeters);
+    setDistanceConfidenceDraft("medium");
+    setDistanceDirectionDraft("both");
+    setDistanceFirstPathKey(null);
+  }
+
+  function cancelDistance() {
+    setDistanceFirstPathKey(null);
+    setDistanceDraftPathKeys(null);
+    setActiveTool("select");
+  }
+
+  function applyDistance() {
+    if (!distanceDraftPathKeys) {
+      return;
+    }
+
+    const [pathKeyA, pathKeyB] = distanceDraftPathKeys;
+
+    upsertDistanceMark({
+      pathKeyA,
+      pathKeyB,
+      measuredDistanceMeters: distanceMeasuredMeters,
+      confidence: distanceConfidenceDraft,
+      direction: distanceDirectionDraft,
+    });
+
+    setDistanceDraftPathKeys(null);
+    setActiveTool("select");
+  }
+
 async function saveProjectStateToOnshape() {
   if (!documentId || !workspaceId) {
     console.warn("Missing documentId or workspaceId");
@@ -1052,6 +1159,11 @@ if (result.ok && result.state) {
   }
 
   function handleViewerSelectedPathKey(pathKey: string | null) {
+    if (activeTool === "distance") {
+      handleDistancePick(pathKey);
+      return;
+    }
+
     setHighlightedPathKey(pathKey);
     leaveUncertaintyEditingState();
   }
@@ -1116,6 +1228,15 @@ if (result.ok && result.state) {
           scalePreviews={scalePreviews}
           scaleFactor={scaleFactor}
           onScaleFactorChange={setScaleFactor}
+          distanceDraft={
+            distanceDraftPathKeys
+              ? {
+                  pathKeyA: distanceDraftPathKeys[0],
+                  pathKeyB: distanceDraftPathKeys[1],
+                }
+              : null
+          }
+          distancePreviews={distancePreviews}
           hoveredPathKey={hoveredPathKey}
           onHoveredPathKeyChange={setHoveredPathKey}
           focusRequest={focusRequest}
@@ -1179,6 +1300,11 @@ if (result.ok && result.state) {
 
             if (tool === "scale") {
               startScale();
+              return;
+            }
+
+            if (tool === "distance") {
+              startDistance();
               return;
             }
 
@@ -1268,6 +1394,79 @@ if (result.ok && result.state) {
           </div>
         ) : null}
 
+        {activeTool === "distance" && !distanceDraftPathKeys ? (
+          <div className={styles.manipulationReadout}>
+            <span className={styles.manipulationValue}>
+              {distanceFirstPathKey
+                ? "Click a second part..."
+                : "Click a part to start measuring"}
+            </span>
+            <button
+              type="button"
+              className={styles.manipulationResetButton}
+              onClick={cancelDistance}
+            >
+              Cancel
+            </button>
+          </div>
+        ) : null}
+
+        {activeTool === "distance" && distanceDraftPathKeys ? (
+          <div className={styles.manipulationReadout}>
+            <span className={styles.manipulationValue}>
+              {(distanceMeasuredMeters * 1000).toFixed(1)} mm
+            </span>
+            {(["high", "medium", "low"] as const).map((level) => (
+              <button
+                key={level}
+                type="button"
+                className={`${styles.manipulationResetButton} ${
+                  distanceConfidenceDraft === level
+                    ? styles.manipulationToggleActive
+                    : ""
+                }`}
+                onClick={() => setDistanceConfidenceDraft(level)}
+              >
+                {level}
+              </button>
+            ))}
+            {(
+              [
+                { value: "positive", label: "too close" },
+                { value: "negative", label: "too far" },
+                { value: "both", label: "not sure" },
+              ] as const
+            ).map((option) => (
+              <button
+                key={option.value}
+                type="button"
+                className={`${styles.manipulationResetButton} ${
+                  distanceDirectionDraft === option.value
+                    ? styles.manipulationToggleActive
+                    : ""
+                }`}
+                onClick={() => setDistanceDirectionDraft(option.value)}
+              >
+                {option.label}
+              </button>
+            ))}
+            <button
+              type="button"
+              className={styles.manipulationResetButton}
+              onClick={cancelDistance}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              className={styles.manipulationResetButton}
+              onClick={applyDistance}
+            >
+              Save flag
+            </button>
+          </div>
+        ) : null}
+
         <UncertaintyMarksPanel
           document={uncertaintyDocumentWithCurrentSource}
           selectedAnnotationId={selectedUncertaintyId}
@@ -1279,6 +1478,9 @@ if (result.ok && result.state) {
           onResolveAnnotation={resolveAnnotation}
           onReopenAnnotation={reopenAnnotation}
           onSelectAlternativeOption={selectAnnotationAlternativeOption}
+          onAnswerDistance={(annotationId, distanceMm) =>
+            answerDistanceMark(annotationId, distanceMm / 1000)
+          }
           onSaveToOnshape={() => void saveProjectStateToOnshape()}
         />
 

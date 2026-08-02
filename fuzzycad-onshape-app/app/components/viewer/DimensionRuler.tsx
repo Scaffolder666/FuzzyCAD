@@ -84,6 +84,7 @@ function CaliperRuler({
         lineWidth={1.4}
         transparent
         opacity={0.8}
+        raycast={() => null}
       />
       <Line
         points={extensionTickB}
@@ -91,6 +92,7 @@ function CaliperRuler({
         lineWidth={1.4}
         transparent
         opacity={0.8}
+        raycast={() => null}
       />
       <Line
         points={dimensionLine}
@@ -101,6 +103,7 @@ function CaliperRuler({
         gapSize={0.02}
         transparent
         opacity={0.95}
+        raycast={() => null}
       />
       <Arrowhead
         tipWorld={dimensionLine[1]}

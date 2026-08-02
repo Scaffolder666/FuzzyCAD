@@ -3,6 +3,7 @@
 import { useState } from "react";
 import type {
   AlternativeUncertaintyAnnotation,
+  DistanceUncertaintyAnnotation,
   FuzzyCADUncertaintyAnnotation,
   FuzzyCADUncertaintyDocument,
   MoveUncertaintyAnnotation,
@@ -27,6 +28,7 @@ type UncertaintyMarksPanelProps = {
   onResolveAnnotation: (annotationId: string) => void;
   onReopenAnnotation: (annotationId: string) => void;
   onSelectAlternativeOption: (annotationId: string, optionId: string) => void;
+  onAnswerDistance: (annotationId: string, distanceMm: number) => void;
   onSaveToOnshape: () => void;
 };
 
@@ -79,6 +81,13 @@ function matchesFilter(
       annotation.type === "move" ||
       annotation.type === "scale"
     );
+  }
+
+  if (filter === "size") {
+    // Distance is also a "flag a concern, don't propose a fix" mark, same
+    // as Size — just between two objects instead of one object's own
+    // dimension — so it shares the "Needs input" filter.
+    return annotation.type === "size" || annotation.type === "distance";
   }
 
   return annotation.type === filter;
@@ -158,6 +167,122 @@ function SizeCard({
         >
           Mark resolved
         </button>
+        <button
+          type="button"
+          className={styles.deleteButton}
+          onClick={(event) => {
+            event.stopPropagation();
+            onDelete();
+          }}
+        >
+          Delete
+        </button>
+      </div>
+    </article>
+  );
+}
+
+const DISTANCE_DIRECTION_LABEL: Record<
+  DistanceUncertaintyAnnotation["direction"],
+  string
+> = {
+  positive: "might be too close",
+  negative: "might be too far",
+  both: "not sure which way",
+};
+
+function DistanceCard({
+  annotation,
+  selected,
+  hovered,
+  onSelect,
+  onDelete,
+  onCommentChange,
+  onAnswer,
+}: {
+  annotation: DistanceUncertaintyAnnotation;
+  selected: boolean;
+  hovered: boolean;
+  onSelect: () => void;
+  onDelete: () => void;
+  onCommentChange: (comment: string) => void;
+  onAnswer: (distanceMm: number) => void;
+}) {
+  const [answerDraft, setAnswerDraft] = useState("");
+  const measuredMm = annotation.measuredDistanceMeters * 1000;
+  const resolvedMm =
+    annotation.resolvedDistanceMeters !== null
+      ? annotation.resolvedDistanceMeters * 1000
+      : null;
+
+  return (
+    <article
+      className={`${styles.card} ${selected ? styles.cardSelected : ""} ${
+        hovered ? styles.cardHovered : ""
+      }`}
+      onClick={onSelect}
+    >
+      <div className={styles.cardHeader}>
+        <span className={`${styles.kindPill} ${styles.kindPillDistance}`}>
+          Needs input
+        </span>
+        <span className={styles.confidencePill}>
+          {annotation.confidence} · {DISTANCE_DIRECTION_LABEL[annotation.direction]}
+        </span>
+      </div>
+
+      <div className={styles.cardTitle}>
+        {annotation.target.referencePathKey} &harr; {annotation.otherPathKey}
+      </div>
+
+      <div className={styles.valueLine}>
+        <span>measured {measuredMm.toFixed(1)} mm</span>
+      </div>
+
+      {resolvedMm !== null ? (
+        <div className={styles.valueLine}>
+          <span className={styles.valueNew}>answered: {resolvedMm.toFixed(1)} mm</span>
+        </div>
+      ) : null}
+
+      {annotation.author ? (
+        <div className={styles.metaRow}>flagged by {annotation.author}</div>
+      ) : null}
+
+      <textarea
+        className={styles.comment}
+        value={annotation.comment ?? ""}
+        placeholder="Why does this look off?"
+        onClick={(event) => event.stopPropagation()}
+        onChange={(event) => onCommentChange(event.target.value)}
+      />
+
+      <div className={styles.answerRow} onClick={(event) => event.stopPropagation()}>
+        <input
+          type="number"
+          inputMode="decimal"
+          className={styles.answerInput}
+          placeholder="actual mm"
+          value={answerDraft}
+          onChange={(event) => setAnswerDraft(event.target.value)}
+        />
+        <button
+          type="button"
+          className={styles.answerButton}
+          onClick={() => {
+            const parsed = parseFloat(answerDraft);
+
+            if (!Number.isNaN(parsed)) {
+              onAnswer(parsed);
+              setAnswerDraft("");
+            }
+          }}
+        >
+          Save answer
+        </button>
+      </div>
+
+      <div className={styles.actions}>
         <button
           type="button"
           className={styles.deleteButton}
@@ -509,6 +634,7 @@ export default function UncertaintyMarksPanel({
   onResolveAnnotation,
   onReopenAnnotation,
   onSelectAlternativeOption,
+  onAnswerDistance,
   onSaveToOnshape,
 }: UncertaintyMarksPanelProps) {
   const [activeFilter, setActiveFilter] = useState<FilterKey | null>(null);
@@ -662,6 +788,25 @@ export default function UncertaintyMarksPanel({
               );
             }
 
+            if (annotation.type === "distance") {
+              return (
+                <DistanceCard
+                  key={annotation.id}
+                  annotation={annotation}
+                  selected={selected}
+                  hovered={hovered}
+                  onSelect={() => onSelectAnnotation(annotation.id)}
+                  onDelete={() => onDeleteAnnotation(annotation.id)}
+                  onCommentChange={(comment) =>
+                    onCommentChange(annotation.id, comment)
+                  }
+                  onAnswer={(distanceMm) =>
+                    onAnswerDistance(annotation.id, distanceMm)
+                  }
+                />
+              );
+            }
+
             return (
               <AlternativeCard
                 key={annotation.id}
@@ -706,7 +851,9 @@ export default function UncertaintyMarksPanel({
                             ? `Move: ${annotation.target.referencePathKey}`
                             : annotation.type === "scale"
                               ? `Scale: ${annotation.target.referencePathKey}`
-                              : "Alternative"}
+                              : annotation.type === "distance"
+                                ? `Distance: ${annotation.target.referencePathKey} ↔ ${annotation.otherPathKey}`
+                                : "Alternative"}
                     </span>
                     <button
                       type="button"

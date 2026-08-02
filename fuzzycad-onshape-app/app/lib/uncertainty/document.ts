@@ -1,6 +1,8 @@
 import type {
   AxisConfidenceMap,
   AxisDirectionMap,
+  ConfidenceDirection,
+  ConfidenceLevel,
   FuzzyConfidenceAnnotation,
 } from "./types";
 
@@ -110,12 +112,31 @@ export type ScaleUncertaintyAnnotation = BaseAnnotationFields & {
   proposedValueLabel: string;
 };
 
+/**
+ * "Distance": flags a gap between two parts as worth checking, without
+ * proposing an exact fix — the same "needs input" model as Size (a
+ * confidence level + a lean direction, not a hard number), just applied to
+ * the space between two objects instead of one object's own dimension.
+ * `resolvedDistanceMeters` lets someone with the relevant domain knowledge
+ * answer the question directly on the mark itself, instead of only being
+ * able to mark it resolved with no record of what the real value is.
+ */
+export type DistanceUncertaintyAnnotation = BaseAnnotationFields & {
+  type: "distance";
+  otherPathKey: string;
+  measuredDistanceMeters: number;
+  confidence: ConfidenceLevel;
+  direction: ConfidenceDirection;
+  resolvedDistanceMeters: number | null;
+};
+
 export type FuzzyCADUncertaintyAnnotation =
   | SizeUncertaintyAnnotation
   | ProposalUncertaintyAnnotation
   | AlternativeUncertaintyAnnotation
   | MoveUncertaintyAnnotation
-  | ScaleUncertaintyAnnotation;
+  | ScaleUncertaintyAnnotation
+  | DistanceUncertaintyAnnotation;
 
 export function createEmptyUncertaintyDocument(
   source: FuzzyCADUncertaintySource,
@@ -179,8 +200,8 @@ function removePathKeysFromAnnotation(
   pathKeysToRemove: Set<string>,
 ): FuzzyCADUncertaintyAnnotation | null {
   if (annotation.type !== "size") {
-    // Proposal/alternative/move/scale removal isn't wired up yet; leave
-    // them untouched rather than silently reconstructing them as a
+    // Proposal/alternative/move/scale/distance removal isn't wired up yet;
+    // leave them untouched rather than silently reconstructing them as a
     // different annotation type.
     return annotation;
   }
@@ -740,5 +761,149 @@ export function toScalePreviews(
     .map((annotation) => ({
       pathKey: annotation.target.referencePathKey,
       factor: annotation.factor,
+    }));
+}
+
+export function makeDistanceAnnotationId(pathKeyA: string, pathKeyB: string) {
+  return `distance:${[pathKeyA, pathKeyB].sort().join("|")}`;
+}
+
+function createDistanceAnnotation(input: {
+  pathKeyA: string;
+  pathKeyB: string;
+  measuredDistanceMeters: number;
+  confidence: ConfidenceLevel;
+  direction: ConfidenceDirection;
+  resolvedDistanceMeters?: number | null;
+  comment?: string;
+  author?: string;
+  assignee?: string;
+  status?: AnnotationStatus;
+  createdAt?: string;
+  updatedAt?: string;
+}): DistanceUncertaintyAnnotation | null {
+  if (!input.pathKeyA || !input.pathKeyB || input.pathKeyA === input.pathKeyB) {
+    return null;
+  }
+
+  const now = new Date().toISOString();
+
+  return {
+    id: makeDistanceAnnotationId(input.pathKeyA, input.pathKeyB),
+    type: "distance",
+    target: {
+      pathKeys: [input.pathKeyA, input.pathKeyB],
+      referencePathKey: input.pathKeyA,
+      scope: "group",
+    },
+    otherPathKey: input.pathKeyB,
+    measuredDistanceMeters: input.measuredDistanceMeters,
+    confidence: input.confidence,
+    direction: input.direction,
+    resolvedDistanceMeters: input.resolvedDistanceMeters ?? null,
+    comment: input.comment,
+    author: input.author,
+    assignee: input.assignee,
+    status: input.status ?? "open",
+    createdAt: input.createdAt ?? now,
+    updatedAt: input.updatedAt ?? now,
+  };
+}
+
+/** One open distance flag per unordered pair of objects — a new save replaces it. */
+export function upsertDistance(
+  document: FuzzyCADUncertaintyDocument,
+  input: {
+    pathKeyA: string;
+    pathKeyB: string;
+    measuredDistanceMeters: number;
+    confidence: ConfidenceLevel;
+    direction: ConfidenceDirection;
+    author?: string;
+  },
+): FuzzyCADUncertaintyDocument {
+  const id = makeDistanceAnnotationId(input.pathKeyA, input.pathKeyB);
+  const existing = document.annotations.find((annotation) => annotation.id === id);
+
+  const nextAnnotation = createDistanceAnnotation({
+    pathKeyA: input.pathKeyA,
+    pathKeyB: input.pathKeyB,
+    measuredDistanceMeters: input.measuredDistanceMeters,
+    confidence: input.confidence,
+    direction: input.direction,
+    resolvedDistanceMeters:
+      existing?.type === "distance" ? existing.resolvedDistanceMeters : null,
+    comment: existing?.comment,
+    author: existing?.author ?? input.author,
+    assignee: existing?.assignee,
+    status: "open",
+    createdAt: existing?.createdAt,
+  });
+
+  if (!nextAnnotation) {
+    return document;
+  }
+
+  return {
+    ...document,
+    annotations: [
+      ...document.annotations.filter((annotation) => annotation.id !== id),
+      nextAnnotation,
+    ],
+  };
+}
+
+/**
+ * Someone with the relevant domain knowledge answers a distance flag with
+ * the actual value it should be — this both records the answer and closes
+ * the mark, since providing the real number *is* the resolution.
+ */
+export function setDistanceAnswer(
+  document: FuzzyCADUncertaintyDocument,
+  annotationId: string,
+  resolvedDistanceMeters: number,
+): FuzzyCADUncertaintyDocument {
+  const now = new Date().toISOString();
+
+  return {
+    ...document,
+    annotations: document.annotations.map((annotation) => {
+      if (annotation.id !== annotationId || annotation.type !== "distance") {
+        return annotation;
+      }
+
+      return {
+        ...annotation,
+        resolvedDistanceMeters,
+        status: "resolved",
+        updatedAt: now,
+      };
+    }),
+  };
+}
+
+export type DistancePreview = {
+  pathKeyA: string;
+  pathKeyB: string;
+  confidence: ConfidenceLevel;
+  direction: ConfidenceDirection;
+  measuredDistanceMeters: number;
+};
+
+/** Open distance flags, for the 3D viewer to render as a persistent ruler. */
+export function toDistancePreviews(
+  document: FuzzyCADUncertaintyDocument,
+): DistancePreview[] {
+  return document.annotations
+    .filter(
+      (annotation): annotation is DistanceUncertaintyAnnotation =>
+        annotation.type === "distance" && annotation.status === "open",
+    )
+    .map((annotation) => ({
+      pathKeyA: annotation.target.referencePathKey,
+      pathKeyB: annotation.otherPathKey,
+      confidence: annotation.confidence,
+      direction: annotation.direction,
+      measuredDistanceMeters: annotation.measuredDistanceMeters,
     }));
 }

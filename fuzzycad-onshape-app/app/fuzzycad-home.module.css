@@ -229,6 +229,15 @@
   background: rgba(255, 255, 255, 0.9);
 }
 
+.manipulationToggleActive {
+  background: rgba(43, 108, 255, 0.85);
+  color: #ffffff;
+}
+
+.manipulationToggleActive:hover {
+  background: rgba(43, 108, 255, 0.95);
+}
+
 .operationToolbar {
   display: flex;
   align-items: flex-end;

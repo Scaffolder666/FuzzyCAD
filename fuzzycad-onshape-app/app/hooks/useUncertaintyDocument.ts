@@ -6,11 +6,14 @@ import {
   reopenUncertaintyAnnotation,
   resolveUncertaintyAnnotation,
   selectAlternativeOption,
+  setDistanceAnswer,
+  toDistancePreviews,
   toFuzzyConfidenceAnnotations,
   toMovePreviews,
   toProposalPreviews,
   toScalePreviews,
   updateUncertaintyAnnotationComment,
+  upsertDistance,
   upsertMove,
   upsertScale,
   upsertSizeAnnotation,
@@ -23,6 +26,8 @@ import {
 import type {
   AxisConfidenceMap,
   AxisDirectionMap,
+  ConfidenceDirection,
+  ConfidenceLevel,
 } from "../lib/uncertainty/types";
 
 export function useUncertaintyDocument(source: FuzzyCADUncertaintySource) {
@@ -56,6 +61,11 @@ export function useUncertaintyDocument(source: FuzzyCADUncertaintySource) {
 
   const scalePreviews = useMemo(
     () => toScalePreviews(uncertaintyDocumentWithCurrentSource),
+    [uncertaintyDocumentWithCurrentSource],
+  );
+
+  const distancePreviews = useMemo(
+    () => toDistancePreviews(uncertaintyDocumentWithCurrentSource),
     [uncertaintyDocumentWithCurrentSource],
   );
 
@@ -206,6 +216,38 @@ export function useUncertaintyDocument(source: FuzzyCADUncertaintySource) {
     );
   }
 
+  function upsertDistanceMark(input: {
+    pathKeyA: string;
+    pathKeyB: string;
+    measuredDistanceMeters: number;
+    confidence: ConfidenceLevel;
+    direction: ConfidenceDirection;
+    author?: string;
+  }) {
+    setUncertaintyDocument((previous) =>
+      upsertDistance(
+        {
+          ...previous,
+          source,
+        },
+        input,
+      ),
+    );
+  }
+
+  function answerDistanceMark(annotationId: string, resolvedDistanceMeters: number) {
+    setUncertaintyDocument((previous) =>
+      setDistanceAnswer(
+        {
+          ...previous,
+          source,
+        },
+        annotationId,
+        resolvedDistanceMeters,
+      ),
+    );
+  }
+
   function selectAnnotationAlternativeOption(
     annotationId: string,
     optionId: string,
@@ -229,6 +271,7 @@ export function useUncertaintyDocument(source: FuzzyCADUncertaintySource) {
     proposalPreviews,
     movePreviews,
     scalePreviews,
+    distancePreviews,
     resetUncertaintyDocument,
     replaceUncertaintyDocument,
     upsertSizeMark,
@@ -241,5 +284,7 @@ export function useUncertaintyDocument(source: FuzzyCADUncertaintySource) {
     upsertProposal,
     upsertMoveMark,
     upsertScaleMark,
+    upsertDistanceMark,
+    answerDistanceMark,
   };
 }

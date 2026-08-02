@@ -76,6 +76,8 @@ import {
   updateScalePreviewSession,
   type ScalePreviewSession,
 } from "./viewer/scalePreview";
+import ClearanceRuler from "./viewer/ClearanceRuler";
+import { closestPointsBetweenAabbs } from "../lib/operations/clearanceMeasure";
 
 export type { MeshGraphNode } from "./viewer/meshGraph";
 export type { PartPlacement, PlacementReport } from "./viewer/placement";
@@ -130,6 +132,26 @@ export type ScaleRolePlan = {
 export type ScalePreview = {
   pathKey: string;
   factor: number;
+};
+
+/** A saved distance flag, structurally the same shape as document.ts's. */
+export type DistancePreview = {
+  pathKeyA: string;
+  pathKeyB: string;
+  confidence: ConfidenceLevel;
+  direction: ConfidenceDirection;
+  measuredDistanceMeters: number;
+};
+
+/**
+ * The in-progress "Distance" pick: both objects chosen, confidence/direction
+ * being set in the bottom readout bar before saving — drawn with a neutral
+ * color until the user commits, so it doesn't imply a confidence level that
+ * hasn't actually been chosen yet.
+ */
+export type DistanceDraft = {
+  pathKeyA: string;
+  pathKeyB: string;
 };
 
 export type FuzzyConfidenceEditor = {
@@ -187,6 +209,10 @@ type FuzzyCADGeometryViewerProps = {
   scalePreviews?: ScalePreview[];
   scaleFactor?: number;
   onScaleFactorChange?: (factor: number) => void;
+  /** Both objects picked for the "Distance" tool, before it's saved. */
+  distanceDraft?: DistanceDraft | null;
+  /** Saved distance flags, shown as persistent rulers. */
+  distancePreviews?: DistancePreview[];
   /** Path key currently under the mouse in the 3D view, for linking to the marks panel. */
   hoveredPathKey?: string | null;
   onHoveredPathKeyChange?: (pathKey: string | null) => void;
@@ -331,6 +357,17 @@ const MOVE_ACCENT_COLOR = "#7c3aed";
 const MOVE_ACCENT_COLOR_MUTED = "#c4b5fd";
 const SCALE_ACCENT_COLOR = "#0d9488";
 const SCALE_ACCENT_COLOR_MUTED = "#99f6e4";
+const DISTANCE_ACCENT_COLOR = "#0ea5e9";
+const DISTANCE_DRAFT_COLOR = "#64748b";
+
+// Thicker line = a wider "I'm not sure" range, not a value change — so a
+// low-confidence flag visually reads as less certain, same idea as Size's
+// range envelope but expressed as line weight instead of a swept band.
+const DISTANCE_CONFIDENCE_WIDTH: Record<ConfidenceLevel, number> = {
+  high: 1.5,
+  medium: 2.5,
+  low: 4,
+};
 
 // How long one full there-and-back cycle of a saved-preview loop animation
 // (move ghosts, propose/stretch ghosts) takes, in seconds.
@@ -829,6 +866,8 @@ function Model({
   scalePreviews,
   scaleFactor = 1,
   onScaleFactorChange,
+  distanceDraft,
+  distancePreviews,
   hoveredPathKey,
   onHoveredPathKeyChange,
   focusRequest,
@@ -869,6 +908,8 @@ function Model({
   scalePreviews?: ScalePreview[];
   scaleFactor?: number;
   onScaleFactorChange?: (factor: number) => void;
+  distanceDraft?: DistanceDraft | null;
+  distancePreviews?: DistancePreview[];
   hoveredPathKey?: string | null;
   onHoveredPathKeyChange?: (pathKey: string | null) => void;
   focusRequest?: FocusRequest | null;
@@ -1507,6 +1548,71 @@ function Model({
       return [{ key: preview.pathKey, position, factor: preview.factor }];
     });
   }, [persistentScalePreviews, objectSummaries]);
+
+  // "Distance" is a needs-input flag, not a proposal: the gap is measured
+  // live from the two objects' current positions (no dragging, no ghost
+  // preview session needed), so this is a plain derived value.
+  const distanceRulers = useMemo(() => {
+    return (distancePreviews ?? []).flatMap((preview) => {
+      const summaryA = objectSummaries.find(
+        (item) => item.pathKey === preview.pathKeyA,
+      );
+      const summaryB = objectSummaries.find(
+        (item) => item.pathKey === preview.pathKeyB,
+      );
+
+      if (!summaryA || !summaryB) {
+        return [];
+      }
+
+      const { pointOnA, pointOnB, distanceMeters } = closestPointsBetweenAabbs(
+        summaryA.aabbCenterWorld,
+        summaryA.aabbSizeWorld,
+        summaryB.aabbCenterWorld,
+        summaryB.aabbSizeWorld,
+      );
+
+      return [
+        {
+          key: `${preview.pathKeyA}:${preview.pathKeyB}`,
+          from: new THREE.Vector3(...pointOnA),
+          to: new THREE.Vector3(...pointOnB),
+          distanceMeters,
+          lineWidth: DISTANCE_CONFIDENCE_WIDTH[preview.confidence],
+        },
+      ];
+    });
+  }, [distancePreviews, objectSummaries]);
+
+  const activeDistanceRuler = useMemo(() => {
+    if (!distanceDraft) {
+      return null;
+    }
+
+    const summaryA = objectSummaries.find(
+      (item) => item.pathKey === distanceDraft.pathKeyA,
+    );
+    const summaryB = objectSummaries.find(
+      (item) => item.pathKey === distanceDraft.pathKeyB,
+    );
+
+    if (!summaryA || !summaryB) {
+      return null;
+    }
+
+    const { pointOnA, pointOnB, distanceMeters } = closestPointsBetweenAabbs(
+      summaryA.aabbCenterWorld,
+      summaryA.aabbSizeWorld,
+      summaryB.aabbCenterWorld,
+      summaryB.aabbSizeWorld,
+    );
+
+    return {
+      from: new THREE.Vector3(...pointOnA),
+      to: new THREE.Vector3(...pointOnB),
+      distanceMeters,
+    };
+  }, [distanceDraft, objectSummaries]);
 
   const visualConfidenceAnnotations = useMemo(() => {
     const base = confidenceAnnotations ?? [];
@@ -2214,6 +2320,28 @@ function Model({
         </Html>
       ))}
 
+      {distanceRulers.map((ruler) => (
+        <ClearanceRuler
+          key={ruler.key}
+          fromWorld={ruler.from}
+          toWorld={ruler.to}
+          distanceMeters={ruler.distanceMeters}
+          color={DISTANCE_ACCENT_COLOR}
+          lineWidth={ruler.lineWidth}
+        />
+      ))}
+
+      {activeDistanceRuler ? (
+        <ClearanceRuler
+          fromWorld={activeDistanceRuler.from}
+          toWorld={activeDistanceRuler.to}
+          distanceMeters={activeDistanceRuler.distanceMeters}
+          color={DISTANCE_DRAFT_COLOR}
+          lineWidth={2.5}
+          label="measuring"
+        />
+      ) : null}
+
       {handleConfig?.kind === "angle" ? (
         <AngleHandle
           pivotWorld={handleConfig.pivotWorld}
@@ -2255,6 +2383,8 @@ export default function FuzzyCADGeometryViewer({
   scalePreviews,
   scaleFactor,
   onScaleFactorChange,
+  distanceDraft,
+  distancePreviews,
   hoveredPathKey,
   onHoveredPathKeyChange,
   focusRequest,
@@ -2352,6 +2482,8 @@ export default function FuzzyCADGeometryViewer({
                   scalePreviews={scalePreviews}
                   scaleFactor={scaleFactor}
                   onScaleFactorChange={onScaleFactorChange}
+                  distanceDraft={distanceDraft}
+                  distancePreviews={distancePreviews}
                   hoveredPathKey={hoveredPathKey}
                   onHoveredPathKeyChange={onHoveredPathKeyChange}
                   focusRequest={focusRequest}
