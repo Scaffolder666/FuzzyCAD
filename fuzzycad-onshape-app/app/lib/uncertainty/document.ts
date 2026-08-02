@@ -886,8 +886,10 @@ export function setDistanceConfidence(
 
 /**
  * Someone with the relevant domain knowledge answers a distance flag with
- * the actual value it should be — this both records the answer and closes
- * the mark, since providing the real number *is* the resolution.
+ * the actual value it should be. This records the answer but does *not*
+ * resolve the mark by itself — the answer stays visible on the geometry
+ * (as the authoritative value, not just the raw measurement) until someone
+ * explicitly marks it resolved, the same as any other annotation type.
  */
 export function setDistanceAnswer(
   document: FuzzyCADUncertaintyDocument,
@@ -906,7 +908,6 @@ export function setDistanceAnswer(
       return {
         ...annotation,
         resolvedDistanceMeters,
-        status: "resolved",
         updatedAt: now,
       };
     }),
@@ -919,6 +920,7 @@ export type DistancePreview = {
   confidence: ConfidenceLevel | null;
   direction: ConfidenceDirection | null;
   measuredDistanceMeters: number;
+  resolvedDistanceMeters: number | null;
 };
 
 /** Open distance flags, for the 3D viewer to render as a persistent ruler. */
@@ -936,5 +938,6 @@ export function toDistancePreviews(
       confidence: annotation.confidence,
       direction: annotation.direction,
       measuredDistanceMeters: annotation.measuredDistanceMeters,
+      resolvedDistanceMeters: annotation.resolvedDistanceMeters,
     }));
 }

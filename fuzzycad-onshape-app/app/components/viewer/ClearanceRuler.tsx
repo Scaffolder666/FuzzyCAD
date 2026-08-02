@@ -10,6 +10,8 @@ type ClearanceRulerProps = {
   /** Nearest point on the second object. */
   toWorld: THREE.Vector3;
   distanceMeters: number;
+  /** Once someone answers the flag, show what it should be alongside what it currently measures. */
+  resolvedDistanceMeters?: number | null;
   color: string;
   /** Thicker line = wider confidence range (less sure), not a value change. */
   lineWidth?: number;
@@ -27,10 +29,13 @@ export default function ClearanceRuler({
   fromWorld,
   toWorld,
   distanceMeters,
+  resolvedDistanceMeters,
   color,
   lineWidth = 2,
   label,
 }: ClearanceRulerProps) {
+  const answered =
+    resolvedDistanceMeters !== null && resolvedDistanceMeters !== undefined;
   const { capA, capB, labelPosition } = useMemo(() => {
     const span = toWorld.clone().sub(fromWorld);
     const length = Math.max(span.length(), 1e-6);
@@ -119,7 +124,29 @@ export default function ClearanceRuler({
               {label}
             </span>
           ) : null}
-          <span>{(distanceMeters * 1000).toFixed(1)} mm</span>
+          {answered ? (
+            <span
+              style={{
+                display: "flex",
+                alignItems: "baseline",
+                gap: 5,
+              }}
+            >
+              <span
+                style={{
+                  fontSize: 9,
+                  fontWeight: 700,
+                  color: "#94a3b8",
+                  textDecoration: "line-through",
+                }}
+              >
+                {(distanceMeters * 1000).toFixed(1)}
+              </span>
+              <span>&#8594; {((resolvedDistanceMeters ?? 0) * 1000).toFixed(1)} mm</span>
+            </span>
+          ) : (
+            <span>{(distanceMeters * 1000).toFixed(1)} mm</span>
+          )}
         </div>
       </Html>
     </>

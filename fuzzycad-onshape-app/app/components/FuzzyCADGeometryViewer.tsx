@@ -141,6 +141,7 @@ export type DistancePreview = {
   confidence: ConfidenceLevel | null;
   direction: ConfidenceDirection | null;
   measuredDistanceMeters: number;
+  resolvedDistanceMeters: number | null;
 };
 
 export type FuzzyConfidenceEditor = {
@@ -345,6 +346,10 @@ const MOVE_ACCENT_COLOR_MUTED = "#c4b5fd";
 const SCALE_ACCENT_COLOR = "#0d9488";
 const SCALE_ACCENT_COLOR_MUTED = "#99f6e4";
 const DISTANCE_ACCENT_COLOR = "#0ea5e9";
+// Once someone answers a distance flag, its ruler switches to this color —
+// a settled fact instead of an open question — matching the teal used for
+// "accepted"/"new value" elsewhere (Propose/Move/Scale cards' valueNew).
+const DISTANCE_ANSWERED_COLOR = "#0f766e";
 
 // Thicker line = a wider "I'm not sure" range, not a value change — so a
 // low-confidence flag visually reads as less certain, same idea as Size's
@@ -356,6 +361,9 @@ const DISTANCE_CONFIDENCE_WIDTH: Record<ConfidenceLevel, number> = {
   low: 4,
 };
 const DISTANCE_DEFAULT_WIDTH = DISTANCE_CONFIDENCE_WIDTH.medium;
+// An answered flag is a known fact, not a fuzzy guess, so it always gets
+// the confident (thin) line regardless of what confidence was set before.
+const DISTANCE_ANSWERED_WIDTH = DISTANCE_CONFIDENCE_WIDTH.high;
 
 // How long one full there-and-back cycle of a saved-preview loop animation
 // (move ghosts, propose/stretch ghosts) takes, in seconds.
@@ -1558,15 +1566,21 @@ function Model({
         summaryB.aabbSizeWorld,
       );
 
+      const answered = preview.resolvedDistanceMeters !== null;
+
       return [
         {
           key: `${preview.pathKeyA}:${preview.pathKeyB}`,
           from: new THREE.Vector3(...pointOnA),
           to: new THREE.Vector3(...pointOnB),
           distanceMeters,
-          lineWidth: preview.confidence
-            ? DISTANCE_CONFIDENCE_WIDTH[preview.confidence]
-            : DISTANCE_DEFAULT_WIDTH,
+          resolvedDistanceMeters: preview.resolvedDistanceMeters,
+          color: answered ? DISTANCE_ANSWERED_COLOR : DISTANCE_ACCENT_COLOR,
+          lineWidth: answered
+            ? DISTANCE_ANSWERED_WIDTH
+            : preview.confidence
+              ? DISTANCE_CONFIDENCE_WIDTH[preview.confidence]
+              : DISTANCE_DEFAULT_WIDTH,
         },
       ];
     });
@@ -2284,7 +2298,8 @@ function Model({
           fromWorld={ruler.from}
           toWorld={ruler.to}
           distanceMeters={ruler.distanceMeters}
-          color={DISTANCE_ACCENT_COLOR}
+          resolvedDistanceMeters={ruler.resolvedDistanceMeters}
+          color={ruler.color}
           lineWidth={ruler.lineWidth}
         />
       ))}

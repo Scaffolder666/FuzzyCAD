@@ -209,6 +209,7 @@ function DistanceCard({
   onCommentChange,
   onAnswer,
   onSetConfidence,
+  onResolve,
 }: {
   annotation: DistanceUncertaintyAnnotation;
   selected: boolean;
@@ -218,6 +219,7 @@ function DistanceCard({
   onCommentChange: (comment: string) => void;
   onAnswer: (distanceMm: number) => void;
   onSetConfidence: (confidence: ConfidenceLevel, direction: NonNullable<DistanceUncertaintyAnnotation["direction"]>) => void;
+  onResolve: () => void;
 }) {
   const [answerDraft, setAnswerDraft] = useState("");
   const [confidenceOpen, setConfidenceOpen] = useState(false);
@@ -374,6 +376,18 @@ function DistanceCard({
       />
 
       <div className={styles.actions}>
+        {resolvedMm !== null ? (
+          <button
+            type="button"
+            className={styles.resolveButton}
+            onClick={(event) => {
+              event.stopPropagation();
+              onResolve();
+            }}
+          >
+            Mark resolved
+          </button>
+        ) : null}
         <button
           type="button"
           className={styles.deleteButton}
@@ -898,6 +912,7 @@ export default function UncertaintyMarksPanel({
                   onSetConfidence={(confidence, direction) =>
                     onSetDistanceConfidence(annotation.id, confidence, direction)
                   }
+                  onResolve={() => onResolveAnnotation(annotation.id)}
                 />
               );
             }
