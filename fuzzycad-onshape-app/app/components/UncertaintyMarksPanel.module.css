@@ -167,6 +167,12 @@
   margin-bottom: 8px;
 }
 
+.proposalModeTag {
+  margin-left: 6px;
+  font-weight: 700;
+  color: #94a3b8;
+}
+
 /* ---- kind pills (one per annotation type) ---- */
 
 .kindPill {

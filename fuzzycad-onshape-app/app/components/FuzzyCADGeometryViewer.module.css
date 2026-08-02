@@ -105,6 +105,54 @@
   pointer-events: none;
 }
 
+.axisTriadDot {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.92);
+  border: 2px solid;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: ew-resize;
+  touch-action: none;
+  user-select: none;
+  pointer-events: auto;
+}
+
+.axisTriadActive {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+.axisTriadModeRow {
+  display: flex;
+  gap: 3px;
+  padding: 2px;
+  border-radius: 8px;
+  background: rgba(20, 30, 48, 0.82);
+}
+
+.axisTriadModeButton {
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.axisTriadModeButtonActive {
+  background: rgba(255, 255, 255, 0.14);
+  color: #ffffff;
+}
+
 .angleHandleRoot {
   position: relative;
   width: 0;

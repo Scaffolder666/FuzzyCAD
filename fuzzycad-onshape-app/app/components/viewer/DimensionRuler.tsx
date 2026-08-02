@@ -5,13 +5,11 @@ import * as THREE from "three";
 import { useMemo } from "react";
 
 type DimensionRulerProps = {
-  /** The end of the object that stays fixed while the other end moves. */
-  baseWorld: THREE.Vector3;
-  /** Unit vector pointing from the fixed end toward the moving end. */
-  axisWorld: THREE.Vector3;
-  /** Distance from baseWorld to the object's original (un-proposed) tip. */
-  originalLength: number;
-  /** Proposed change in length, in meters. Positive extends, negative shrinks. */
+  /** Where this end of the object was before the proposed change. */
+  fromWorld: THREE.Vector3;
+  /** Where this end of the object would be after the proposed change. */
+  toWorld: THREE.Vector3;
+  /** Signed distance from `fromWorld` to `toWorld`, for the label text. */
   deltaMeters: number;
   color?: string;
 };
@@ -23,21 +21,18 @@ type DimensionRulerProps = {
  * measurement instead of an implied "ghost" shape.
  */
 export default function DimensionRuler({
-  baseWorld,
-  axisWorld,
-  originalLength,
+  fromWorld,
+  toWorld,
   deltaMeters,
   color = "#ea580c",
 }: DimensionRulerProps) {
   const { extensionTickA, extensionTickB, dimensionLine, labelPosition } =
     useMemo(() => {
-      const axis = axisWorld.clone().normalize();
-      const originalTip = baseWorld
-        .clone()
-        .add(axis.clone().multiplyScalar(originalLength));
-      const proposedTip = baseWorld
-        .clone()
-        .add(axis.clone().multiplyScalar(originalLength + deltaMeters));
+      const span = fromWorld.distanceTo(toWorld);
+      const axis =
+        span > 1e-6
+          ? toWorld.clone().sub(fromWorld).normalize()
+          : new THREE.Vector3(1, 0, 0);
 
       const worldUp = new THREE.Vector3(0, 1, 0);
       const reference =
@@ -49,25 +44,21 @@ export default function DimensionRuler({
         .crossVectors(axis, reference)
         .normalize();
 
-      const tickLength = Math.max(
-        Math.abs(deltaMeters) * 0.4,
-        originalLength * 0.04,
-        1e-5,
-      );
+      const tickLength = Math.max(span * 0.4, 1e-5);
       const offset = perpendicular.multiplyScalar(tickLength * 1.6);
 
-      const dimA = originalTip.clone().add(offset);
-      const dimB = proposedTip.clone().add(offset);
+      const dimA = fromWorld.clone().add(offset);
+      const dimB = toWorld.clone().add(offset);
 
       return {
-        extensionTickA: [originalTip, dimA] as [THREE.Vector3, THREE.Vector3],
-        extensionTickB: [proposedTip, dimB] as [THREE.Vector3, THREE.Vector3],
+        extensionTickA: [fromWorld, dimA] as [THREE.Vector3, THREE.Vector3],
+        extensionTickB: [toWorld, dimB] as [THREE.Vector3, THREE.Vector3],
         dimensionLine: [dimA, dimB] as [THREE.Vector3, THREE.Vector3],
         labelPosition: dimA.clone().lerp(dimB, 0.5),
       };
-    }, [baseWorld, axisWorld, originalLength, deltaMeters]);
+    }, [fromWorld, toWorld]);
 
-  if (Math.abs(deltaMeters) < 1e-5) {
+  if (fromWorld.distanceToSquared(toWorld) < 1e-10) {
     return null;
   }
 

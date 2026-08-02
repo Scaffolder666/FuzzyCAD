@@ -8,6 +8,13 @@ export type MateConnectionSummary = {
   connectorOnOtherWorld: Vec3Tuple | null;
 };
 
+export type LocalAxis = {
+  directionWorld: Vec3Tuple;
+  length: number;
+  negativeEndWorld: Vec3Tuple;
+  positiveEndWorld: Vec3Tuple;
+};
+
 export type AxialStretchObjectSummary = {
   pathKey: string;
   name: string | null;
@@ -26,6 +33,13 @@ export type AxialStretchObjectSummary = {
   // Two ends along the principal axis.
   negativeEndWorld: Vec3Tuple;
   positiveEndWorld: Vec3Tuple;
+
+  // Full local 3-axis frame (oriented-bounding-box-like): index 0 is the
+  // same as principalAxisWorld/axisLength/negativeEndWorld/positiveEndWorld
+  // above, 1 and 2 are the other two orthogonal directions (e.g. width and
+  // height of the part), found by PCA deflation. Lets tools offer "which
+  // dimension of this part" instead of only ever the single longest axis.
+  localAxes: [LocalAxis, LocalAxis, LocalAxis];
 
   // Assembly / mate information. We leave this empty in Step 1,
   // then fill it from relationshipGraph.mateEdges in Step 2.

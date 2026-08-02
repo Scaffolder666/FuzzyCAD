@@ -4,6 +4,14 @@ import { findObjectsByPathKeys, translateObjectsWorld } from "./manipulation";
 import { LineSegments2 } from "three/addons/lines/LineSegments2.js";
 import { LineSegmentsGeometry } from "three/addons/lines/LineSegmentsGeometry.js";
 import { LineMaterial } from "three/addons/lines/LineMaterial.js";
+import {
+  resolveProposalAxisFrame,
+  type ProposalAxisFrame,
+  type ProposalAxisIndex,
+  type ProposalAxisMode,
+} from "./proposalAxis";
+
+export type { ProposalAxisIndex, ProposalAxisMode } from "./proposalAxis";
 
 export type AxialStretchRolePlan = {
   stretchTargetPathKeys: string[];
@@ -25,10 +33,20 @@ type StretchPreview = {
   clone: THREE.Object3D;
   summary: AxialStretchObjectSummary;
   meshes: MeshPreviewSnapshot[];
-  upperEndWorld: THREE.Vector3;
-  lowerEndWorld: THREE.Vector3;
-  axisFromFixedToMoving: THREE.Vector3;
-  axisLength: number;
+  negativeEndWorld: THREE.Vector3;
+  positiveEndWorld: THREE.Vector3;
+  /** The point that stays fixed while the object grows/shrinks around it. */
+  pivotWorld: THREE.Vector3;
+  /** Unit vector: the direction a positive drag delta grows toward. */
+  growthAxisWorld: THREE.Vector3;
+  /** Distance from pivot to the reference tip (full length, or half for symmetric). */
+  referenceExtent: number;
+  tMin: number;
+  tMax: number;
+  /** How much of the requested delta this preview's ends actually move by (0.5 for symmetric). */
+  deltaScale: number;
+  /** The single end that moves, for non-symmetric modes (arbitrary for symmetric). */
+  movingEndWorld: THREE.Vector3;
 };
 
 type FollowPreview = {
@@ -51,10 +69,6 @@ function toVector(tuple: [number, number, number]) {
   return new THREE.Vector3(tuple[0], tuple[1], tuple[2]);
 }
 
-function clamp01(value: number) {
-  return Math.max(0, Math.min(1, value));
-}
-
 function getPathKey(object: THREE.Object3D) {
   const pathKey = object.userData?.fuzzyPathKey;
   return typeof pathKey === "string" ? pathKey : "";
@@ -68,51 +82,42 @@ function findSummary(
 }
 
 /**
- * Which end is "fixed" and which end "moves" when the handle is dragged.
- *
- * With multiple stretch targets (the "height" tool's legs), sorting by
- * world Y means each leg's upper attachment stays put and its lower foot
- * is the one that moves — that's the intended "pull the legs down" feel.
- *
- * With a single stretch target (the "Propose" tool, no legs, no shared
- * drag), there's no such "upper anchor" concept, and picking by world Y
- * forced the moving end to always sit below the fixed end - so dragging
- * the handle always appeared to pull straight down, no matter which way
- * the object actually points. Instead we keep the object's own axis
- * convention: negativeEndWorld stays fixed, positiveEndWorld moves. That
- * direction is derived per-object from its own geometry (see
- * objectSummary.ts), not from world Y, so it no longer defaults downward.
+ * The "height" tool's legacy behavior for multi-target (leg) sessions:
+ * sort each leg's two ends by world Y so its upper attachment stays fixed
+ * and its lower foot is the one that moves — "pull the legs down". This
+ * only applies to the multi-leg case; a single-target Propose session
+ * uses resolveProposalAxisFrame instead (see createStretchPreview).
  */
-function getUpperLowerEnds(
+function resolveLegacyHeightFrame(
   summary: AxialStretchObjectSummary,
-  preferNaturalAxis: boolean,
-) {
+): ProposalAxisFrame {
   const a = toVector(summary.negativeEndWorld);
   const b = toVector(summary.positiveEndWorld);
 
-  if (preferNaturalAxis) {
-    return {
-      upperEndWorld: a,
-      lowerEndWorld: b,
-    };
-  }
+  const upperEndWorld = a.y >= b.y ? a : b;
+  const lowerEndWorld = a.y >= b.y ? b : a;
 
-  if (a.y >= b.y) {
-    return {
-      upperEndWorld: a,
-      lowerEndWorld: b,
-    };
-  }
+  const growthAxisWorld = lowerEndWorld.clone().sub(upperEndWorld);
+  const referenceExtent = Math.max(growthAxisWorld.length(), 1e-6);
+
+  growthAxisWorld.normalize();
 
   return {
-    upperEndWorld: b,
-    lowerEndWorld: a,
+    negativeEndWorld: a,
+    positiveEndWorld: b,
+    pivotWorld: upperEndWorld,
+    growthAxisWorld,
+    referenceExtent,
+    tMin: 0,
+    tMax: 1,
+    deltaScale: 1,
+    movingEndWorld: lowerEndWorld,
   };
 }
 
 function getFollowAnchorWorld(
   summary: AxialStretchObjectSummary | null,
-  targetLowerEndWorld: THREE.Vector3,
+  targetMovingEndWorld: THREE.Vector3,
 ) {
   if (!summary) {
     return null;
@@ -121,8 +126,8 @@ function getFollowAnchorWorld(
   const negativeEnd = toVector(summary.negativeEndWorld);
   const positiveEnd = toVector(summary.positiveEndWorld);
 
-  return negativeEnd.distanceToSquared(targetLowerEndWorld) <=
-    positiveEnd.distanceToSquared(targetLowerEndWorld)
+  return negativeEnd.distanceToSquared(targetMovingEndWorld) <=
+    positiveEnd.distanceToSquared(targetMovingEndWorld)
     ? negativeEnd
     : positiveEnd;
 }
@@ -333,6 +338,8 @@ function createStretchPreview(
   objectSummaries: AxialStretchObjectSummary[],
   pathKey: string,
   preferNaturalAxis: boolean,
+  axisIndex: ProposalAxisIndex,
+  axisMode: ProposalAxisMode,
 ): StretchPreview | null {
   const summary = findSummary(objectSummaries, pathKey);
 
@@ -353,14 +360,9 @@ function createStretchPreview(
     return null;
   }
 
-  const { upperEndWorld, lowerEndWorld } = getUpperLowerEnds(
-    summary,
-    preferNaturalAxis,
-  );
-  const axisFromFixedToMoving = lowerEndWorld.clone().sub(upperEndWorld);
-  const axisLength = Math.max(axisFromFixedToMoving.length(), 1e-6);
-
-  axisFromFixedToMoving.normalize();
+  const frame = preferNaturalAxis
+    ? resolveProposalAxisFrame(summary, axisIndex, axisMode)
+    : resolveLegacyHeightFrame(summary);
 
   group.add(clone);
 
@@ -369,10 +371,15 @@ function createStretchPreview(
     clone,
     summary,
     meshes,
-    upperEndWorld,
-    lowerEndWorld,
-    axisFromFixedToMoving,
-    axisLength,
+    negativeEndWorld: frame.negativeEndWorld,
+    positiveEndWorld: frame.positiveEndWorld,
+    pivotWorld: frame.pivotWorld,
+    growthAxisWorld: frame.growthAxisWorld,
+    referenceExtent: frame.referenceExtent,
+    tMin: frame.tMin,
+    tMax: frame.tMax,
+    deltaScale: frame.deltaScale,
+    movingEndWorld: frame.movingEndWorld,
   };
 }
 
@@ -394,13 +401,13 @@ function getMovingDeltaForTarget(
   handleAxisWorld: THREE.Vector3,
 ) {
   const alignment = Math.max(
-    Math.abs(target.axisFromFixedToMoving.dot(handleAxisWorld)),
+    Math.abs(target.growthAxisWorld.dot(handleAxisWorld)),
     0.08,
   );
 
-  const axialDelta = dragDelta / alignment;
+  const axialDelta = (dragDelta / alignment) * target.deltaScale;
 
-  return target.axisFromFixedToMoving.clone().multiplyScalar(axialDelta);
+  return target.growthAxisWorld.clone().multiplyScalar(axialDelta);
 }
 
 function getObjectCenterWorld(object: THREE.Object3D) {
@@ -425,7 +432,7 @@ function findNearestStretchTargetIndex(
 
   for (let index = 0; index < stretchPreviews.length; index += 1) {
     const distanceSq = center.distanceToSquared(
-      stretchPreviews[index].lowerEndWorld,
+      stretchPreviews[index].movingEndWorld,
     );
 
     if (distanceSq < bestDistanceSq) {
@@ -467,7 +474,7 @@ function createFollowPreviews(
       clone,
       originalLocalPosition: clone.position.clone(),
       originalAnchorWorld:
-        getFollowAnchorWorld(originalSummary, target.lowerEndWorld) ??
+        getFollowAnchorWorld(originalSummary, target.movingEndWorld) ??
         getObjectCenterWorld(original),
       targetIndex,
     };
@@ -478,6 +485,8 @@ export function createAxialStretchPreviewSession(
   scene: THREE.Object3D,
   objectSummaries: AxialStretchObjectSummary[],
   plan: AxialStretchRolePlan,
+  proposalAxisIndex: ProposalAxisIndex = 0,
+  proposalAxisMode: ProposalAxisMode = "positive",
 ): AxialStretchPreviewSession | null {
   const group = new THREE.Group();
   group.name = "FuzzyCAD Height Preview";
@@ -493,6 +502,8 @@ export function createAxialStretchPreviewSession(
         objectSummaries,
         pathKey,
         preferNaturalAxis,
+        proposalAxisIndex,
+        proposalAxisMode,
       ),
     )
     .filter((item): item is StretchPreview => item !== null);
@@ -524,7 +535,7 @@ function updateStretchPreview(
   const movingDelta = getMovingDeltaForTarget(preview, dragDelta, handleAxisWorld);
   const localPoint = new THREE.Vector3();
   const worldPoint = new THREE.Vector3();
-  const offsetFromUpper = new THREE.Vector3();
+  const offsetFromPivot = new THREE.Vector3();
 
   for (const meshSnapshot of preview.meshes) {
     const position = meshSnapshot.geometry.attributes.position;
@@ -545,10 +556,14 @@ function updateStretchPreview(
         .copy(localPoint)
         .applyMatrix4(meshSnapshot.originalMatrixWorld);
 
-      offsetFromUpper.copy(worldPoint).sub(preview.upperEndWorld);
+      offsetFromPivot.copy(worldPoint).sub(preview.pivotWorld);
 
-      const t = clamp01(
-        offsetFromUpper.dot(preview.axisFromFixedToMoving) / preview.axisLength,
+      const t = Math.max(
+        preview.tMin,
+        Math.min(
+          preview.tMax,
+          offsetFromPivot.dot(preview.growthAxisWorld) / preview.referenceExtent,
+        ),
       );
 
       worldPoint.addScaledVector(movingDelta, t);
@@ -586,7 +601,7 @@ function updateFollowPreviews(
 
     // Align follower's original attachment anchor to the stretched leg's
     // new moving end. This avoids double-moving or drifting away.
-    const desiredAnchorWorld = target.lowerEndWorld.clone().add(movingDelta);
+    const desiredAnchorWorld = target.movingEndWorld.clone().add(movingDelta);
     const anchorDelta = desiredAnchorWorld.sub(follower.originalAnchorWorld);
 
     follower.clone.position.copy(follower.originalLocalPosition);
@@ -651,7 +666,7 @@ export function getSessionPrimaryAxisWorld(
   session: AxialStretchPreviewSession,
 ): THREE.Vector3 {
   if (session.stretchPreviews.length === 1) {
-    return session.stretchPreviews[0].axisFromFixedToMoving.clone();
+    return session.stretchPreviews[0].growthAxisWorld.clone();
   }
 
   return new THREE.Vector3(0, -1, 0);
@@ -660,24 +675,24 @@ export function getSessionPrimaryAxisWorld(
 export function getAxialStretchPreviewHandle(
   session: AxialStretchPreviewSession,
 ) {
-  const upper = new THREE.Vector3();
-  const lower = new THREE.Vector3();
+  const pivot = new THREE.Vector3();
+  const moving = new THREE.Vector3();
 
   for (const preview of session.stretchPreviews) {
-    upper.add(preview.upperEndWorld);
-    lower.add(preview.lowerEndWorld);
+    pivot.add(preview.pivotWorld);
+    moving.add(preview.movingEndWorld);
   }
 
-  upper.multiplyScalar(1 / session.stretchPreviews.length);
-  lower.multiplyScalar(1 / session.stretchPreviews.length);
+  pivot.multiplyScalar(1 / session.stretchPreviews.length);
+  moving.multiplyScalar(1 / session.stretchPreviews.length);
 
   // For now: keep using the existing SizingHandle API.
   // Next step: replace this with a fixed centered slider.
   const sideOffset = new THREE.Vector3(0.14, 0, 0);
 
   return {
-    baseWorld: upper.clone().add(sideOffset),
+    baseWorld: pivot.clone().add(sideOffset),
     axisWorld: getSessionPrimaryAxisWorld(session),
-    length: Math.max(upper.distanceTo(lower), 0.001),
+    length: Math.max(pivot.distanceTo(moving), 0.001),
   };
 }

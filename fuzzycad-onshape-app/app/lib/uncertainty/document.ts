@@ -48,16 +48,24 @@ export type SizeUncertaintyAnnotation = BaseAnnotationFields & {
   directions: AxisDirectionMap;
 };
 
+/** Which of the object's 3 local axes (0=length, 1=width, 2=height) this proposal changes. */
+export type ProposalAxisIndex = 0 | 1 | 2;
+
+/** Which end(s) of that axis move: grow from one end, the other, or both equally. */
+export type ProposalAxisMode = "positive" | "negative" | "symmetric";
+
 /**
  * "Proposed change": someone already has a specific value in mind.
- * v1 only covers a change along the object's own principal/height axis —
- * deltaMeters is the signed offset applied by the same preview mechanics
- * the "height" tool already uses, so the 3D view can render this proposal's
- * ghost persistently, not just while actively dragging.
+ * Covers a change along one of the object's own local axes — deltaMeters is
+ * the signed offset applied by the same preview mechanics the "height" tool
+ * already uses, so the 3D view can render this proposal's ghost
+ * persistently, not just while actively dragging.
  */
 export type ProposalUncertaintyAnnotation = BaseAnnotationFields & {
   type: "proposal";
   dimension: string;
+  axisIndex: ProposalAxisIndex;
+  mode: ProposalAxisMode;
   previousValueLabel: string;
   proposedValueLabel: string;
   deltaMeters: number;
@@ -399,13 +407,18 @@ export function toFuzzyConfidenceAnnotations(
     );
 }
 
-export function makeProposalAnnotationId(pathKey: string) {
-  return `proposal:${pathKey}`;
+export function makeProposalAnnotationId(
+  pathKey: string,
+  axisIndex: ProposalAxisIndex,
+) {
+  return `proposal:${pathKey}:${axisIndex}`;
 }
 
 function createSizeProposalAnnotation(input: {
   pathKey: string;
   dimension: string;
+  axisIndex: ProposalAxisIndex;
+  mode: ProposalAxisMode;
   previousValueLabel: string;
   proposedValueLabel: string;
   deltaMeters: number;
@@ -423,7 +436,7 @@ function createSizeProposalAnnotation(input: {
   const now = new Date().toISOString();
 
   return {
-    id: makeProposalAnnotationId(input.pathKey),
+    id: makeProposalAnnotationId(input.pathKey, input.axisIndex),
     type: "proposal",
     target: {
       pathKeys: [input.pathKey],
@@ -431,6 +444,8 @@ function createSizeProposalAnnotation(input: {
       scope: "single",
     },
     dimension: input.dimension,
+    axisIndex: input.axisIndex,
+    mode: input.mode,
     previousValueLabel: input.previousValueLabel,
     proposedValueLabel: input.proposedValueLabel,
     deltaMeters: input.deltaMeters,
@@ -443,24 +458,28 @@ function createSizeProposalAnnotation(input: {
   };
 }
 
-/** Currently only one open size proposal per object — a new save replaces it. */
+/** One open proposal per (object, axis) — a new save on the same axis replaces it. */
 export function upsertSizeProposal(
   document: FuzzyCADUncertaintyDocument,
   input: {
     pathKey: string;
     dimension: string;
+    axisIndex: ProposalAxisIndex;
+    mode: ProposalAxisMode;
     previousValueLabel: string;
     proposedValueLabel: string;
     deltaMeters: number;
     author?: string;
   },
 ): FuzzyCADUncertaintyDocument {
-  const id = makeProposalAnnotationId(input.pathKey);
+  const id = makeProposalAnnotationId(input.pathKey, input.axisIndex);
   const existing = document.annotations.find((annotation) => annotation.id === id);
 
   const nextAnnotation = createSizeProposalAnnotation({
     pathKey: input.pathKey,
     dimension: input.dimension,
+    axisIndex: input.axisIndex,
+    mode: input.mode,
     previousValueLabel: input.previousValueLabel,
     proposedValueLabel: input.proposedValueLabel,
     deltaMeters: input.deltaMeters,
@@ -486,6 +505,8 @@ export function upsertSizeProposal(
 
 export type ProposalPreview = {
   pathKey: string;
+  axisIndex: ProposalAxisIndex;
+  mode: ProposalAxisMode;
   deltaMeters: number;
 };
 
@@ -500,6 +521,8 @@ export function toProposalPreviews(
     )
     .map((annotation) => ({
       pathKey: annotation.target.referencePathKey,
+      axisIndex: annotation.axisIndex,
+      mode: annotation.mode,
       deltaMeters: annotation.deltaMeters,
     }));
 }

@@ -40,6 +40,12 @@ import {
 import SizingHandle from "./viewer/SizingHandle";
 import AngleHandle from "./viewer/AngleHandle";
 import DimensionRuler from "./viewer/DimensionRuler";
+import AxisTriadHandle from "./viewer/AxisTriadHandle";
+import {
+  computeProposalTipSegments,
+  type ProposalAxisIndex,
+  type ProposalAxisMode,
+} from "./viewer/proposalAxis";
 import {
   createAxialStretchPreviewSession,
   disposeAxialStretchPreviewSession,
@@ -63,6 +69,8 @@ export type RolePreviewPlan = {
 /** A saved size-proposal's delta, structurally the same shape as document.ts's. */
 export type ProposalPreview = {
   pathKey: string;
+  axisIndex: ProposalAxisIndex;
+  mode: ProposalAxisMode;
   deltaMeters: number;
 };
 
@@ -103,6 +111,12 @@ type FuzzyCADGeometryViewerProps = {
   proposalPlan?: AxialStretchRolePlan | null;
   /** Other saved (not currently being dragged) proposals, shown as static ghosts. */
   proposalPreviews?: ProposalPreview[];
+  /** Which of the active proposal target's 3 local axes is being edited. */
+  proposalAxisIndex?: ProposalAxisIndex;
+  /** Which end(s) of that axis move for the active proposal. */
+  proposalAxisMode?: ProposalAxisMode;
+  onSelectProposalAxis?: (axisIndex: ProposalAxisIndex) => void;
+  onProposalAxisModeChange?: (mode: ProposalAxisMode) => void;
   onMeshGraph?: (nodes: MeshGraphNode[]) => void;
   onObjectSummaries?: (summaries: AxialStretchObjectSummary[]) => void;
   onSelectedNode?: (node: MeshGraphNode | null) => void;
@@ -695,6 +709,10 @@ function Model({
   confirmedHeightPlan,
   proposalPlan,
   proposalPreviews,
+  proposalAxisIndex = 0,
+  proposalAxisMode = "positive",
+  onSelectProposalAxis,
+  onProposalAxisModeChange,
   enableManipulationHandles = true,
   lassoPolygon,
 
@@ -719,6 +737,10 @@ function Model({
   confirmedHeightPlan?: AxialStretchRolePlan | null;
   proposalPlan?: AxialStretchRolePlan | null;
   proposalPreviews?: ProposalPreview[];
+  proposalAxisIndex?: ProposalAxisIndex;
+  proposalAxisMode?: ProposalAxisMode;
+  onSelectProposalAxis?: (axisIndex: ProposalAxisIndex) => void;
+  onProposalAxisModeChange?: (mode: ProposalAxisMode) => void;
   enableManipulationHandles?: boolean;
   lassoPolygon?: ScreenPoint[] | null;
   onMeshGraph?: (nodes: MeshGraphNode[]) => void;
@@ -781,8 +803,10 @@ function Model({
       scene,
       objectSummaries,
       proposalPlan,
+      proposalAxisIndex,
+      proposalAxisMode,
     );
-  }, [scene, objectSummaries, proposalPlan]);
+  }, [scene, objectSummaries, proposalPlan, proposalAxisIndex, proposalAxisMode]);
 
   useEffect(() => {
     if (!proposalPreviewSession) {
@@ -802,6 +826,12 @@ function Model({
   // as a static ghost at its saved delta, so "proposed" stays visible on the
   // geometry the same way an open size mark does.
   const activeProposalPathKey = proposalPlan?.stretchTargetPathKeys[0] ?? null;
+  const activeProposalSummary = useMemo(
+    () =>
+      objectSummaries.find((item) => item.pathKey === activeProposalPathKey) ??
+      null,
+    [objectSummaries, activeProposalPathKey],
+  );
 
   const persistentProposalPreviews = useMemo(
     () =>
@@ -811,57 +841,47 @@ function Model({
     [proposalPreviews, activeProposalPathKey],
   );
 
-  // Dimension-ruler geometry for every saved-but-not-actively-edited
-  // proposal, derived straight from the object's own measured axis (no
-  // preview session needed just to draw the ruler).
+  // Dimension-ruler segments for every saved-but-not-actively-edited
+  // proposal, derived straight from the object's own measured axes (no
+  // preview session needed just to draw the ruler). Symmetric-mode
+  // proposals produce two segments, one per end.
   const persistentProposalRulers = useMemo(() => {
-    return persistentProposalPreviews
-      .map((preview) => {
-        const summary = objectSummaries.find(
-          (item) => item.pathKey === preview.pathKey,
-        );
-
-        if (!summary) {
-          return null;
-        }
-
-        const negativeEnd = new THREE.Vector3(...summary.negativeEndWorld);
-        const positiveEnd = new THREE.Vector3(...summary.positiveEndWorld);
-        const axisWorld = positiveEnd
-          .clone()
-          .sub(negativeEnd)
-          .normalize();
-
-        return {
-          pathKey: preview.pathKey,
-          baseWorld: negativeEnd,
-          axisWorld,
-          originalLength: summary.axisLength,
-          deltaMeters: preview.deltaMeters,
-        };
-      })
-      .filter(
-        (
-          item,
-        ): item is {
-          pathKey: string;
-          baseWorld: THREE.Vector3;
-          axisWorld: THREE.Vector3;
-          originalLength: number;
-          deltaMeters: number;
-        } => item !== null,
+    return persistentProposalPreviews.flatMap((preview) => {
+      const summary = objectSummaries.find(
+        (item) => item.pathKey === preview.pathKey,
       );
+
+      if (!summary) {
+        return [];
+      }
+
+      return computeProposalTipSegments(
+        summary,
+        preview.axisIndex,
+        preview.mode,
+        preview.deltaMeters,
+      ).map((segment, index) => ({
+        key: `${preview.pathKey}:${preview.axisIndex}:${index}`,
+        ...segment,
+      }));
+    });
   }, [persistentProposalPreviews, objectSummaries]);
 
   useEffect(() => {
     const sessions = persistentProposalPreviews
       .map((preview) => {
-        const session = createAxialStretchPreviewSession(scene, objectSummaries, {
-          stretchTargetPathKeys: [preview.pathKey],
-          moveWithEndPathKeys: [],
-          fixedAnchorPathKeys: [],
-          excludedPathKeys: [],
-        });
+        const session = createAxialStretchPreviewSession(
+          scene,
+          objectSummaries,
+          {
+            stretchTargetPathKeys: [preview.pathKey],
+            moveWithEndPathKeys: [],
+            fixedAnchorPathKeys: [],
+            excludedPathKeys: [],
+          },
+          preview.axisIndex,
+          preview.mode,
+        );
 
         if (!session) {
           return null;
@@ -1297,7 +1317,7 @@ function Model({
       ) : null}
 
       {handleConfig?.kind === "axial" ||
-      handleConfig?.kind === "heightStretch" ? (
+      (handleConfig?.kind === "heightStretch" && !handleConfig.isProposal) ? (
         <SizingHandle
           baseWorld={handleConfig.baseWorld}
           axisWorld={handleConfig.axisWorld}
@@ -1311,21 +1331,44 @@ function Model({
         />
       ) : null}
 
-      {handleConfig?.kind === "heightStretch" && handleConfig.isProposal ? (
-        <DimensionRuler
-          baseWorld={handleConfig.baseWorld}
-          axisWorld={handleConfig.axisWorld}
-          originalLength={handleConfig.length}
-          deltaMeters={manipulationValueOrZero}
+      {handleConfig?.kind === "heightStretch" &&
+      handleConfig.isProposal &&
+      activeProposalSummary ? (
+        <AxisTriadHandle
+          summary={activeProposalSummary}
+          activeAxisIndex={proposalAxisIndex}
+          axisMode={proposalAxisMode}
+          value={manipulationValueOrZero}
+          onSelectAxis={(axisIndex) => onSelectProposalAxis?.(axisIndex)}
+          onModeChange={(mode) => onProposalAxisModeChange?.(mode)}
+          onChange={(value) => onManipulationChange?.(value)}
+          onDragStateChange={handleDragStateChange}
         />
       ) : null}
 
+      {handleConfig?.kind === "heightStretch" &&
+      handleConfig.isProposal &&
+      activeProposalSummary
+        ? computeProposalTipSegments(
+            activeProposalSummary,
+            proposalAxisIndex,
+            proposalAxisMode,
+            manipulationValueOrZero,
+          ).map((segment, index) => (
+            <DimensionRuler
+              key={`active:${index}`}
+              fromWorld={segment.from}
+              toWorld={segment.to}
+              deltaMeters={segment.deltaMeters}
+            />
+          ))
+        : null}
+
       {persistentProposalRulers.map((ruler) => (
         <DimensionRuler
-          key={ruler.pathKey}
-          baseWorld={ruler.baseWorld}
-          axisWorld={ruler.axisWorld}
-          originalLength={ruler.originalLength}
+          key={ruler.key}
+          fromWorld={ruler.from}
+          toWorld={ruler.to}
           deltaMeters={ruler.deltaMeters}
           color="#94a3b8"
         />
@@ -1360,6 +1403,10 @@ export default function FuzzyCADGeometryViewer({
   confirmedHeightPlan,
   proposalPlan,
   proposalPreviews,
+  proposalAxisIndex,
+  proposalAxisMode,
+  onSelectProposalAxis,
+  onProposalAxisModeChange,
   enableManipulationHandles = true,
   onMeshGraph,
   onObjectSummaries,
@@ -1422,6 +1469,10 @@ export default function FuzzyCADGeometryViewer({
                   confirmedHeightPlan={confirmedHeightPlan}
                   proposalPlan={proposalPlan}
                   proposalPreviews={proposalPreviews}
+                  proposalAxisIndex={proposalAxisIndex}
+                  proposalAxisMode={proposalAxisMode}
+                  onSelectProposalAxis={onSelectProposalAxis}
+                  onProposalAxisModeChange={onProposalAxisModeChange}
                   enableManipulationHandles={enableManipulationHandles}
                   lassoPolygon={lassoPolygon}
                   onMeshGraph={onMeshGraph}

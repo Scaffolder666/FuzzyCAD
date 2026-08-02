@@ -51,8 +51,11 @@ import {
 import {
   findSizeAnnotationForPathKey,
   makeSizeAnnotationId,
+  type ProposalAxisIndex,
+  type ProposalAxisMode,
   type SizeUncertaintyAnnotation,
 } from "./lib/uncertainty/document";
+import { AXIS_LABEL } from "./components/viewer/AxisTriadHandle";
 import { useUncertaintyDocument } from "./hooks/useUncertaintyDocument";
 import { useLocalIdentity } from "./hooks/useLocalIdentity";
 import { buildFuzzyCADProjectState } from "./lib/fuzzycad/projectState";
@@ -167,6 +170,10 @@ export default function FuzzyCADHome() {
   const [proposalPlan, setProposalPlan] = useState<RolePreviewPlan | null>(
     null,
   );
+  const [proposalAxisIndex, setProposalAxisIndex] =
+    useState<ProposalAxisIndex>(0);
+  const [proposalAxisMode, setProposalAxisMode] =
+    useState<ProposalAxisMode>("positive");
   const [manipulationValue, setManipulationValue] = useState(0);
 
   const [heightPreviewOpen, setHeightPreviewOpen] = useState(false);
@@ -319,6 +326,8 @@ export default function FuzzyCADHome() {
     setPendingHeightRolePreview(null);
     setConfirmedHeightPlan(null);
     setProposalPlan(null);
+    setProposalAxisIndex(0);
+    setProposalAxisMode("positive");
     setManipulationValue(0);
     setHeightPreviewOpen(false);
     closeSizeUncertaintyEditor();
@@ -663,6 +672,18 @@ export default function FuzzyCADHome() {
     return `${Math.round(value * 1000)} mm`;
   }
 
+  function findExistingProposalPreview(
+    pathKey: string,
+    axisIndex: ProposalAxisIndex,
+  ) {
+    return (
+      proposalPreviews.find(
+        (preview) =>
+          preview.pathKey === pathKey && preview.axisIndex === axisIndex,
+      ) ?? null
+    );
+  }
+
   function startSizeProposal() {
     if (!selectedObjectSummary) {
       return;
@@ -671,7 +692,15 @@ export default function FuzzyCADHome() {
     setActiveTool("extend");
     resetSizeOperationState();
     setLassoPathKeys([]);
-    setManipulationValue(0);
+
+    const existing = findExistingProposalPreview(
+      selectedObjectSummary.pathKey,
+      0,
+    );
+
+    setProposalAxisIndex(0);
+    setProposalAxisMode(existing?.mode ?? "positive");
+    setManipulationValue(existing?.deltaMeters ?? 0);
     setProposalPlan({
       stretchTargetPathKeys: [selectedObjectSummary.pathKey],
       moveWithEndPathKeys: [],
@@ -680,8 +709,28 @@ export default function FuzzyCADHome() {
     });
   }
 
+  function selectProposalAxis(axisIndex: ProposalAxisIndex) {
+    const pathKey = proposalPlan?.stretchTargetPathKeys[0];
+
+    if (!pathKey) {
+      return;
+    }
+
+    const existing = findExistingProposalPreview(pathKey, axisIndex);
+
+    setProposalAxisIndex(axisIndex);
+    setProposalAxisMode(existing?.mode ?? "positive");
+    setManipulationValue(existing?.deltaMeters ?? 0);
+  }
+
+  function changeProposalAxisMode(mode: ProposalAxisMode) {
+    setProposalAxisMode(mode);
+  }
+
   function cancelSizeProposal() {
     setProposalPlan(null);
+    setProposalAxisIndex(0);
+    setProposalAxisMode("positive");
     setManipulationValue(0);
     setActiveTool("select");
   }
@@ -698,12 +747,14 @@ export default function FuzzyCADHome() {
     }
 
     const deltaMeters = manipulationValue;
-    const previousLength = summary.axisLength;
+    const previousLength = summary.localAxes[proposalAxisIndex].length;
     const proposedLength = Math.max(previousLength + deltaMeters, 0);
 
     upsertProposal({
       pathKey,
-      dimension: "Length",
+      dimension: AXIS_LABEL[proposalAxisIndex],
+      axisIndex: proposalAxisIndex,
+      mode: proposalAxisMode,
       previousValueLabel: formatLengthMeters(previousLength),
       proposedValueLabel: formatLengthMeters(proposedLength),
       deltaMeters,
@@ -712,6 +763,8 @@ export default function FuzzyCADHome() {
     });
 
     setProposalPlan(null);
+    setProposalAxisIndex(0);
+    setProposalAxisMode("positive");
     setManipulationValue(0);
     setActiveTool("select");
   }
@@ -873,6 +926,10 @@ if (result.ok && result.state) {
           confirmedHeightPlan={confirmedHeightPlan}
           proposalPlan={proposalPlan}
           proposalPreviews={proposalPreviews}
+          proposalAxisIndex={proposalAxisIndex}
+          proposalAxisMode={proposalAxisMode}
+          onSelectProposalAxis={selectProposalAxis}
+          onProposalAxisModeChange={changeProposalAxisMode}
           enableManipulationHandles={
             !heightPreviewOpen &&
             (Boolean(confirmedHeightPlan) || Boolean(proposalPlan))
@@ -935,7 +992,13 @@ if (result.ok && result.state) {
         {activeTool === "extend" && proposalPlan ? (
           <div className={styles.manipulationReadout}>
             <span className={styles.manipulationValue}>
-              {formatLengthMeters(manipulationValue)}
+              {AXIS_LABEL[proposalAxisIndex]} (
+              {proposalAxisMode === "positive"
+                ? "→"
+                : proposalAxisMode === "negative"
+                  ? "←"
+                  : "↔"}
+              ): {formatLengthMeters(manipulationValue)}
             </span>
             <button
               type="button"

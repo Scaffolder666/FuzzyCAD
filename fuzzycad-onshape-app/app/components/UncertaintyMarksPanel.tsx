@@ -207,7 +207,16 @@ function ProposalCard({
         </span>
       </div>
 
-      <div className={styles.cardTitle}>{annotation.dimension}</div>
+      <div className={styles.cardTitle}>
+        {annotation.dimension}
+        <span className={styles.proposalModeTag}>
+          {annotation.mode === "positive"
+            ? "→"
+            : annotation.mode === "negative"
+              ? "←"
+              : "↔"}
+        </span>
+      </div>
 
       <div className={styles.valueLine}>
         <span className={styles.valueOld}>{annotation.previousValueLabel}</span>

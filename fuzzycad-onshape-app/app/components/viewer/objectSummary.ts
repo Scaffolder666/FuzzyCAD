@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import type {
   AxialStretchObjectSummary,
+  LocalAxis,
   Vec3Tuple,
 } from "../../lib/operations/axialStretchTypes";
 
@@ -60,13 +61,19 @@ function computePointCenter(points: THREE.Vector3[]) {
   return center;
 }
 
-function computePrincipalAxis(points: THREE.Vector3[]) {
-  if (points.length < 3) {
-    return HEIGHT_DIRECTION.clone();
-  }
+type Covariance = {
+  xx: number;
+  xy: number;
+  xz: number;
+  yy: number;
+  yz: number;
+  zz: number;
+};
 
-  const center = computePointCenter(points);
-
+function computeCovariance(
+  points: THREE.Vector3[],
+  center: THREE.Vector3,
+): Covariance {
   let xx = 0;
   let xy = 0;
   let xz = 0;
@@ -87,25 +94,128 @@ function computePrincipalAxis(points: THREE.Vector3[]) {
     zz += z * z;
   }
 
-  // Power iteration on the covariance matrix.
-  let axis = new THREE.Vector3(1, 1, 1).normalize();
+  return { xx, xy, xz, yy, yz, zz };
+}
+
+function applyCovariance(cov: Covariance, vector: THREE.Vector3) {
+  return new THREE.Vector3(
+    cov.xx * vector.x + cov.xy * vector.y + cov.xz * vector.z,
+    cov.xy * vector.x + cov.yy * vector.y + cov.yz * vector.z,
+    cov.xz * vector.x + cov.yz * vector.y + cov.zz * vector.z,
+  );
+}
+
+function powerIterateAxis(cov: Covariance, seed: THREE.Vector3) {
+  let axis = seed.clone();
 
   for (let iteration = 0; iteration < 16; iteration += 1) {
-    const next = new THREE.Vector3(
-      xx * axis.x + xy * axis.y + xz * axis.z,
-      xy * axis.x + yy * axis.y + yz * axis.z,
-      xz * axis.x + yz * axis.y + zz * axis.z,
-    );
-
-    axis = safeNormalize(next);
+    axis = safeNormalize(applyCovariance(cov, axis));
   }
 
-  // Make axis orientation stable: prefer pointing generally upward.
-  if (axis.dot(HEIGHT_DIRECTION) < 0) {
+  return axis;
+}
+
+/** Rayleigh quotient: axis^T * cov * axis, the eigenvalue for a (near-)eigenvector. */
+function rayleighQuotient(cov: Covariance, axis: THREE.Vector3) {
+  return axis.dot(applyCovariance(cov, axis));
+}
+
+function deflateCovariance(
+  cov: Covariance,
+  axis: THREE.Vector3,
+  eigenvalue: number,
+): Covariance {
+  return {
+    xx: cov.xx - eigenvalue * axis.x * axis.x,
+    xy: cov.xy - eigenvalue * axis.x * axis.y,
+    xz: cov.xz - eigenvalue * axis.x * axis.z,
+    yy: cov.yy - eigenvalue * axis.y * axis.y,
+    yz: cov.yz - eigenvalue * axis.y * axis.z,
+    zz: cov.zz - eigenvalue * axis.z * axis.z,
+  };
+}
+
+/**
+ * Flip `axis` so it points toward whichever of `references` it is least
+ * ambiguous about (largest |dot|), instead of an arbitrary sign that could
+ * flip on tiny numerical noise between two otherwise-identical runs.
+ */
+function stabilizeSign(axis: THREE.Vector3, references: THREE.Vector3[]) {
+  let best = references[0];
+  let bestAbsDot = 0;
+
+  for (const reference of references) {
+    const absDot = Math.abs(axis.dot(reference));
+
+    if (absDot > bestAbsDot) {
+      bestAbsDot = absDot;
+      best = reference;
+    }
+  }
+
+  if (axis.dot(best) < 0) {
     axis.multiplyScalar(-1);
   }
 
   return axis;
+}
+
+const WORLD_X = new THREE.Vector3(1, 0, 0);
+const WORLD_Z = new THREE.Vector3(0, 0, 1);
+
+function computePrincipalAxis(points: THREE.Vector3[]) {
+  if (points.length < 3) {
+    return HEIGHT_DIRECTION.clone();
+  }
+
+  const center = computePointCenter(points);
+  const cov = computeCovariance(points, center);
+  const axis = powerIterateAxis(cov, new THREE.Vector3(1, 1, 1).normalize());
+
+  // Make axis orientation stable: prefer pointing generally upward.
+  return stabilizeSign(axis, [HEIGHT_DIRECTION]);
+}
+
+/**
+ * The object's full local 3-axis frame: the dominant (longest/PCA) axis,
+ * plus two more orthogonal axes found by deflating the dominant axis out
+ * of the covariance matrix and repeating power iteration. Together with
+ * computeAxisMetrics these give an oriented-bounding-box-like frame, so
+ * tools can let a user pick "which dimension" (length/width/height) of a
+ * part they mean, instead of only ever the single longest axis.
+ */
+function computeLocalAxisDirections(
+  points: THREE.Vector3[],
+  primaryAxis: THREE.Vector3,
+) {
+  if (points.length < 3) {
+    return [primaryAxis.clone(), WORLD_X.clone(), WORLD_Z.clone()];
+  }
+
+  const center = computePointCenter(points);
+  const cov = computeCovariance(points, center);
+  const lambda0 = rayleighQuotient(cov, primaryAxis);
+  const deflated = deflateCovariance(cov, primaryAxis, lambda0);
+
+  // Seed orthogonal to the primary axis so power iteration doesn't just
+  // re-converge back onto it.
+  const seedBasis =
+    Math.abs(primaryAxis.dot(WORLD_X)) < 0.9 ? WORLD_X : WORLD_Z;
+  const seed = safeNormalize(
+    seedBasis.clone().projectOnPlane(primaryAxis),
+  );
+
+  let secondary = powerIterateAxis(deflated, seed);
+
+  // Re-orthogonalize against the primary axis to cancel numerical drift.
+  secondary = safeNormalize(secondary.projectOnPlane(primaryAxis));
+  stabilizeSign(secondary, [WORLD_X, WORLD_Z, HEIGHT_DIRECTION]);
+
+  const tertiary = new THREE.Vector3()
+    .crossVectors(primaryAxis, secondary)
+    .normalize();
+
+  return [primaryAxis.clone(), secondary, tertiary];
 }
 
 function percentile(values: number[], ratio: number) {
@@ -246,6 +356,21 @@ export function buildObjectSummaries(
     const principalAxisWorld = computePrincipalAxis(points);
     const metrics = computeAxisMetrics(points, principalAxisWorld);
 
+    const localAxisDirections = computeLocalAxisDirections(
+      points,
+      principalAxisWorld,
+    );
+    const localAxes = localAxisDirections.map((direction) => {
+      const axisMetrics = computeAxisMetrics(points, direction);
+
+      return {
+        directionWorld: toTuple(direction),
+        length: axisMetrics.axisLength,
+        negativeEndWorld: toTuple(axisMetrics.negativeEndWorld),
+        positiveEndWorld: toTuple(axisMetrics.positiveEndWorld),
+      };
+    }) as [LocalAxis, LocalAxis, LocalAxis];
+
     summariesByPathKey.set(pathKey, {
       pathKey,
       name: object.name || null,
@@ -261,6 +386,8 @@ export function buildObjectSummaries(
 
       negativeEndWorld: toTuple(metrics.negativeEndWorld),
       positiveEndWorld: toTuple(metrics.positiveEndWorld),
+
+      localAxes,
 
       mateConnections: [],
       similarPathKeys: [],

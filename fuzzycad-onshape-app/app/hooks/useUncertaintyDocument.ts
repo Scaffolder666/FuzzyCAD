@@ -14,6 +14,8 @@ import {
   upsertSizeProposal,
   type FuzzyCADUncertaintyDocument,
   type FuzzyCADUncertaintySource,
+  type ProposalAxisIndex,
+  type ProposalAxisMode,
 } from "../lib/uncertainty/document";
 import type {
   AxisConfidenceMap,
@@ -149,6 +151,8 @@ export function useUncertaintyDocument(source: FuzzyCADUncertaintySource) {
   function upsertProposal(input: {
     pathKey: string;
     dimension: string;
+    axisIndex: ProposalAxisIndex;
+    mode: ProposalAxisMode;
     previousValueLabel: string;
     proposedValueLabel: string;
     deltaMeters: number;
