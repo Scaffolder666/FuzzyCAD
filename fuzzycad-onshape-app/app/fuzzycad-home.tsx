@@ -13,6 +13,7 @@ import DevPanel from "./components/DevPanel";
 import { useAssemblyPlacementTree } from "./hooks/useAssemblyPlacementTree";
 import type {
   AxialStretchObjectSummary,
+  BendRolePlan,
   FocusRequest,
   MeshGraphNode,
   MoveDelta,
@@ -56,6 +57,7 @@ import {
 import {
   findSizeAnnotationForPathKey,
   makeSizeAnnotationId,
+  type BendAxisDirection,
   type DistanceMoveMode,
   type FuzzyCADUncertaintyAnnotation,
   type ProposalAxisIndex,
@@ -287,6 +289,16 @@ export default function FuzzyCADHome() {
   const [pendingRotatePlan, setPendingRotatePlan] =
     useState<RotateBasePlan | null>(null);
 
+  // "Bend" tool: click a part, pick which horizontal axis it curves along,
+  // then drag a handle up/down — one end lifts, the other dips, easing
+  // smoothly from the object's own center. Single object, no group/related-
+  // parts prompt (bending a sibling part the same way rarely makes sense
+  // since each part's own geometry differs).
+  const [activeBendPlan, setActiveBendPlan] = useState<BendRolePlan | null>(
+    null,
+  );
+  const [bendAmountMeters, setBendAmountMeters] = useState(0);
+
   // "Distance" tool: click one part, then a second, to flag the gap between
   // them. The flag saves itself the moment both are picked — it's a
   // request waiting on someone else's answer, not a value the marker
@@ -351,6 +363,7 @@ export default function FuzzyCADHome() {
     scalePreviews,
     distancePreviews,
     rotatePreviews,
+    bendPreviews,
     resetUncertaintyDocument,
     upsertSizeMark,
     removeSizeMarks,
@@ -369,6 +382,7 @@ export default function FuzzyCADHome() {
     setDistanceMoveModeMark,
     answerDistanceMark,
     upsertRotateMark,
+    upsertBendMark,
   } = useUncertaintyDocument(currentUncertaintySource);
 
   const assemblyElements = useMemo(() => {
@@ -510,6 +524,8 @@ export default function FuzzyCADHome() {
     setRotateCandidateOpen(false);
     setRotateCandidatePathKeys([]);
     setPendingRotatePlan(null);
+    setActiveBendPlan(null);
+    setBendAmountMeters(0);
     closeSizeUncertaintyEditor();
   }
 
@@ -1451,6 +1467,50 @@ export default function FuzzyCADHome() {
     setActiveTool("select");
   }
 
+  function startBend() {
+    if (!selectedObjectSummary) {
+      return;
+    }
+
+    setActiveTool("bend");
+    resetSizeOperationState();
+    setLassoPathKeys([]);
+    setActiveBendPlan({ pathKey: selectedObjectSummary.pathKey, axisDirection: "x" });
+    setBendAmountMeters(0);
+  }
+
+  function setBendAxis(axisDirection: BendAxisDirection) {
+    setActiveBendPlan((previous) =>
+      previous ? { ...previous, axisDirection } : previous,
+    );
+  }
+
+  function cancelBend() {
+    setActiveBendPlan(null);
+    setBendAmountMeters(0);
+    setActiveTool("select");
+  }
+
+  function applyBend() {
+    if (!activeBendPlan) {
+      return;
+    }
+
+    const amountMm = bendAmountMeters * 1000;
+
+    upsertBendMark({
+      pathKey: activeBendPlan.pathKey,
+      axisDirection: activeBendPlan.axisDirection,
+      amountMeters: bendAmountMeters,
+      previousValueLabel: "flat",
+      proposedValueLabel: `${amountMm >= 0 ? "+" : ""}${amountMm.toFixed(1)} mm along ${activeBendPlan.axisDirection.toUpperCase()}`,
+    });
+
+    setActiveBendPlan(null);
+    setBendAmountMeters(0);
+    setActiveTool("select");
+  }
+
 async function saveProjectStateToOnshape() {
   if (!documentId || !workspaceId) {
     console.warn("Missing documentId or workspaceId");
@@ -1735,6 +1795,10 @@ if (result.ok && result.state) {
           rotateAxisDirection={rotateAxisDirection}
           rotateAngleRad={rotateAngleRad}
           onRotateAngleChange={setRotateAngleRad}
+          bendPlan={activeBendPlan}
+          bendPreviews={bendPreviews}
+          bendAmountMeters={bendAmountMeters}
+          onBendAmountChange={setBendAmountMeters}
           distancePreviews={distancePreviews}
           onAnswerDistance={(annotationId, distanceMm) =>
             answerDistanceMark(annotationId, distanceMm / 1000)
@@ -1826,6 +1890,11 @@ if (result.ok && result.state) {
 
             if (tool === "rotateAxis") {
               startRotateAxis();
+              return;
+            }
+
+            if (tool === "bend") {
+              startBend();
               return;
             }
 
@@ -2023,6 +2092,42 @@ if (result.ok && result.state) {
               type="button"
               className={styles.manipulationResetButton}
               onClick={applyRotate}
+            >
+              Save proposal
+            </button>
+          </div>
+        ) : null}
+
+        {activeTool === "bend" && activeBendPlan ? (
+          <div className={styles.manipulationReadout}>
+            <span className={styles.manipulationValue}>
+              Bend: {(bendAmountMeters * 1000).toFixed(1)} mm
+            </span>
+            {(["x", "z"] as const).map((axis) => (
+              <button
+                key={axis}
+                type="button"
+                className={`${styles.manipulationResetButton} ${
+                  activeBendPlan.axisDirection === axis
+                    ? styles.manipulationToggleActive
+                    : ""
+                }`}
+                onClick={() => setBendAxis(axis)}
+              >
+                {axis.toUpperCase()}
+              </button>
+            ))}
+            <button
+              type="button"
+              className={styles.manipulationResetButton}
+              onClick={cancelBend}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              className={styles.manipulationResetButton}
+              onClick={applyBend}
             >
               Save proposal
             </button>

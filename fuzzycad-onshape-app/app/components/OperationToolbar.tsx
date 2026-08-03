@@ -144,6 +144,16 @@ function RotateAxisIcon() {
   );
 }
 
+function BendIcon() {
+  return (
+    <svg viewBox="0 0 32 32" aria-hidden="true">
+      <path d="M5 21C11 21 11 11 16 11C21 11 21 21 27 21" />
+      <path d="M5 25V21" />
+      <path d="M27 17V21" />
+    </svg>
+  );
+}
+
 function AlternativeIcon() {
   return (
     <svg viewBox="0 0 32 32" aria-hidden="true">
@@ -239,6 +249,12 @@ const toolGroups: ToolGroup[] = [
             icon: <RotateAxisIcon />,
           },
         ],
+      },
+      {
+        id: "bend",
+        label: "Bend",
+        title: "Curve this part along one axis — one side lifts, the other dips",
+        icon: <BendIcon />,
       },
     ],
   },

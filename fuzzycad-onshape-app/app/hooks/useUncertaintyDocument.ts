@@ -10,6 +10,7 @@ import {
   setDistanceConfidence,
   setDistanceMoveMode,
   setSizeAxisAnswer,
+  toBendPreviews,
   toDistancePreviews,
   toFuzzyConfidenceAnnotations,
   toMovePreviews,
@@ -17,12 +18,14 @@ import {
   toRotatePreviews,
   toScalePreviews,
   updateUncertaintyAnnotationComment,
+  upsertBend,
   upsertDistance,
   upsertMove,
   upsertRotate,
   upsertScale,
   upsertSizeAnnotation,
   upsertSizeProposal,
+  type BendAxisDirection,
   type FuzzyCADUncertaintyDocument,
   type FuzzyCADUncertaintySource,
   type ProposalAxisIndex,
@@ -79,6 +82,11 @@ export function useUncertaintyDocument(source: FuzzyCADUncertaintySource) {
 
   const rotatePreviews = useMemo(
     () => toRotatePreviews(uncertaintyDocumentWithCurrentSource),
+    [uncertaintyDocumentWithCurrentSource],
+  );
+
+  const bendPreviews = useMemo(
+    () => toBendPreviews(uncertaintyDocumentWithCurrentSource),
     [uncertaintyDocumentWithCurrentSource],
   );
 
@@ -330,6 +338,25 @@ export function useUncertaintyDocument(source: FuzzyCADUncertaintySource) {
     );
   }
 
+  function upsertBendMark(input: {
+    pathKey: string;
+    axisDirection: BendAxisDirection;
+    amountMeters: number;
+    previousValueLabel: string;
+    proposedValueLabel: string;
+    author?: string;
+  }) {
+    setUncertaintyDocument((previous) =>
+      upsertBend(
+        {
+          ...previous,
+          source,
+        },
+        input,
+      ),
+    );
+  }
+
   function selectAnnotationAlternativeOption(
     annotationId: string,
     optionId: string,
@@ -355,6 +382,7 @@ export function useUncertaintyDocument(source: FuzzyCADUncertaintySource) {
     scalePreviews,
     distancePreviews,
     rotatePreviews,
+    bendPreviews,
     resetUncertaintyDocument,
     replaceUncertaintyDocument,
     upsertSizeMark,
@@ -373,5 +401,6 @@ export function useUncertaintyDocument(source: FuzzyCADUncertaintySource) {
     setDistanceMoveModeMark,
     answerDistanceMark,
     upsertRotateMark,
+    upsertBendMark,
   };
 }

@@ -28,6 +28,7 @@ import type {
 } from "../lib/uncertainty/types";
 import {
   applyFuzzyConfidence,
+  type BendMarkerTarget,
   type ConfidenceAxisFrame,
   type DistanceMarkerTarget,
   type FuzzyConfidenceAnnotation,
@@ -56,6 +57,7 @@ import MovePlaneHandle from "./viewer/MovePlaneHandle";
 import ScaleHandle from "./viewer/ScaleHandle";
 import RotateHandle from "./viewer/RotateHandle";
 import RotateProtractor from "./viewer/RotateProtractor";
+import BendHandle from "./viewer/BendHandle";
 import {
   computeProposalTipSegments,
   type ProposalAxisIndex,
@@ -89,6 +91,14 @@ import {
   type RotatePreviewSession,
   type RotateAxisDirection,
 } from "./viewer/rotatePreview";
+import {
+  createBendPreviewSession,
+  disposeBendPreviewSession,
+  getBendHandleBaseWorld,
+  updateBendPreviewSession,
+  type BendPreviewSession,
+  type BendAxisDirection,
+} from "./viewer/bendPreview";
 import ClearanceRuler from "./viewer/ClearanceRuler";
 import { closestPointsBetweenAabbs } from "../lib/operations/clearanceMeasure";
 
@@ -180,6 +190,19 @@ export type RotatePreview = {
   angleRad: number;
 };
 
+/** A plan for the "Bend" tool's active drag session — single object, no followers. */
+export type BendRolePlan = {
+  pathKey: string;
+  axisDirection: BendAxisDirection;
+};
+
+/** A saved bend proposal's axis + amount, structurally the same shape as document.ts's. */
+export type BendPreview = {
+  pathKey: string;
+  axisDirection: BendAxisDirection;
+  amountMeters: number;
+};
+
 /** A saved distance flag, structurally the same shape as document.ts's. */
 /** Which side(s) an answered distance flag's ghost preview moves — structurally the same as document.ts's. */
 export type DistanceMoveMode = "moveA" | "moveB" | "both";
@@ -263,6 +286,12 @@ type FuzzyCADGeometryViewerProps = {
   rotateAxisDirection?: RotateAxisDirection;
   rotateAngleRad?: number;
   onRotateAngleChange?: (angleRad: number) => void;
+  /** Single-object plan for the "Bend" tool's active drag session. */
+  bendPlan?: BendRolePlan | null;
+  /** Other saved (not currently being dragged) bend proposals, shown as static ghosts. */
+  bendPreviews?: BendPreview[];
+  bendAmountMeters?: number;
+  onBendAmountChange?: (amountMeters: number) => void;
   /** Saved distance flags, shown as persistent rulers. */
   distancePreviews?: DistancePreview[];
   /** Answer an open distance flag directly from its 3D ruler. */
@@ -460,6 +489,7 @@ const SCALE_ACCENT_COLOR = "#0d9488";
 const SCALE_ACCENT_COLOR_MUTED = "#99f6e4";
 const ROTATE_ACCENT_COLOR = "#4f46e5";
 const ROTATE_ACCENT_COLOR_MUTED = "#c7d2fe";
+const BEND_ACCENT_COLOR = "#db2777";
 const DISTANCE_ACCENT_COLOR = "#0ea5e9";
 const DISTANCE_ACCENT_COLOR_HEX = 0x0ea5e9;
 // Once someone answers a distance flag, its ruler switches to this color —
@@ -1011,6 +1041,10 @@ function Model({
   rotateAxisDirection = "y",
   rotateAngleRad = 0,
   onRotateAngleChange,
+  bendPlan,
+  bendPreviews,
+  bendAmountMeters = 0,
+  onBendAmountChange,
   distancePreviews,
   onAnswerDistance,
   hoveredPathKey,
@@ -1064,6 +1098,10 @@ function Model({
   rotateAxisDirection?: RotateAxisDirection;
   rotateAngleRad?: number;
   onRotateAngleChange?: (angleRad: number) => void;
+  bendPlan?: BendRolePlan | null;
+  bendPreviews?: BendPreview[];
+  bendAmountMeters?: number;
+  onBendAmountChange?: (amountMeters: number) => void;
   distancePreviews?: DistancePreview[];
   onAnswerDistance?: (annotationId: string, distanceMm: number) => void;
   hoveredPathKey?: string | null;
@@ -2107,6 +2145,167 @@ function Model({
     });
   }, [persistentRotatePreviews, objectSummaries]);
 
+  // Active "Bend" drag session — a single object, non-rigid curvature
+  // along one horizontal axis (see bendPreview.ts for the per-vertex math).
+  const activeBendPathKey = bendPlan?.pathKey ?? null;
+
+  const bendPreviewSession = useMemo(() => {
+    if (!bendPlan) {
+      return null;
+    }
+
+    return createBendPreviewSession(
+      scene,
+      objectSummaries,
+      bendPlan.pathKey,
+      bendPlan.axisDirection,
+    );
+  }, [scene, objectSummaries, bendPlan]);
+
+  useEffect(() => {
+    if (!bendPreviewSession) {
+      return;
+    }
+
+    scene.add(bendPreviewSession.group);
+    invalidate();
+
+    return () => {
+      disposeBendPreviewSession(bendPreviewSession);
+      invalidate();
+    };
+  }, [scene, bendPreviewSession, invalidate]);
+
+  useEffect(() => {
+    if (!bendPreviewSession) {
+      return;
+    }
+
+    updateBendPreviewSession(bendPreviewSession, bendAmountMeters ?? 0);
+    invalidate();
+  }, [bendPreviewSession, bendAmountMeters, invalidate]);
+
+  // Every OTHER saved bend proposal (not the one currently being dragged)
+  // shows as a static ghost at its saved amount.
+  const persistentBendPreviews = useMemo(
+    () =>
+      (bendPreviews ?? []).filter(
+        (preview) => preview.pathKey !== activeBendPathKey,
+      ),
+    [bendPreviews, activeBendPathKey],
+  );
+
+  // Saved (non-active) bend proposals loop back and forth between flat and
+  // their proposed curve, same as saved moves/scales/rotates — only while
+  // hovered or selected in the marks panel.
+  const persistentBendLoopRef = useRef<
+    {
+      session: BendPreviewSession;
+      amountMeters: number;
+      pathKeys: string[];
+    }[]
+  >([]);
+  const settledBendSessionsRef = useRef<Set<BendPreviewSession>>(new Set());
+
+  useEffect(() => {
+    const entries = persistentBendPreviews
+      .map((preview) => {
+        const session = createBendPreviewSession(
+          scene,
+          objectSummaries,
+          preview.pathKey,
+          preview.axisDirection,
+        );
+
+        if (!session) {
+          return null;
+        }
+
+        scene.add(session.group);
+
+        return {
+          session,
+          amountMeters: preview.amountMeters,
+          pathKeys: [preview.pathKey],
+        };
+      })
+      .filter(
+        (
+          entry,
+        ): entry is {
+          session: BendPreviewSession;
+          amountMeters: number;
+          pathKeys: string[];
+        } => entry !== null,
+      );
+
+    const settledSessions = settledBendSessionsRef.current;
+
+    persistentBendLoopRef.current = entries;
+    settledSessions.clear();
+
+    if (entries.length === 0) {
+      return;
+    }
+
+    invalidate();
+
+    return () => {
+      persistentBendLoopRef.current = [];
+      settledSessions.clear();
+
+      for (const entry of entries) {
+        disposeBendPreviewSession(entry.session);
+      }
+
+      invalidate();
+    };
+  }, [scene, objectSummaries, persistentBendPreviews, invalidate]);
+
+  useFrame(({ clock }) => {
+    const entries = persistentBendLoopRef.current;
+
+    if (entries.length === 0) {
+      return;
+    }
+
+    const loopT = getPreviewLoopT(clock.elapsedTime);
+
+    for (const entry of entries) {
+      const active = isPathKeysUnderInspection(
+        entry.pathKeys,
+        hoveredPathKey,
+        highlightedPathKey,
+        selectedPathKeys,
+      );
+
+      if (!active && settledBendSessionsRef.current.has(entry.session)) {
+        continue;
+      }
+
+      const restAmount = entry.amountMeters;
+      const appliedAmount = active ? restAmount * loopT : restAmount;
+
+      updateBendPreviewSession(entry.session, appliedAmount);
+
+      if (active) {
+        settledBendSessionsRef.current.delete(entry.session);
+      } else {
+        settledBendSessionsRef.current.add(entry.session);
+      }
+    }
+  });
+
+  // The handle's base sits at the picked axis's positive end, at rest
+  // height — dragging it up/down directly shows the lift happening there.
+  const activeBendHandleBaseWorld = useMemo(() => {
+    if (!bendPreviewSession) {
+      return null;
+    }
+
+    return getBendHandleBaseWorld(bendPreviewSession);
+  }, [bendPreviewSession]);
+
   // "Distance" is a needs-input flag, not a proposal: the gap is measured
   // live from the two objects' current positions (no dragging, no ghost
   // preview session needed), so this is a plain derived value.
@@ -2549,6 +2748,12 @@ function Model({
     [rotatePreviews],
   );
 
+  // Every open bend proposal's target gets the same marker treatment too.
+  const bendMarkerTargets = useMemo<BendMarkerTarget[]>(
+    () => (bendPreviews ?? []).map((preview) => ({ pathKey: preview.pathKey })),
+    [bendPreviews],
+  );
+
   useEffect(() => {
     applyFuzzyConfidence(
       scene,
@@ -2559,6 +2764,7 @@ function Model({
       scaleMarkerTargets,
       distanceMarkerTargets,
       rotateMarkerTargets,
+      bendMarkerTargets,
     );
     invalidate();
 
@@ -2575,6 +2781,7 @@ function Model({
     scaleMarkerTargets,
     distanceMarkerTargets,
     rotateMarkerTargets,
+    bendMarkerTargets,
     invalidate,
   ]);
 
@@ -3168,6 +3375,16 @@ function Model({
         </Html>
       ))}
 
+      {enableManipulationHandles && bendPlan && activeBendHandleBaseWorld ? (
+        <BendHandle
+          baseWorld={activeBendHandleBaseWorld}
+          amountMeters={bendAmountMeters ?? 0}
+          color={BEND_ACCENT_COLOR}
+          onChange={(amountMeters) => onBendAmountChange?.(amountMeters)}
+          onDragStateChange={handleDragStateChange}
+        />
+      ) : null}
+
       {distanceRulers.map((ruler) => (
         <ClearanceRuler
           key={ruler.key}
@@ -3245,6 +3462,10 @@ export default function FuzzyCADGeometryViewer({
   rotateAxisDirection,
   rotateAngleRad,
   onRotateAngleChange,
+  bendPlan,
+  bendPreviews,
+  bendAmountMeters,
+  onBendAmountChange,
   distancePreviews,
   onAnswerDistance,
   hoveredPathKey,
@@ -3355,6 +3576,10 @@ export default function FuzzyCADGeometryViewer({
                   rotateAxisDirection={rotateAxisDirection}
                   rotateAngleRad={rotateAngleRad}
                   onRotateAngleChange={onRotateAngleChange}
+                  bendPlan={bendPlan}
+                  bendPreviews={bendPreviews}
+                  bendAmountMeters={bendAmountMeters}
+                  onBendAmountChange={onBendAmountChange}
                   distancePreviews={distancePreviews}
                   onAnswerDistance={onAnswerDistance}
                   hoveredPathKey={hoveredPathKey}

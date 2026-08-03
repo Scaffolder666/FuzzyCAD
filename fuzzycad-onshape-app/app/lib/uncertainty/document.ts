@@ -176,6 +176,24 @@ export type RotateUncertaintyAnnotation = BaseAnnotationFields & {
   proposedValueLabel: string;
 };
 
+/**
+ * "Bend": a proposed non-rigid curvature along one horizontal axis — for
+ * ergonomic contouring ("this pad needs to tilt up on one side") rather
+ * than a whole-object rigid transform. amountMeters is the height offset
+ * at each end (signed, mirrored: +amount at one end, -amount at the
+ * other), easing smoothly from the object's own center — not a crease,
+ * a single gentle one-direction curve along the picked axis.
+ */
+export type BendAxisDirection = "x" | "z";
+
+export type BendUncertaintyAnnotation = BaseAnnotationFields & {
+  type: "bend";
+  axisDirection: BendAxisDirection;
+  amountMeters: number;
+  previousValueLabel: string;
+  proposedValueLabel: string;
+};
+
 export type FuzzyCADUncertaintyAnnotation =
   | SizeUncertaintyAnnotation
   | ProposalUncertaintyAnnotation
@@ -183,7 +201,8 @@ export type FuzzyCADUncertaintyAnnotation =
   | MoveUncertaintyAnnotation
   | ScaleUncertaintyAnnotation
   | DistanceUncertaintyAnnotation
-  | RotateUncertaintyAnnotation;
+  | RotateUncertaintyAnnotation
+  | BendUncertaintyAnnotation;
 
 export function createEmptyUncertaintyDocument(
   source: FuzzyCADUncertaintySource,
@@ -1213,5 +1232,112 @@ export function toRotatePreviews(
       pivotWorld: annotation.pivotWorld,
       axisVectorWorld: annotation.axisVectorWorld,
       angleRad: annotation.angleRad,
+    }));
+}
+
+export function makeBendAnnotationId(pathKey: string) {
+  return `bend:${pathKey}`;
+}
+
+function createBendAnnotation(input: {
+  pathKey: string;
+  axisDirection: BendAxisDirection;
+  amountMeters: number;
+  previousValueLabel: string;
+  proposedValueLabel: string;
+  comment?: string;
+  author?: string;
+  assignee?: string;
+  status?: AnnotationStatus;
+  createdAt?: string;
+  updatedAt?: string;
+}): BendUncertaintyAnnotation | null {
+  if (!input.pathKey) {
+    return null;
+  }
+
+  const now = new Date().toISOString();
+
+  return {
+    id: makeBendAnnotationId(input.pathKey),
+    type: "bend",
+    target: {
+      pathKeys: [input.pathKey],
+      referencePathKey: input.pathKey,
+      scope: "single",
+    },
+    axisDirection: input.axisDirection,
+    amountMeters: input.amountMeters,
+    previousValueLabel: input.previousValueLabel,
+    proposedValueLabel: input.proposedValueLabel,
+    comment: input.comment,
+    author: input.author,
+    assignee: input.assignee,
+    status: input.status ?? "open",
+    createdAt: input.createdAt ?? now,
+    updatedAt: input.updatedAt ?? now,
+  };
+}
+
+/** One open bend per object — a new save replaces it. */
+export function upsertBend(
+  document: FuzzyCADUncertaintyDocument,
+  input: {
+    pathKey: string;
+    axisDirection: BendAxisDirection;
+    amountMeters: number;
+    previousValueLabel: string;
+    proposedValueLabel: string;
+    author?: string;
+  },
+): FuzzyCADUncertaintyDocument {
+  const id = makeBendAnnotationId(input.pathKey);
+  const existing = document.annotations.find((annotation) => annotation.id === id);
+
+  const nextAnnotation = createBendAnnotation({
+    pathKey: input.pathKey,
+    axisDirection: input.axisDirection,
+    amountMeters: input.amountMeters,
+    previousValueLabel: input.previousValueLabel,
+    proposedValueLabel: input.proposedValueLabel,
+    comment: existing?.comment,
+    author: existing?.author ?? input.author,
+    assignee: existing?.assignee,
+    status: "open",
+    createdAt: existing?.createdAt,
+  });
+
+  if (!nextAnnotation) {
+    return document;
+  }
+
+  return {
+    ...document,
+    annotations: [
+      ...document.annotations.filter((annotation) => annotation.id !== id),
+      nextAnnotation,
+    ],
+  };
+}
+
+export type BendPreview = {
+  pathKey: string;
+  axisDirection: BendAxisDirection;
+  amountMeters: number;
+};
+
+/** Open bend proposals, for the 3D viewer to render as a persistent ghost. */
+export function toBendPreviews(
+  document: FuzzyCADUncertaintyDocument,
+): BendPreview[] {
+  return document.annotations
+    .filter(
+      (annotation): annotation is BendUncertaintyAnnotation =>
+        annotation.type === "bend" && annotation.status === "open",
+    )
+    .map((annotation) => ({
+      pathKey: annotation.target.referencePathKey,
+      axisDirection: annotation.axisDirection,
+      amountMeters: annotation.amountMeters,
     }));
 }

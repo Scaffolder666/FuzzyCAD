@@ -3,6 +3,7 @@
 import { useState } from "react";
 import type {
   AlternativeUncertaintyAnnotation,
+  BendUncertaintyAnnotation,
   DistanceMoveMode,
   DistanceUncertaintyAnnotation,
   FuzzyCADUncertaintyAnnotation,
@@ -865,6 +866,87 @@ function RotateCard({
   );
 }
 
+function BendCard({
+  annotation,
+  selected,
+  hovered,
+  onSelect,
+  onDelete,
+  onCommentChange,
+  onResolve,
+}: {
+  annotation: BendUncertaintyAnnotation;
+  selected: boolean;
+  hovered: boolean;
+  onSelect: () => void;
+  onDelete: () => void;
+  onCommentChange: (comment: string) => void;
+  onResolve: () => void;
+}) {
+  return (
+    <article
+      className={`${styles.card} ${selected ? styles.cardSelected : ""} ${
+        hovered ? styles.cardHovered : ""
+      }`}
+      onClick={onSelect}
+    >
+      <div className={styles.cardHeader}>
+        <span className={`${styles.kindPill} ${styles.kindPillBend}`}>
+          Proposed bend
+        </span>
+      </div>
+
+      <div className={styles.cardTitle}>
+        {annotation.target.referencePathKey}
+        <span className={styles.proposalModeTag}>
+          along {annotation.axisDirection.toUpperCase()}
+        </span>
+      </div>
+
+      <div className={styles.valueLine}>
+        <span className={styles.valueOld}>{annotation.previousValueLabel}</span>
+        <span className={styles.valueArrow}>&rarr;</span>
+        <span className={styles.valueNew}>{annotation.proposedValueLabel}</span>
+      </div>
+
+      {annotation.author ? (
+        <div className={styles.metaRow}>proposed by {annotation.author}</div>
+      ) : null}
+
+      <textarea
+        className={styles.comment}
+        value={annotation.comment ?? ""}
+        placeholder="Add a comment..."
+        onClick={(event) => event.stopPropagation()}
+        onChange={(event) => onCommentChange(event.target.value)}
+      />
+
+      <div className={styles.actions}>
+        <button
+          type="button"
+          className={styles.resolveButton}
+          onClick={(event) => {
+            event.stopPropagation();
+            onResolve();
+          }}
+        >
+          Accept
+        </button>
+        <button
+          type="button"
+          className={styles.deleteButton}
+          onClick={(event) => {
+            event.stopPropagation();
+            onDelete();
+          }}
+        >
+          Reject
+        </button>
+      </div>
+    </article>
+  );
+}
+
 function AlternativeCard({
   annotation,
   selected,
@@ -1162,6 +1244,23 @@ export default function UncertaintyMarksPanel({
               );
             }
 
+            if (annotation.type === "bend") {
+              return (
+                <BendCard
+                  key={annotation.id}
+                  annotation={annotation}
+                  selected={selected}
+                  hovered={hovered}
+                  onSelect={() => onSelectAnnotation(annotation.id)}
+                  onDelete={() => onDeleteAnnotation(annotation.id)}
+                  onCommentChange={(comment) =>
+                    onCommentChange(annotation.id, comment)
+                  }
+                  onResolve={() => onResolveAnnotation(annotation.id)}
+                />
+              );
+            }
+
             return (
               <AlternativeCard
                 key={annotation.id}
@@ -1210,7 +1309,9 @@ export default function UncertaintyMarksPanel({
                                 ? `Rotate: ${annotation.target.referencePathKey}`
                                 : annotation.type === "distance"
                                   ? `Distance: ${annotation.target.referencePathKey} ↔ ${annotation.otherPathKey}`
-                                  : "Alternative"}
+                                  : annotation.type === "bend"
+                                    ? `Bend: ${annotation.target.referencePathKey}`
+                                    : "Alternative"}
                     </span>
                     <button
                       type="button"

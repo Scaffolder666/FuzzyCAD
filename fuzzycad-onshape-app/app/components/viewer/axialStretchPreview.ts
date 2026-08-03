@@ -288,7 +288,7 @@ function addWideDashedOverlay(mesh: THREE.Mesh) {
   return line;
 }
 
-function refreshWideDashedOverlay(mesh: THREE.Mesh) {
+export function refreshWideDashedOverlay(mesh: THREE.Mesh) {
   for (const child of mesh.children) {
     if (!(child instanceof LineSegments2)) {
       continue;

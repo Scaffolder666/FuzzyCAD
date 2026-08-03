@@ -204,6 +204,11 @@
   color: #4338ca;
 }
 
+.kindPillBend {
+  background: rgba(22, 163, 74, 0.12);
+  color: #15803d;
+}
+
 .answerRow {
   display: flex;
   gap: 6px;
