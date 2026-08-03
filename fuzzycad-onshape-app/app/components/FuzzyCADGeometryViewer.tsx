@@ -57,7 +57,7 @@ import MovePlaneHandle from "./viewer/MovePlaneHandle";
 import ScaleHandle from "./viewer/ScaleHandle";
 import RotateHandle from "./viewer/RotateHandle";
 import RotateProtractor from "./viewer/RotateProtractor";
-import BendHandle from "./viewer/BendHandle";
+import BendControlPoints from "./viewer/BendControlPoints";
 import {
   computeProposalTipSegments,
   type ProposalAxisIndex,
@@ -94,7 +94,7 @@ import {
 import {
   createBendPreviewSession,
   disposeBendPreviewSession,
-  getBendHandleBaseWorld,
+  getBendControlPointBaseWorlds,
   updateBendPreviewSession,
   type BendPreviewSession,
   type BendAxisDirection,
@@ -196,11 +196,11 @@ export type BendRolePlan = {
   axisDirection: BendAxisDirection;
 };
 
-/** A saved bend proposal's axis + amount, structurally the same shape as document.ts's. */
+/** A saved bend proposal's axis + control-point offsets, structurally the same shape as document.ts's. */
 export type BendPreview = {
   pathKey: string;
   axisDirection: BendAxisDirection;
-  amountMeters: number;
+  controlPointOffsetsMeters: number[];
 };
 
 /** A saved distance flag, structurally the same shape as document.ts's. */
@@ -290,8 +290,9 @@ type FuzzyCADGeometryViewerProps = {
   bendPlan?: BendRolePlan | null;
   /** Other saved (not currently being dragged) bend proposals, shown as static ghosts. */
   bendPreviews?: BendPreview[];
-  bendAmountMeters?: number;
-  onBendAmountChange?: (amountMeters: number) => void;
+  /** Signed lift in meters per control point, evenly spaced along bendPlan's axis. */
+  bendControlPointOffsetsMeters?: number[];
+  onBendControlPointChange?: (index: number, amountMeters: number) => void;
   /** Saved distance flags, shown as persistent rulers. */
   distancePreviews?: DistancePreview[];
   /** Answer an open distance flag directly from its 3D ruler. */
@@ -1043,8 +1044,8 @@ function Model({
   onRotateAngleChange,
   bendPlan,
   bendPreviews,
-  bendAmountMeters = 0,
-  onBendAmountChange,
+  bendControlPointOffsetsMeters = [],
+  onBendControlPointChange,
   distancePreviews,
   onAnswerDistance,
   hoveredPathKey,
@@ -1100,8 +1101,8 @@ function Model({
   onRotateAngleChange?: (angleRad: number) => void;
   bendPlan?: BendRolePlan | null;
   bendPreviews?: BendPreview[];
-  bendAmountMeters?: number;
-  onBendAmountChange?: (amountMeters: number) => void;
+  bendControlPointOffsetsMeters?: number[];
+  onBendControlPointChange?: (index: number, amountMeters: number) => void;
   distancePreviews?: DistancePreview[];
   onAnswerDistance?: (annotationId: string, distanceMm: number) => void;
   hoveredPathKey?: string | null;
@@ -2181,9 +2182,9 @@ function Model({
       return;
     }
 
-    updateBendPreviewSession(bendPreviewSession, bendAmountMeters ?? 0);
+    updateBendPreviewSession(bendPreviewSession, bendControlPointOffsetsMeters);
     invalidate();
-  }, [bendPreviewSession, bendAmountMeters, invalidate]);
+  }, [bendPreviewSession, bendControlPointOffsetsMeters, invalidate]);
 
   // Every OTHER saved bend proposal (not the one currently being dragged)
   // shows as a static ghost at its saved amount.
@@ -2201,7 +2202,7 @@ function Model({
   const persistentBendLoopRef = useRef<
     {
       session: BendPreviewSession;
-      amountMeters: number;
+      offsetsMeters: number[];
       pathKeys: string[];
     }[]
   >([]);
@@ -2225,7 +2226,7 @@ function Model({
 
         return {
           session,
-          amountMeters: preview.amountMeters,
+          offsetsMeters: preview.controlPointOffsetsMeters,
           pathKeys: [preview.pathKey],
         };
       })
@@ -2234,7 +2235,7 @@ function Model({
           entry,
         ): entry is {
           session: BendPreviewSession;
-          amountMeters: number;
+          offsetsMeters: number[];
           pathKeys: string[];
         } => entry !== null,
       );
@@ -2283,10 +2284,12 @@ function Model({
         continue;
       }
 
-      const restAmount = entry.amountMeters;
-      const appliedAmount = active ? restAmount * loopT : restAmount;
+      const restOffsets = entry.offsetsMeters;
+      const appliedOffsets = active
+        ? restOffsets.map((offset) => offset * loopT)
+        : restOffsets;
 
-      updateBendPreviewSession(entry.session, appliedAmount);
+      updateBendPreviewSession(entry.session, appliedOffsets);
 
       if (active) {
         settledBendSessionsRef.current.delete(entry.session);
@@ -2296,15 +2299,18 @@ function Model({
     }
   });
 
-  // The handle's base sits at the picked axis's positive end, at rest
-  // height — dragging it up/down directly shows the lift happening there.
-  const activeBendHandleBaseWorld = useMemo(() => {
+  // Where each control-point handle sits at rest — dragging one up/down
+  // directly shows the lift happening right there.
+  const activeBendControlPointBaseWorlds = useMemo(() => {
     if (!bendPreviewSession) {
-      return null;
+      return [];
     }
 
-    return getBendHandleBaseWorld(bendPreviewSession);
-  }, [bendPreviewSession]);
+    return getBendControlPointBaseWorlds(
+      bendPreviewSession,
+      Math.max(bendControlPointOffsetsMeters.length, 1),
+    );
+  }, [bendPreviewSession, bendControlPointOffsetsMeters.length]);
 
   // "Distance" is a needs-input flag, not a proposal: the gap is measured
   // live from the two objects' current positions (no dragging, no ghost
@@ -3375,12 +3381,16 @@ function Model({
         </Html>
       ))}
 
-      {enableManipulationHandles && bendPlan && activeBendHandleBaseWorld ? (
-        <BendHandle
-          baseWorld={activeBendHandleBaseWorld}
-          amountMeters={bendAmountMeters ?? 0}
+      {enableManipulationHandles &&
+      bendPlan &&
+      activeBendControlPointBaseWorlds.length > 0 ? (
+        <BendControlPoints
+          baseWorlds={activeBendControlPointBaseWorlds}
+          offsetsMeters={bendControlPointOffsetsMeters}
           color={BEND_ACCENT_COLOR}
-          onChange={(amountMeters) => onBendAmountChange?.(amountMeters)}
+          onChange={(index, amountMeters) =>
+            onBendControlPointChange?.(index, amountMeters)
+          }
           onDragStateChange={handleDragStateChange}
         />
       ) : null}
@@ -3464,8 +3474,8 @@ export default function FuzzyCADGeometryViewer({
   onRotateAngleChange,
   bendPlan,
   bendPreviews,
-  bendAmountMeters,
-  onBendAmountChange,
+  bendControlPointOffsetsMeters,
+  onBendControlPointChange,
   distancePreviews,
   onAnswerDistance,
   hoveredPathKey,
@@ -3578,8 +3588,8 @@ export default function FuzzyCADGeometryViewer({
                   onRotateAngleChange={onRotateAngleChange}
                   bendPlan={bendPlan}
                   bendPreviews={bendPreviews}
-                  bendAmountMeters={bendAmountMeters}
-                  onBendAmountChange={onBendAmountChange}
+                  bendControlPointOffsetsMeters={bendControlPointOffsetsMeters}
+                  onBendControlPointChange={onBendControlPointChange}
                   distancePreviews={distancePreviews}
                   onAnswerDistance={onAnswerDistance}
                   hoveredPathKey={hoveredPathKey}

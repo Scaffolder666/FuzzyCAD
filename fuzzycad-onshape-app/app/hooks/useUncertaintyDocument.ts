@@ -341,7 +341,7 @@ export function useUncertaintyDocument(source: FuzzyCADUncertaintySource) {
   function upsertBendMark(input: {
     pathKey: string;
     axisDirection: BendAxisDirection;
-    amountMeters: number;
+    controlPointOffsetsMeters: number[];
     previousValueLabel: string;
     proposedValueLabel: string;
     author?: string;

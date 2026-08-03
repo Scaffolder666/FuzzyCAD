@@ -178,18 +178,22 @@ export type RotateUncertaintyAnnotation = BaseAnnotationFields & {
 
 /**
  * "Bend": a proposed non-rigid curvature along one horizontal axis — for
- * ergonomic contouring ("this pad needs to tilt up on one side") rather
- * than a whole-object rigid transform. amountMeters is the height offset
- * at each end (signed, mirrored: +amount at one end, -amount at the
- * other), easing smoothly from the object's own center — not a crease,
- * a single gentle one-direction curve along the picked axis.
+ * ergonomic contouring ("this pad needs to tilt up on one side, down on
+ * the other") rather than a whole-object rigid transform. The axis is
+ * represented as BEND_CONTROL_POINT_COUNT evenly-spaced control points,
+ * each independently draggable up/down (signed height offset in meters);
+ * the surface between them eases smoothly rather than creasing. Starts
+ * flat (all zero) — dragging one point is a local, legible adjustment
+ * instead of one abstract global curve amount.
  */
 export type BendAxisDirection = "x" | "z";
+
+export const BEND_CONTROL_POINT_COUNT = 5;
 
 export type BendUncertaintyAnnotation = BaseAnnotationFields & {
   type: "bend";
   axisDirection: BendAxisDirection;
-  amountMeters: number;
+  controlPointOffsetsMeters: number[];
   previousValueLabel: string;
   proposedValueLabel: string;
 };
@@ -1242,7 +1246,7 @@ export function makeBendAnnotationId(pathKey: string) {
 function createBendAnnotation(input: {
   pathKey: string;
   axisDirection: BendAxisDirection;
-  amountMeters: number;
+  controlPointOffsetsMeters: number[];
   previousValueLabel: string;
   proposedValueLabel: string;
   comment?: string;
@@ -1267,7 +1271,7 @@ function createBendAnnotation(input: {
       scope: "single",
     },
     axisDirection: input.axisDirection,
-    amountMeters: input.amountMeters,
+    controlPointOffsetsMeters: input.controlPointOffsetsMeters,
     previousValueLabel: input.previousValueLabel,
     proposedValueLabel: input.proposedValueLabel,
     comment: input.comment,
@@ -1285,7 +1289,7 @@ export function upsertBend(
   input: {
     pathKey: string;
     axisDirection: BendAxisDirection;
-    amountMeters: number;
+    controlPointOffsetsMeters: number[];
     previousValueLabel: string;
     proposedValueLabel: string;
     author?: string;
@@ -1297,7 +1301,7 @@ export function upsertBend(
   const nextAnnotation = createBendAnnotation({
     pathKey: input.pathKey,
     axisDirection: input.axisDirection,
-    amountMeters: input.amountMeters,
+    controlPointOffsetsMeters: input.controlPointOffsetsMeters,
     previousValueLabel: input.previousValueLabel,
     proposedValueLabel: input.proposedValueLabel,
     comment: existing?.comment,
@@ -1323,7 +1327,7 @@ export function upsertBend(
 export type BendPreview = {
   pathKey: string;
   axisDirection: BendAxisDirection;
-  amountMeters: number;
+  controlPointOffsetsMeters: number[];
 };
 
 /** Open bend proposals, for the 3D viewer to render as a persistent ghost. */
@@ -1338,6 +1342,6 @@ export function toBendPreviews(
     .map((annotation) => ({
       pathKey: annotation.target.referencePathKey,
       axisDirection: annotation.axisDirection,
-      amountMeters: annotation.amountMeters,
+      controlPointOffsetsMeters: annotation.controlPointOffsetsMeters,
     }));
 }

@@ -291,68 +291,54 @@
   margin: 0;
 }
 
-.bendHandle {
+.bendControlPoint {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
   cursor: ns-resize;
   touch-action: none;
   user-select: none;
   pointer-events: auto;
 }
 
-.bendHandleActive {
+.bendControlPointActive {
   cursor: ns-resize;
 }
 
-.bendHandleTrack {
-  position: relative;
-  width: 8px;
-  height: 160px;
-  border-radius: 4px;
-  background: rgba(219, 39, 119, 0.18);
-  border: 1px solid rgba(219, 39, 119, 0.45);
-  box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.55) inset;
-}
-
-.bendHandleKnob {
-  position: absolute;
-  left: 50%;
-  width: 24px;
-  height: 24px;
+.bendControlPointKnob {
+  width: 16px;
+  height: 16px;
   border-radius: 50%;
   background: #db2777;
   border: 2.5px solid #ffffff;
   box-shadow:
     0 0 0 1px rgba(219, 39, 119, 0.55),
     0 4px 12px rgba(219, 39, 119, 0.4);
-  transform: translate(-50%, -50%);
   transition: box-shadow 120ms ease;
-  pointer-events: none;
 }
 
-.bendHandleActive .bendHandleKnob {
+.bendControlPointActive .bendControlPointKnob {
   box-shadow:
     0 0 0 3px rgba(219, 39, 119, 0.3),
     0 4px 16px rgba(219, 39, 119, 0.55);
 }
 
-.bendHandleLabel {
+.bendControlPointLabel {
   display: flex;
   align-items: center;
-  padding: 4px 10px;
+  padding: 3px 8px;
   border-radius: 9px;
   background: rgba(20, 30, 48, 0.82);
   color: #ffffff;
-  font-size: 13px;
+  font-size: 12px;
   font-family: monospace;
   white-space: nowrap;
   pointer-events: none;
 }
 
-.bendHandleValueInput {
-  width: 3.6em;
+.bendControlPointValueInput {
+  width: 3.4em;
   padding: 0;
   border: none;
   border-bottom: 1px solid rgba(255, 255, 255, 0.5);
@@ -366,8 +352,8 @@
   appearance: textfield;
 }
 
-.bendHandleValueInput::-webkit-outer-spin-button,
-.bendHandleValueInput::-webkit-inner-spin-button {
+.bendControlPointValueInput::-webkit-outer-spin-button,
+.bendControlPointValueInput::-webkit-inner-spin-button {
   appearance: none;
   margin: 0;
 }

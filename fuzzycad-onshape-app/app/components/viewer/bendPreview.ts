@@ -56,12 +56,43 @@ function collectMeshes(root: THREE.Object3D) {
   return meshes;
 }
 
+/** Smoothstep ease: 0 at x=0, 1 at x=1, flat tangent at both ends, so
+ * consecutive control-point segments blend without a visible crease at
+ * the shared point. */
+function smoothstep(x: number) {
+  const clamped = Math.max(0, Math.min(1, x));
+
+  return clamped * clamped * (3 - 2 * clamped);
+}
+
+/** Interpolates a value at axis position `t` (in [-1, 1]) from N evenly
+ * spaced control-point offsets — piecewise smoothstep between each
+ * adjacent pair, so the curve is continuous and eases in/out at every
+ * control point instead of creasing. */
+export function sampleControlOffset(t: number, offsets: number[]) {
+  if (offsets.length === 0) {
+    return 0;
+  }
+
+  if (offsets.length === 1) {
+    return offsets[0];
+  }
+
+  const clampedT = Math.max(-1, Math.min(1, t));
+  const u = ((clampedT + 1) / 2) * (offsets.length - 1);
+  const index = Math.max(0, Math.min(offsets.length - 2, Math.floor(u)));
+  const frac = u - index;
+
+  return offsets[index] + (offsets[index + 1] - offsets[index]) * smoothstep(frac);
+}
+
 /**
  * A single-axis, non-rigid "Bend" ghost preview: unlike Move/Scale/Rotate
- * (which clone + rigidly transform), this actually displaces each vertex —
- * one end of the picked axis lifts up, the other dips down, easing
- * smoothly from the object's own center (a gentle one-direction curve, not
- * a crease) — for ergonomic contouring proposals rather than whole-object
+ * (which clone + rigidly transform), this actually displaces each vertex.
+ * The axis is represented by a handful of evenly-spaced control points
+ * (see BEND_CONTROL_POINT_COUNT in document.ts), each independently
+ * draggable up/down — the surface between them eases smoothly rather than
+ * creasing — for ergonomic contouring proposals rather than whole-object
  * moves. Reuses the same clone-and-snapshot pattern axialStretchPreview.ts
  * uses for the Height/Extend tool's per-vertex stretch.
  */
@@ -128,7 +159,7 @@ export function createBendPreviewSession(
 
 export function updateBendPreviewSession(
   session: BendPreviewSession,
-  amountMeters: number,
+  controlPointOffsetsMeters: number[],
 ) {
   const localPoint = new THREE.Vector3();
   const worldPoint = new THREE.Vector3();
@@ -154,11 +185,8 @@ export function updateBendPreviewSession(
         .clone()
         .sub(session.centerWorld)
         .dot(session.axisWorld);
-      const t = Math.max(
-        -1,
-        Math.min(1, offsetAlongAxis / session.halfExtent),
-      );
-      const lift = amountMeters * Math.sin((t * Math.PI) / 2);
+      const t = offsetAlongAxis / session.halfExtent;
+      const lift = sampleControlOffset(t, controlPointOffsetsMeters);
 
       worldPoint.addScaledVector(BEND_LIFT_AXIS_WORLD, lift);
 
@@ -208,11 +236,29 @@ export function disposeBendPreviewSession(session: BendPreviewSession) {
   });
 }
 
-/** World-space point at the picked axis's positive end, at rest height —
- * where the BendHandle sits, so dragging it up/down directly visualizes
- * the lift happening at that edge. */
-export function getBendHandleBaseWorld(session: BendPreviewSession) {
-  return session.centerWorld
-    .clone()
-    .addScaledVector(session.axisWorld, session.halfExtent);
+/** World-space rest positions (before any lift) of each control point,
+ * evenly spaced from the axis's negative end to its positive end — where
+ * the BendControlPoints handles sit, so dragging one up/down directly
+ * visualizes the lift happening right there. */
+export function getBendControlPointBaseWorlds(
+  session: BendPreviewSession,
+  pointCount: number,
+): THREE.Vector3[] {
+  if (pointCount <= 1) {
+    return [session.centerWorld.clone()];
+  }
+
+  const points: THREE.Vector3[] = [];
+
+  for (let index = 0; index < pointCount; index += 1) {
+    const t = (index / (pointCount - 1)) * 2 - 1;
+
+    points.push(
+      session.centerWorld
+        .clone()
+        .addScaledVector(session.axisWorld, t * session.halfExtent),
+    );
+  }
+
+  return points;
 }

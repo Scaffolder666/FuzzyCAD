@@ -57,6 +57,7 @@ import {
 import {
   findSizeAnnotationForPathKey,
   makeSizeAnnotationId,
+  BEND_CONTROL_POINT_COUNT,
   type BendAxisDirection,
   type DistanceMoveMode,
   type FuzzyCADUncertaintyAnnotation,
@@ -290,14 +291,18 @@ export default function FuzzyCADHome() {
     useState<RotateBasePlan | null>(null);
 
   // "Bend" tool: click a part, pick which horizontal axis it curves along,
-  // then drag a handle up/down — one end lifts, the other dips, easing
-  // smoothly from the object's own center. Single object, no group/related-
-  // parts prompt (bending a sibling part the same way rarely makes sense
-  // since each part's own geometry differs).
+  // then drag any of a few control points along that axis up/down — each
+  // one lifts/dips independently, easing smoothly into its neighbors, so
+  // the curve is a set of legible local adjustments rather than one
+  // abstract global amount. Single object, no group/related-parts prompt
+  // (bending a sibling part the same way rarely makes sense since each
+  // part's own geometry differs).
   const [activeBendPlan, setActiveBendPlan] = useState<BendRolePlan | null>(
     null,
   );
-  const [bendAmountMeters, setBendAmountMeters] = useState(0);
+  const [bendControlPointOffsets, setBendControlPointOffsets] = useState<
+    number[]
+  >(() => new Array(BEND_CONTROL_POINT_COUNT).fill(0));
 
   // "Distance" tool: click one part, then a second, to flag the gap between
   // them. The flag saves itself the moment both are picked — it's a
@@ -525,7 +530,7 @@ export default function FuzzyCADHome() {
     setRotateCandidatePathKeys([]);
     setPendingRotatePlan(null);
     setActiveBendPlan(null);
-    setBendAmountMeters(0);
+    setBendControlPointOffsets(new Array(BEND_CONTROL_POINT_COUNT).fill(0));
     closeSizeUncertaintyEditor();
   }
 
@@ -1476,18 +1481,25 @@ export default function FuzzyCADHome() {
     resetSizeOperationState();
     setLassoPathKeys([]);
     setActiveBendPlan({ pathKey: selectedObjectSummary.pathKey, axisDirection: "x" });
-    setBendAmountMeters(0);
+    setBendControlPointOffsets(new Array(BEND_CONTROL_POINT_COUNT).fill(0));
   }
 
   function setBendAxis(axisDirection: BendAxisDirection) {
     setActiveBendPlan((previous) =>
       previous ? { ...previous, axisDirection } : previous,
     );
+    setBendControlPointOffsets(new Array(BEND_CONTROL_POINT_COUNT).fill(0));
+  }
+
+  function setBendControlPointOffset(index: number, amountMeters: number) {
+    setBendControlPointOffsets((previous) =>
+      previous.map((value, i) => (i === index ? amountMeters : value)),
+    );
   }
 
   function cancelBend() {
     setActiveBendPlan(null);
-    setBendAmountMeters(0);
+    setBendControlPointOffsets(new Array(BEND_CONTROL_POINT_COUNT).fill(0));
     setActiveTool("select");
   }
 
@@ -1496,18 +1508,26 @@ export default function FuzzyCADHome() {
       return;
     }
 
-    const amountMm = bendAmountMeters * 1000;
+    const touchedCount = bendControlPointOffsets.filter(
+      (value) => Math.abs(value) > 1e-6,
+    ).length;
+    const maxAbsMm =
+      Math.max(...bendControlPointOffsets.map((value) => Math.abs(value)), 0) *
+      1000;
 
     upsertBendMark({
       pathKey: activeBendPlan.pathKey,
       axisDirection: activeBendPlan.axisDirection,
-      amountMeters: bendAmountMeters,
+      controlPointOffsetsMeters: bendControlPointOffsets,
       previousValueLabel: "flat",
-      proposedValueLabel: `${amountMm >= 0 ? "+" : ""}${amountMm.toFixed(1)} mm along ${activeBendPlan.axisDirection.toUpperCase()}`,
+      proposedValueLabel:
+        touchedCount > 0
+          ? `${touchedCount} point${touchedCount === 1 ? "" : "s"} adjusted, up to ${maxAbsMm.toFixed(1)} mm, along ${activeBendPlan.axisDirection.toUpperCase()}`
+          : `flat along ${activeBendPlan.axisDirection.toUpperCase()}`,
     });
 
     setActiveBendPlan(null);
-    setBendAmountMeters(0);
+    setBendControlPointOffsets(new Array(BEND_CONTROL_POINT_COUNT).fill(0));
     setActiveTool("select");
   }
 
@@ -1797,8 +1817,8 @@ if (result.ok && result.state) {
           onRotateAngleChange={setRotateAngleRad}
           bendPlan={activeBendPlan}
           bendPreviews={bendPreviews}
-          bendAmountMeters={bendAmountMeters}
-          onBendAmountChange={setBendAmountMeters}
+          bendControlPointOffsetsMeters={bendControlPointOffsets}
+          onBendControlPointChange={setBendControlPointOffset}
           distancePreviews={distancePreviews}
           onAnswerDistance={(annotationId, distanceMm) =>
             answerDistanceMark(annotationId, distanceMm / 1000)
@@ -1812,7 +1832,8 @@ if (result.ok && result.state) {
               Boolean(proposalPlan) ||
               Boolean(activeMovePlan) ||
               Boolean(activeScalePlan) ||
-              Boolean(activeRotatePlan))
+              Boolean(activeRotatePlan) ||
+              Boolean(activeBendPlan))
           }
           manipulationValue={manipulationValue}
           confidenceAnnotations={confidenceAnnotations}
@@ -2101,7 +2122,8 @@ if (result.ok && result.state) {
         {activeTool === "bend" && activeBendPlan ? (
           <div className={styles.manipulationReadout}>
             <span className={styles.manipulationValue}>
-              Bend: {(bendAmountMeters * 1000).toFixed(1)} mm
+              Bend: drag a control point along{" "}
+              {activeBendPlan.axisDirection.toUpperCase()}
             </span>
             {(["x", "z"] as const).map((axis) => (
               <button
