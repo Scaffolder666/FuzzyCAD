@@ -404,39 +404,6 @@ export default function FuzzyCADHome() {
       );
   }, [heightCandidatePathKeys, objectSummaries]);
 
-  const moveCandidateSummaries = useMemo(() => {
-    return moveCandidatePathKeys
-      .map((pathKey) =>
-        objectSummaries.find((summary) => summary.pathKey === pathKey),
-      )
-      .filter(
-        (summary): summary is AxialStretchObjectSummary =>
-          summary !== undefined,
-      );
-  }, [moveCandidatePathKeys, objectSummaries]);
-
-  const scaleCandidateSummaries = useMemo(() => {
-    return scaleCandidatePathKeys
-      .map((pathKey) =>
-        objectSummaries.find((summary) => summary.pathKey === pathKey),
-      )
-      .filter(
-        (summary): summary is AxialStretchObjectSummary =>
-          summary !== undefined,
-      );
-  }, [scaleCandidatePathKeys, objectSummaries]);
-
-  const rotateCandidateSummaries = useMemo(() => {
-    return rotateCandidatePathKeys
-      .map((pathKey) =>
-        objectSummaries.find((summary) => summary.pathKey === pathKey),
-      )
-      .filter(
-        (summary): summary is AxialStretchObjectSummary =>
-          summary !== undefined,
-      );
-  }, [rotateCandidatePathKeys, objectSummaries]);
-
   const heightReferencePathKey =
     heightCandidatePathKeys[0] ?? highlightedPathKey ?? null;
 
@@ -2169,12 +2136,11 @@ if (result.ok && result.state) {
           <OperationPreviewPanel
             operation="move"
             title="Related parts found"
-            description={`This part is mated to, or shares a source part with, ${
-              moveCandidatePathKeys.length
-            } other part${
-              moveCandidatePathKeys.length === 1 ? "" : "s"
-            }. Move them together, or just this one?`}
-            suggestedObjects={moveCandidateSummaries.map(getObjectDisplayName)}
+            description={`We found ${
+              moveCandidatePathKeys.length === 1
+                ? "a related part"
+                : `${moveCandidatePathKeys.length} related parts`
+            }. Move it together with this one, or just move this one?`}
             confirmLabel="Move together"
             secondaryConfirmLabel="Move alone"
             cancelLabel="Cancel"
@@ -2188,12 +2154,11 @@ if (result.ok && result.state) {
           <OperationPreviewPanel
             operation="scale"
             title="Related parts found"
-            description={`This part is mated to, or shares a source part with, ${
-              scaleCandidatePathKeys.length
-            } other part${
-              scaleCandidatePathKeys.length === 1 ? "" : "s"
-            }. Scale them together, or just this one?`}
-            suggestedObjects={scaleCandidateSummaries.map(getObjectDisplayName)}
+            description={`We found ${
+              scaleCandidatePathKeys.length === 1
+                ? "a related part"
+                : `${scaleCandidatePathKeys.length} related parts`
+            }. Scale it together with this one, or just scale this one?`}
             confirmLabel="Scale together"
             secondaryConfirmLabel="Scale alone"
             cancelLabel="Cancel"
@@ -2207,12 +2172,11 @@ if (result.ok && result.state) {
           <OperationPreviewPanel
             operation="rotate"
             title="Related parts found"
-            description={`This part is mated to, or shares a source part with, ${
-              rotateCandidatePathKeys.length
-            } other part${
-              rotateCandidatePathKeys.length === 1 ? "" : "s"
-            }. Rotate them together, or just this one?`}
-            suggestedObjects={rotateCandidateSummaries.map(getObjectDisplayName)}
+            description={`We found ${
+              rotateCandidatePathKeys.length === 1
+                ? "a related part"
+                : `${rotateCandidatePathKeys.length} related parts`
+            }. Rotate it together with this one, or just rotate this one?`}
             confirmLabel="Rotate together"
             secondaryConfirmLabel="Rotate alone"
             cancelLabel="Cancel"
