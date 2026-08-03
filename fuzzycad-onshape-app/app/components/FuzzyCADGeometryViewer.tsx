@@ -3533,6 +3533,7 @@ function Model({
       {moveQuestionRulerFrames.map((frame) => (
         <MoveQuestionRuler
           key={frame.id}
+          pathKey={frame.pathKey}
           originWorld={frame.originWorld}
           axisWorld={frame.axisWorld}
           rangeMinMeters={frame.rangeMinMeters}

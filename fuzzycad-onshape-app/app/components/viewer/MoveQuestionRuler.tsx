@@ -1,12 +1,21 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { Html, Line } from "@react-three/drei";
-import { useFrame } from "@react-three/fiber";
+import { useFrame, useThree } from "@react-three/fiber";
+import type { Line2 } from "three-stdlib";
 import FatArrow from "./FatArrow";
+import {
+  createMoveTranslatePreviewSession,
+  disposeMoveTranslatePreviewSession,
+  updateMoveTranslatePreviewSession,
+  type MoveTranslatePreviewSession,
+} from "./moveTranslatePreview";
 
 type MoveQuestionRulerProps = {
+  /** Which object this range applies to, so the endpoint ghosts can clone it. */
+  pathKey: string;
   originWorld: THREE.Vector3;
   axisWorld: THREE.Vector3;
   rangeMinMeters: number;
@@ -18,17 +27,22 @@ type MoveQuestionRulerProps = {
   onAnswer?: (deltaMeters: number) => void;
 };
 
-const OSCILLATE_PERIOD_SECONDS = 2.4;
+/** How fast the dashed lines' "marching ants" flow outward from the object's center toward each range end. */
+const DASH_FLOW_SPEED = 0.6;
 
 /**
- * A saved Move "needs input" flag: while unanswered, the range shows as a
- * dashed span with a dot bouncing back and forth between its two ends —
- * an animated invitation to interact, the way Proposed's ghost preview
- * animates to show a trend, except here there's no single value yet to
- * animate toward. Once someone answers (mirrors Distance's inline
- * editable-label pattern), it collapses to a single arrow + settled label.
+ * A saved Move "needs input" flag: while unanswered, a ghost preview of
+ * the object sits at each end of the range (same dashed-edge, invisible-
+ * fill look as every other Proposed ghost) — "it could end up here, or
+ * here" reads instantly, and the two ghosts together read as uncertainty
+ * itself, not just a measured span. A dashed line toward each ghost
+ * flows outward continuously (marching-ants style) as a quiet "this is
+ * still open" cue, instead of a literal object bouncing back and forth.
+ * Once someone answers (mirrors Distance's inline editable-label
+ * pattern), it collapses to a single settled ghost + arrow + label.
  */
 export default function MoveQuestionRuler({
+  pathKey,
   originWorld,
   axisWorld,
   rangeMinMeters,
@@ -38,9 +52,11 @@ export default function MoveQuestionRuler({
   mutedColor = "#6b7280",
   onAnswer,
 }: MoveQuestionRulerProps) {
+  const { scene, invalidate } = useThree();
   const answered = resolvedDeltaMeters !== null;
   const [draft, setDraft] = useState("");
-  const dotRef = useRef<THREE.Group>(null);
+  const minLineRef = useRef<Line2>(null);
+  const maxLineRef = useRef<Line2>(null);
 
   const minWorld = originWorld.clone().addScaledVector(axisWorld, rangeMinMeters);
   const maxWorld = originWorld.clone().addScaledVector(axisWorld, rangeMaxMeters);
@@ -48,15 +64,101 @@ export default function MoveQuestionRuler({
   const rangeMinMm = rangeMinMeters * 1000;
   const rangeMaxMm = rangeMaxMeters * 1000;
 
-  useFrame(({ clock }) => {
-    if (answered || !dotRef.current) {
+  // Ghost previews at both range endpoints, while unanswered.
+  const endpointSessions = useMemo(() => {
+    if (answered) {
+      return null;
+    }
+
+    const minSession = createMoveTranslatePreviewSession(scene, [pathKey]);
+    const maxSession = createMoveTranslatePreviewSession(scene, [pathKey]);
+
+    if (!minSession || !maxSession) {
+      return null;
+    }
+
+    return { minSession, maxSession };
+  }, [scene, pathKey, answered]);
+
+  useEffect(() => {
+    if (!endpointSessions) {
       return;
     }
 
-    const phase = (clock.elapsedTime / OSCILLATE_PERIOD_SECONDS) * Math.PI * 2;
-    const t = (Math.sin(phase) + 1) / 2;
+    scene.add(endpointSessions.minSession.group);
+    scene.add(endpointSessions.maxSession.group);
+    invalidate();
 
-    dotRef.current.position.lerpVectors(minWorld, maxWorld, t);
+    return () => {
+      disposeMoveTranslatePreviewSession(endpointSessions.minSession);
+      disposeMoveTranslatePreviewSession(endpointSessions.maxSession);
+      invalidate();
+    };
+  }, [scene, endpointSessions, invalidate]);
+
+  useEffect(() => {
+    if (!endpointSessions) {
+      return;
+    }
+
+    updateMoveTranslatePreviewSession(
+      endpointSessions.minSession,
+      axisWorld.clone().multiplyScalar(rangeMinMeters),
+    );
+    updateMoveTranslatePreviewSession(
+      endpointSessions.maxSession,
+      axisWorld.clone().multiplyScalar(rangeMaxMeters),
+    );
+    invalidate();
+  }, [endpointSessions, axisWorld, rangeMinMeters, rangeMaxMeters, invalidate]);
+
+  // A single settled ghost at the resolved delta, once answered.
+  const answeredSession = useMemo<MoveTranslatePreviewSession | null>(() => {
+    if (!answered) {
+      return null;
+    }
+
+    return createMoveTranslatePreviewSession(scene, [pathKey]);
+  }, [scene, pathKey, answered]);
+
+  useEffect(() => {
+    if (!answeredSession) {
+      return;
+    }
+
+    scene.add(answeredSession.group);
+    invalidate();
+
+    return () => {
+      disposeMoveTranslatePreviewSession(answeredSession);
+      invalidate();
+    };
+  }, [scene, answeredSession, invalidate]);
+
+  useEffect(() => {
+    if (!answeredSession) {
+      return;
+    }
+
+    updateMoveTranslatePreviewSession(
+      answeredSession,
+      axisWorld.clone().multiplyScalar(resolvedDeltaMeters ?? 0),
+    );
+    invalidate();
+  }, [answeredSession, axisWorld, resolvedDeltaMeters, invalidate]);
+
+  useFrame((_, delta) => {
+    if (answered) {
+      return;
+    }
+
+    if (minLineRef.current) {
+      minLineRef.current.material.dashOffset -= delta * DASH_FLOW_SPEED;
+    }
+
+    if (maxLineRef.current) {
+      maxLineRef.current.material.dashOffset -= delta * DASH_FLOW_SPEED;
+    }
   });
 
   function submit() {
@@ -117,28 +219,32 @@ export default function MoveQuestionRuler({
 
   return (
     <>
+      <FatArrow fromWorld={originWorld} toWorld={minWorld} color={mutedColor} />
+      <FatArrow fromWorld={originWorld} toWorld={maxWorld} color={mutedColor} />
       <Line
-        points={[minWorld, maxWorld]}
-        color={mutedColor}
-        lineWidth={2}
+        ref={minLineRef}
+        points={[originWorld, minWorld]}
+        color={color}
+        lineWidth={1.5}
         dashed
-        dashSize={0.03}
-        gapSize={0.02}
+        dashSize={0.02}
+        gapSize={0.015}
         transparent
-        opacity={0.8}
+        opacity={0.7}
         raycast={() => null}
       />
-      <group ref={dotRef}>
-        <mesh renderOrder={999} frustumCulled={false} raycast={() => null}>
-          <sphereGeometry args={[0.006, 12, 12]} />
-          <meshBasicMaterial
-            color={color}
-            transparent
-            opacity={0.9}
-            depthTest={false}
-          />
-        </mesh>
-      </group>
+      <Line
+        ref={maxLineRef}
+        points={[originWorld, maxWorld]}
+        color={color}
+        lineWidth={1.5}
+        dashed
+        dashSize={0.02}
+        gapSize={0.015}
+        transparent
+        opacity={0.7}
+        raycast={() => null}
+      />
       <Html
         position={labelPosition}
         center
