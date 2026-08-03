@@ -1635,6 +1635,25 @@ function normalizeLoadedAnnotation(
     } as unknown as FuzzyCADUncertaintyAnnotation;
   }
 
+  // Bend's shape changed from a single amountMeters number to a
+  // controlPointOffsetsMeters array early on — project state saved before
+  // that still has the old field (or a mismatched-length array from a
+  // different control-point count). Downstream code assumes a real array
+  // of the current length, so an invalid one crashes the whole viewer
+  // rather than just that one ghost preview — always normalize instead of
+  // trusting whatever was saved.
+  if (annotation.type === "bend") {
+    const offsets = annotation.controlPointOffsetsMeters;
+
+    return {
+      ...annotation,
+      controlPointOffsetsMeters:
+        Array.isArray(offsets) && offsets.length === BEND_CONTROL_POINT_COUNT
+          ? offsets
+          : new Array(BEND_CONTROL_POINT_COUNT).fill(0),
+    } as unknown as FuzzyCADUncertaintyAnnotation;
+  }
+
   return annotation as unknown as FuzzyCADUncertaintyAnnotation;
 }
 
