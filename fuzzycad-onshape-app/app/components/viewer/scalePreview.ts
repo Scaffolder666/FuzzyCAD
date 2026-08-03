@@ -19,43 +19,76 @@ export type ScalePreviewSession = {
 };
 
 /**
- * A uniform-resize ghost preview for the Scale tool: the target is cloned
- * whole (same dashed-edge, invisible-fill look as the other ghost previews)
- * and grown/shrunk around its own bounding-box center — no per-vertex
- * deformation, just a rigid scale + reposition each frame.
+ * A uniform-resize ghost preview for the Scale tool: the target (plus any
+ * mate-linked or same-source-part followers) is cloned whole (same
+ * dashed-edge, invisible-fill look as the other ghost previews) and
+ * grown/shrunk together — no per-vertex deformation, just a rigid scale +
+ * reposition each frame. With followers, the pivot is the combined
+ * bounding-box center of the WHOLE group, not just the primary target's
+ * own center, so the group grows/shrinks as a unit around its shared
+ * middle instead of each part scaling around a different point.
  */
 export function createScalePreviewSession(
   scene: THREE.Object3D,
   objectSummaries: AxialStretchObjectSummary[],
   pathKey: string,
+  followPathKeys: string[] = [],
 ): ScalePreviewSession | null {
-  const summary = objectSummaries.find((item) => item.pathKey === pathKey);
-  const original = findObjectsByPathKeys(scene, [pathKey])[0];
+  const allPathKeys = [pathKey, ...followPathKeys];
+  const summaries = allPathKeys
+    .map((key) => objectSummaries.find((item) => item.pathKey === key))
+    .filter((item): item is AxialStretchObjectSummary => Boolean(item));
 
-  if (!summary || !original) {
+  if (summaries.length === 0) {
     return null;
   }
+
+  const box = new THREE.Box3();
+
+  for (const summary of summaries) {
+    const center = new THREE.Vector3(...summary.aabbCenterWorld);
+    const halfSize = new THREE.Vector3(...summary.aabbSizeWorld).multiplyScalar(
+      0.5,
+    );
+
+    box.union(
+      new THREE.Box3(center.clone().sub(halfSize), center.clone().add(halfSize)),
+    );
+  }
+
+  const pivotWorld = box.getCenter(new THREE.Vector3());
 
   const group = new THREE.Group();
   group.name = "FuzzyCAD Scale Preview";
   group.userData.fuzzycadPreview = true;
 
-  const clone = cloneObjectForPreview(scene, original, "scale");
-  group.add(clone);
+  const clones: ScaleClone[] = [];
 
-  return {
-    group,
-    pivotWorld: new THREE.Vector3(...summary.aabbCenterWorld),
-    clones: [
-      {
-        pathKey,
-        clone,
-        originalLocalPosition: clone.position.clone(),
-        originalLocalQuaternion: clone.quaternion.clone(),
-        originalLocalScale: clone.scale.clone(),
-      },
-    ],
-  };
+  for (const key of allPathKeys) {
+    const original = findObjectsByPathKeys(scene, [key])[0];
+
+    if (!original) {
+      continue;
+    }
+
+    const clone = cloneObjectForPreview(scene, original, "scale");
+
+    group.add(clone);
+
+    clones.push({
+      pathKey: key,
+      clone,
+      originalLocalPosition: clone.position.clone(),
+      originalLocalQuaternion: clone.quaternion.clone(),
+      originalLocalScale: clone.scale.clone(),
+    });
+  }
+
+  if (clones.length === 0) {
+    return null;
+  }
+
+  return { group, pivotWorld, clones };
 }
 
 export function updateScalePreviewSession(

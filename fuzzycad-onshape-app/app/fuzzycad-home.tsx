@@ -20,7 +20,7 @@ import type {
   RotateRolePlan,
 } from "./components/FuzzyCADGeometryViewer";
 import { usePartGraph } from "./hooks/usePartGraph";
-import { getLinkedGroup } from "./lib/partGraph";
+import { getRelatedGroup } from "./lib/partGraph";
 import {
   fetchFuzzycadAssemblySummary,
   fetchFuzzycadRelationshipGraph,
@@ -78,6 +78,35 @@ const FuzzyCADGeometryViewer = dynamic(
 type LoadOptions = {
   force?: boolean;
 };
+
+/** RotateRolePlan minus followPathKeys — a plan waiting on the "related
+ * parts?" prompt to decide who else joins it. */
+type RotateBasePlan =
+  | {
+      pathKey: string;
+      axisMode: "object";
+      axisPathKey: string;
+    }
+  | {
+      pathKey: string;
+      axisMode: "custom";
+      pivotWorld: [number, number, number];
+      axisVectorWorld: [number, number, number];
+    };
+
+/** Reattaches followPathKeys to a RotateBasePlan, branching explicitly on
+ * axisMode since a plain object spread doesn't distribute over the union
+ * the way discriminated-union assignment needs. */
+function buildRotatePlan(
+  base: RotateBasePlan,
+  followPathKeys: string[],
+): RotateRolePlan {
+  if (base.axisMode === "object") {
+    return { ...base, followPathKeys };
+  }
+
+  return { ...base, followPathKeys };
+}
 
 const ZERO_MOVE_DELTA: MoveDelta = { x: 0, y: 0, z: 0 };
 
@@ -219,8 +248,13 @@ export default function FuzzyCADHome() {
 
   const [activeScalePlan, setActiveScalePlan] = useState<{
     pathKey: string;
+    followPathKeys: string[];
   } | null>(null);
   const [scaleFactor, setScaleFactor] = useState(1);
+  const [scaleCandidateOpen, setScaleCandidateOpen] = useState(false);
+  const [scaleCandidatePathKeys, setScaleCandidatePathKeys] = useState<
+    string[]
+  >([]);
 
   // "Rotate" tool: click the part to rotate, then a second part whose
   // bounding-box center defines the pivot — "spin this around that other
@@ -244,6 +278,14 @@ export default function FuzzyCADHome() {
   const [rotateAxisDirection, setRotateAxisDirection] =
     useState<RotateAxisDirection>("y");
   const [rotateAngleRad, setRotateAngleRad] = useState(0);
+  const [rotateCandidateOpen, setRotateCandidateOpen] = useState(false);
+  const [rotateCandidatePathKeys, setRotateCandidatePathKeys] = useState<
+    string[]
+  >([]);
+  // Holds a rotate plan (minus followPathKeys) while the "related parts?"
+  // prompt is open — filled in once the user picks together-or-alone.
+  const [pendingRotatePlan, setPendingRotatePlan] =
+    useState<RotateBasePlan | null>(null);
 
   // "Distance" tool: click one part, then a second, to flag the gap between
   // them. The flag saves itself the moment both are picked — it's a
@@ -373,6 +415,28 @@ export default function FuzzyCADHome() {
       );
   }, [moveCandidatePathKeys, objectSummaries]);
 
+  const scaleCandidateSummaries = useMemo(() => {
+    return scaleCandidatePathKeys
+      .map((pathKey) =>
+        objectSummaries.find((summary) => summary.pathKey === pathKey),
+      )
+      .filter(
+        (summary): summary is AxialStretchObjectSummary =>
+          summary !== undefined,
+      );
+  }, [scaleCandidatePathKeys, objectSummaries]);
+
+  const rotateCandidateSummaries = useMemo(() => {
+    return rotateCandidatePathKeys
+      .map((pathKey) =>
+        objectSummaries.find((summary) => summary.pathKey === pathKey),
+      )
+      .filter(
+        (summary): summary is AxialStretchObjectSummary =>
+          summary !== undefined,
+      );
+  }, [rotateCandidatePathKeys, objectSummaries]);
+
   const heightReferencePathKey =
     heightCandidatePathKeys[0] ?? highlightedPathKey ?? null;
 
@@ -467,6 +531,8 @@ export default function FuzzyCADHome() {
     setMoveCandidatePathKeys([]);
     setActiveScalePlan(null);
     setScaleFactor(1);
+    setScaleCandidateOpen(false);
+    setScaleCandidatePathKeys([]);
     setDistanceFirstPathKey(null);
     setRotateFirstPathKey(null);
     setRotateAxisTargetPathKey(null);
@@ -474,6 +540,9 @@ export default function FuzzyCADHome() {
     setActiveRotatePlan(null);
     setRotateAxisDirection("y");
     setRotateAngleRad(0);
+    setRotateCandidateOpen(false);
+    setRotateCandidatePathKeys([]);
+    setPendingRotatePlan(null);
     closeSizeUncertaintyEditor();
   }
 
@@ -928,13 +997,11 @@ export default function FuzzyCADHome() {
     setLassoPathKeys([]);
 
     // Reuse the mate graph already fetched for the assembly (see
-    // usePartGraph) to find parts directly attached to the one being
-    // moved, so the user can decide whether they should move together
-    // instead of silently leaving the target disconnected.
+    // usePartGraph), plus same-source-Part-Studio siblings, to find parts
+    // related to the one being moved, so the user can decide whether they
+    // should move together instead of silently leaving them disconnected.
     const neighbors = partGraph
-      ? getLinkedGroup(pathKey, partGraph.byPathKey, 1).filter(
-          (key) => key !== pathKey,
-        )
+      ? getRelatedGroup(pathKey, partGraph.byPathKey)
       : [];
 
     if (neighbors.length > 0) {
@@ -1073,11 +1140,56 @@ export default function FuzzyCADHome() {
       return;
     }
 
+    const pathKey = selectedObjectSummary.pathKey;
+
     setActiveTool("scale");
     resetSizeOperationState();
     setLassoPathKeys([]);
-    setActiveScalePlan({ pathKey: selectedObjectSummary.pathKey });
+
+    const neighbors = partGraph
+      ? getRelatedGroup(pathKey, partGraph.byPathKey)
+      : [];
+
+    if (neighbors.length > 0) {
+      setScaleCandidatePathKeys(neighbors);
+      setScaleCandidateOpen(true);
+      return;
+    }
+
+    setActiveScalePlan({ pathKey, followPathKeys: [] });
     setScaleFactor(1);
+  }
+
+  function confirmScaleWithNeighbors() {
+    if (!selectedObjectSummary) {
+      return;
+    }
+
+    setActiveScalePlan({
+      pathKey: selectedObjectSummary.pathKey,
+      followPathKeys: scaleCandidatePathKeys,
+    });
+    setScaleFactor(1);
+    setScaleCandidateOpen(false);
+  }
+
+  function confirmScaleAlone() {
+    if (!selectedObjectSummary) {
+      return;
+    }
+
+    setActiveScalePlan({
+      pathKey: selectedObjectSummary.pathKey,
+      followPathKeys: [],
+    });
+    setScaleFactor(1);
+    setScaleCandidateOpen(false);
+  }
+
+  function cancelScaleCandidates() {
+    setScaleCandidateOpen(false);
+    setScaleCandidatePathKeys([]);
+    setActiveTool("select");
   }
 
   function cancelScale() {
@@ -1091,11 +1203,16 @@ export default function FuzzyCADHome() {
       return;
     }
 
+    const followPathKeys = activeScalePlan.followPathKeys;
+
     upsertScaleMark({
       pathKey: activeScalePlan.pathKey,
+      followPathKeys,
       factor: scaleFactor,
       previousValueLabel: "100%",
-      proposedValueLabel: `${Math.round(scaleFactor * 100)}%`,
+      proposedValueLabel: `${Math.round(scaleFactor * 100)}%${
+        followPathKeys.length > 0 ? ` (+${followPathKeys.length} linked)` : ""
+      }`,
     });
 
     setActiveScalePlan(null);
@@ -1171,7 +1288,7 @@ export default function FuzzyCADHome() {
    * whose bbox center becomes the pivot — then the angle handle appears so
    * the user can drag/type the angle before saving. */
   function handleRotatePick(pathKey: string | null) {
-    if (!pathKey || activeRotatePlan) {
+    if (!pathKey || activeRotatePlan || rotateCandidateOpen) {
       return;
     }
 
@@ -1186,14 +1303,12 @@ export default function FuzzyCADHome() {
       return;
     }
 
-    setActiveRotatePlan({
+    finalizeRotatePick({
       pathKey: rotateFirstPathKey,
       axisMode: "object",
       axisPathKey: pathKey,
     });
     setRotateFirstPathKey(null);
-    setRotateAxisDirection("y");
-    setRotateAngleRad(0);
   }
 
   function startRotateAxis() {
@@ -1207,7 +1322,7 @@ export default function FuzzyCADHome() {
    * geometry) place the two points whose line becomes the rotation axis —
    * the first point is the pivot. */
   function handleRotateAxisPick(pathKey: string | null) {
-    if (!pathKey || activeRotatePlan) {
+    if (!pathKey || activeRotatePlan || rotateCandidateOpen) {
       return;
     }
 
@@ -1250,7 +1365,7 @@ export default function FuzzyCADHome() {
       axisVectorRaw[2] / length,
     ];
 
-    setActiveRotatePlan({
+    finalizeRotatePick({
       pathKey: rotateAxisTargetPathKey,
       axisMode: "custom",
       pivotWorld: rotateAxisFirstPoint,
@@ -1258,7 +1373,63 @@ export default function FuzzyCADHome() {
     });
     setRotateAxisTargetPathKey(null);
     setRotateAxisFirstPoint(null);
+  }
+
+  // Shared by both rotate-entry flows (borrow-a-pivot-from-another-object,
+  // and pick-two-points-for-a-custom-axis): once the pivot/axis is known,
+  // check for mate-linked or same-source-Part-Studio siblings before
+  // committing the plan, same as Move/Scale.
+  function finalizeRotatePick(base: RotateBasePlan) {
+    setRotateAxisDirection("y");
     setRotateAngleRad(0);
+
+    const excludePathKeys =
+      base.axisMode === "object"
+        ? [base.pathKey, base.axisPathKey]
+        : [base.pathKey];
+    const neighbors = partGraph
+      ? getRelatedGroup(base.pathKey, partGraph.byPathKey).filter(
+          (key) => !excludePathKeys.includes(key),
+        )
+      : [];
+
+    if (neighbors.length > 0) {
+      setPendingRotatePlan(base);
+      setRotateCandidatePathKeys(neighbors);
+      setRotateCandidateOpen(true);
+      return;
+    }
+
+    setActiveRotatePlan(buildRotatePlan(base, []));
+  }
+
+  function confirmRotateWithNeighbors() {
+    if (!pendingRotatePlan) {
+      return;
+    }
+
+    setActiveRotatePlan(buildRotatePlan(pendingRotatePlan, rotateCandidatePathKeys));
+    setRotateCandidateOpen(false);
+    setRotateCandidatePathKeys([]);
+    setPendingRotatePlan(null);
+  }
+
+  function confirmRotateAlone() {
+    if (!pendingRotatePlan) {
+      return;
+    }
+
+    setActiveRotatePlan(buildRotatePlan(pendingRotatePlan, []));
+    setRotateCandidateOpen(false);
+    setRotateCandidatePathKeys([]);
+    setPendingRotatePlan(null);
+  }
+
+  function cancelRotateCandidates() {
+    setRotateCandidateOpen(false);
+    setRotateCandidatePathKeys([]);
+    setPendingRotatePlan(null);
+    setActiveTool("select");
   }
 
   function cancelRotate() {
@@ -1268,6 +1439,9 @@ export default function FuzzyCADHome() {
     setActiveRotatePlan(null);
     setRotateAxisDirection("y");
     setRotateAngleRad(0);
+    setRotateCandidateOpen(false);
+    setRotateCandidatePathKeys([]);
+    setPendingRotatePlan(null);
     setActiveTool("select");
   }
 
@@ -1277,26 +1451,31 @@ export default function FuzzyCADHome() {
     }
 
     const degrees = (rotateAngleRad * 180) / Math.PI;
+    const followPathKeys = activeRotatePlan.followPathKeys;
+    const linkedSuffix =
+      followPathKeys.length > 0 ? ` (+${followPathKeys.length} linked)` : "";
 
     if (activeRotatePlan.axisMode === "object") {
       upsertRotateMark({
         pathKey: activeRotatePlan.pathKey,
+        followPathKeys,
         axisMode: "object",
         axisPathKey: activeRotatePlan.axisPathKey,
         axisDirection: rotateAxisDirection,
         angleRad: rotateAngleRad,
         previousValueLabel: "current orientation",
-        proposedValueLabel: `${Math.round(degrees)}° around ${rotateAxisDirection.toUpperCase()}`,
+        proposedValueLabel: `${Math.round(degrees)}° around ${rotateAxisDirection.toUpperCase()}${linkedSuffix}`,
       });
     } else {
       upsertRotateMark({
         pathKey: activeRotatePlan.pathKey,
+        followPathKeys,
         axisMode: "custom",
         pivotWorld: activeRotatePlan.pivotWorld,
         axisVectorWorld: activeRotatePlan.axisVectorWorld,
         angleRad: rotateAngleRad,
         previousValueLabel: "current orientation",
-        proposedValueLabel: `${Math.round(degrees)}° around custom axis`,
+        proposedValueLabel: `${Math.round(degrees)}° around custom axis${linkedSuffix}`,
       });
     }
 
@@ -1750,6 +1929,9 @@ if (result.ok && result.state) {
           <div className={styles.manipulationReadout}>
             <span className={styles.manipulationValue}>
               Scale: {Math.round(scaleFactor * 100)}%
+              {activeScalePlan.followPathKeys.length > 0
+                ? ` (+${activeScalePlan.followPathKeys.length} linked)`
+                : ""}
             </span>
             <button
               type="button"
@@ -1826,6 +2008,9 @@ if (result.ok && result.state) {
           <div className={styles.manipulationReadout}>
             <span className={styles.manipulationValue}>
               Rotate: {Math.round((rotateAngleRad * 180) / Math.PI)}°
+              {activeRotatePlan.followPathKeys.length > 0
+                ? ` (+${activeRotatePlan.followPathKeys.length} linked)`
+                : ""}
             </span>
             {activeRotatePlan.axisMode === "object"
               ? (["x", "y", "z"] as const).map((axis) => (
@@ -1966,8 +2151,8 @@ if (result.ok && result.state) {
         {moveCandidateOpen ? (
           <OperationPreviewPanel
             operation="move"
-            title="Connected parts found"
-            description={`This part is mated to ${
+            title="Related parts found"
+            description={`This part is mated to, or shares a source part with, ${
               moveCandidatePathKeys.length
             } other part${
               moveCandidatePathKeys.length === 1 ? "" : "s"
@@ -1979,6 +2164,44 @@ if (result.ok && result.state) {
             onConfirm={confirmMoveWithNeighbors}
             onSecondaryConfirm={confirmMoveAlone}
             onCancel={cancelMoveCandidates}
+          />
+        ) : null}
+
+        {scaleCandidateOpen ? (
+          <OperationPreviewPanel
+            operation="scale"
+            title="Related parts found"
+            description={`This part is mated to, or shares a source part with, ${
+              scaleCandidatePathKeys.length
+            } other part${
+              scaleCandidatePathKeys.length === 1 ? "" : "s"
+            }. Scale them together, or just this one?`}
+            suggestedObjects={scaleCandidateSummaries.map(getObjectDisplayName)}
+            confirmLabel="Scale together"
+            secondaryConfirmLabel="Scale alone"
+            cancelLabel="Cancel"
+            onConfirm={confirmScaleWithNeighbors}
+            onSecondaryConfirm={confirmScaleAlone}
+            onCancel={cancelScaleCandidates}
+          />
+        ) : null}
+
+        {rotateCandidateOpen ? (
+          <OperationPreviewPanel
+            operation="rotate"
+            title="Related parts found"
+            description={`This part is mated to, or shares a source part with, ${
+              rotateCandidatePathKeys.length
+            } other part${
+              rotateCandidatePathKeys.length === 1 ? "" : "s"
+            }. Rotate them together, or just this one?`}
+            suggestedObjects={rotateCandidateSummaries.map(getObjectDisplayName)}
+            confirmLabel="Rotate together"
+            secondaryConfirmLabel="Rotate alone"
+            cancelLabel="Cancel"
+            onConfirm={confirmRotateWithNeighbors}
+            onSecondaryConfirm={confirmRotateAlone}
+            onCancel={cancelRotateCandidates}
           />
         ) : null}
       </div>

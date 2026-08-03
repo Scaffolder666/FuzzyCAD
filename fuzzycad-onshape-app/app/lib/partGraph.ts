@@ -177,6 +177,57 @@ export function buildPartNodeGraph(
   return { nodes, byPathKey, byMeshUuid, scale, residualStats };
 }
 
+/**
+ * Other parts instanced from the SAME Onshape source Part Studio/part as
+ * startPathKey (e.g. 3 identical leg assemblies, a handful of duplicate
+ * screws) — a different notion of "related" than mate connections: these
+ * parts don't have to be touching or attached to be worth proposing
+ * together, they just have to be the same design. sourceKey is already
+ * computed server-side (relationship-graph route) and flows straight
+ * through to PartNode.instance — no extra Onshape API call needed here.
+ */
+export function getSameSourceGroup(
+  startPathKey: string,
+  byPathKey: Map<string, PartNode>,
+): string[] {
+  const sourceKey = byPathKey.get(startPathKey)?.instance?.sourceKey;
+
+  if (!sourceKey) {
+    return [];
+  }
+
+  const out: string[] = [];
+
+  for (const node of byPathKey.values()) {
+    if (node.pathKey === startPathKey) {
+      continue;
+    }
+
+    if (node.instance?.sourceKey === sourceKey) {
+      out.push(node.pathKey);
+    }
+  }
+
+  return out;
+}
+
+/**
+ * The union of a part's direct mate neighbors and its same-source-Part-Studio
+ * siblings — everything worth offering as "move/scale/rotate together" when
+ * a tool is about to act on a single part. Deduped, excludes startPathKey.
+ */
+export function getRelatedGroup(
+  startPathKey: string,
+  byPathKey: Map<string, PartNode>,
+): string[] {
+  const mateNeighbors = getLinkedGroup(startPathKey, byPathKey, 1).filter(
+    (key) => key !== startPathKey,
+  );
+  const sameSource = getSameSourceGroup(startPathKey, byPathKey);
+
+  return Array.from(new Set([...mateNeighbors, ...sameSource]));
+}
+
 export function getLinkedGroup(
   startPathKey: string,
   byPathKey: Map<string, PartNode>,

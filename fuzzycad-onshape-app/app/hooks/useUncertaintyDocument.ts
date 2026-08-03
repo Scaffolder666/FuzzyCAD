@@ -231,6 +231,7 @@ export function useUncertaintyDocument(source: FuzzyCADUncertaintySource) {
 
   function upsertScaleMark(input: {
     pathKey: string;
+    followPathKeys: string[];
     factor: number;
     previousValueLabel: string;
     proposedValueLabel: string;
@@ -311,6 +312,7 @@ export function useUncertaintyDocument(source: FuzzyCADUncertaintySource) {
   function upsertRotateMark(
     input: {
       pathKey: string;
+      followPathKeys: string[];
       angleRad: number;
       previousValueLabel: string;
       proposedValueLabel: string;

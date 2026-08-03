@@ -32,45 +32,57 @@ export type RotatePreviewSession = {
 };
 
 /**
- * A rigid rotation ghost preview for the Rotate tool: the target is cloned
- * whole (same dashed-edge look as the other ghost previews) and spun around
- * a caller-resolved pivot + axis — borrowed from a different object's
- * center in "object" mode, or from two picked points in "custom" mode —
- * instead of the target's own origin, since the whole point of this tool
- * is rotating around something else.
+ * A rigid rotation ghost preview for the Rotate tool: the target (plus any
+ * mate-linked or same-source-part followers) is cloned whole (same
+ * dashed-edge look as the other ghost previews) and spun together around a
+ * caller-resolved pivot + axis — borrowed from a different object's center
+ * in "object" mode, or from two picked points in "custom" mode — instead
+ * of the target's own origin, since the whole point of this tool is
+ * rotating around something else. Followers share the exact same pivot and
+ * axis as the primary target, not their own.
  */
 export function createRotatePreviewSession(
   scene: THREE.Object3D,
   pathKey: string,
   pivotWorld: THREE.Vector3,
   axisWorld: THREE.Vector3,
+  followPathKeys: string[] = [],
 ): RotatePreviewSession | null {
-  const original = findObjectsByPathKeys(scene, [pathKey])[0];
-
-  if (!original) {
-    return null;
-  }
-
   const group = new THREE.Group();
   group.name = "FuzzyCAD Rotate Preview";
   group.userData.fuzzycadPreview = true;
 
-  const clone = cloneObjectForPreview(scene, original, "rotate");
-  group.add(clone);
+  const clones: RotateClone[] = [];
+
+  for (const key of [pathKey, ...followPathKeys]) {
+    const original = findObjectsByPathKeys(scene, [key])[0];
+
+    if (!original) {
+      continue;
+    }
+
+    const clone = cloneObjectForPreview(scene, original, "rotate");
+
+    group.add(clone);
+
+    clones.push({
+      pathKey: key,
+      clone,
+      originalLocalPosition: clone.position.clone(),
+      originalLocalQuaternion: clone.quaternion.clone(),
+      originalLocalScale: clone.scale.clone(),
+    });
+  }
+
+  if (clones.length === 0) {
+    return null;
+  }
 
   return {
     group,
     pivotWorld: pivotWorld.clone(),
     axisWorld: axisWorld.clone().normalize(),
-    clones: [
-      {
-        pathKey,
-        clone,
-        originalLocalPosition: clone.position.clone(),
-        originalLocalQuaternion: clone.quaternion.clone(),
-        originalLocalScale: clone.scale.clone(),
-      },
-    ],
+    clones,
   };
 }
 

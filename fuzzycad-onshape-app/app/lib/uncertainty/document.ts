@@ -109,14 +109,18 @@ export type MoveUncertaintyAnnotation = BaseAnnotationFields & {
 };
 
 /**
- * "Scale": a proposed uniform resize of the target, grown/shrunk around its
- * own bounding-box center rather than along a single local axis — for "this
+ * "Scale": a proposed uniform resize of the target, grown/shrunk around a
+ * bounding-box center rather than along a single local axis — for "this
  * whole part might need to be bigger/smaller" instead of "this one
- * dimension changes."
+ * dimension changes." followPathKeys are other parts (mate-linked, or
+ * instanced from the same source Part Studio) growing/shrinking together
+ * around the SAME shared pivot — the combined bounding-box center of the
+ * whole group, not just the primary target's own center.
  */
 export type ScaleUncertaintyAnnotation = BaseAnnotationFields & {
   type: "scale";
   factor: number;
+  followPathKeys: string[];
   previousValueLabel: string;
   proposedValueLabel: string;
 };
@@ -165,6 +169,8 @@ export type RotateUncertaintyAnnotation = BaseAnnotationFields & {
   /** Set when axisMode is "custom" — world-space pivot and unit axis direction. */
   pivotWorld: [number, number, number] | null;
   axisVectorWorld: [number, number, number] | null;
+  /** Other parts (mate-linked, or instanced from the same source Part Studio) rotating together around the SAME pivot + axis. */
+  followPathKeys: string[];
   angleRad: number;
   previousValueLabel: string;
   proposedValueLabel: string;
@@ -749,6 +755,7 @@ export function makeScaleAnnotationId(pathKey: string) {
 
 function createScaleAnnotation(input: {
   pathKey: string;
+  followPathKeys: string[];
   factor: number;
   previousValueLabel: string;
   proposedValueLabel: string;
@@ -764,16 +771,20 @@ function createScaleAnnotation(input: {
   }
 
   const now = new Date().toISOString();
+  const followPathKeys = normalizePathKeys(input.followPathKeys).filter(
+    (pathKey) => pathKey !== input.pathKey,
+  );
 
   return {
     id: makeScaleAnnotationId(input.pathKey),
     type: "scale",
     target: {
-      pathKeys: [input.pathKey],
+      pathKeys: [input.pathKey, ...followPathKeys],
       referencePathKey: input.pathKey,
-      scope: "single",
+      scope: followPathKeys.length > 0 ? "group" : "single",
     },
     factor: input.factor,
+    followPathKeys,
     previousValueLabel: input.previousValueLabel,
     proposedValueLabel: input.proposedValueLabel,
     comment: input.comment,
@@ -790,6 +801,7 @@ export function upsertScale(
   document: FuzzyCADUncertaintyDocument,
   input: {
     pathKey: string;
+    followPathKeys: string[];
     factor: number;
     previousValueLabel: string;
     proposedValueLabel: string;
@@ -801,6 +813,7 @@ export function upsertScale(
 
   const nextAnnotation = createScaleAnnotation({
     pathKey: input.pathKey,
+    followPathKeys: input.followPathKeys,
     factor: input.factor,
     previousValueLabel: input.previousValueLabel,
     proposedValueLabel: input.proposedValueLabel,
@@ -826,6 +839,7 @@ export function upsertScale(
 
 export type ScalePreview = {
   pathKey: string;
+  followPathKeys: string[];
   factor: number;
 };
 
@@ -840,6 +854,7 @@ export function toScalePreviews(
     )
     .map((annotation) => ({
       pathKey: annotation.target.referencePathKey,
+      followPathKeys: annotation.followPathKeys,
       factor: annotation.factor,
     }));
 }
@@ -1072,6 +1087,7 @@ export type RotateAxisInput =
 function createRotateAnnotation(
   input: {
     pathKey: string;
+    followPathKeys: string[];
     angleRad: number;
     previousValueLabel: string;
     proposedValueLabel: string;
@@ -1095,10 +1111,15 @@ function createRotateAnnotation(
   }
 
   const now = new Date().toISOString();
+  const excluded =
+    input.axisMode === "object" ? [input.pathKey, input.axisPathKey] : [input.pathKey];
+  const followPathKeys = normalizePathKeys(input.followPathKeys).filter(
+    (pathKey) => !excluded.includes(pathKey),
+  );
   const targetPathKeys =
     input.axisMode === "object"
-      ? [input.pathKey, input.axisPathKey]
-      : [input.pathKey];
+      ? [input.pathKey, input.axisPathKey, ...followPathKeys]
+      : [input.pathKey, ...followPathKeys];
 
   return {
     id: makeRotateAnnotationId(input.pathKey),
@@ -1113,6 +1134,7 @@ function createRotateAnnotation(
     axisDirection: input.axisMode === "object" ? input.axisDirection : null,
     pivotWorld: input.axisMode === "custom" ? input.pivotWorld : null,
     axisVectorWorld: input.axisMode === "custom" ? input.axisVectorWorld : null,
+    followPathKeys,
     angleRad: input.angleRad,
     previousValueLabel: input.previousValueLabel,
     proposedValueLabel: input.proposedValueLabel,
@@ -1130,6 +1152,7 @@ export function upsertRotate(
   document: FuzzyCADUncertaintyDocument,
   input: {
     pathKey: string;
+    followPathKeys: string[];
     angleRad: number;
     previousValueLabel: string;
     proposedValueLabel: string;
@@ -1163,6 +1186,7 @@ export function upsertRotate(
 
 export type RotatePreview = {
   pathKey: string;
+  followPathKeys: string[];
   axisMode: RotateAxisMode;
   axisPathKey: string | null;
   axisDirection: RotateAxisDirection | null;
@@ -1182,6 +1206,7 @@ export function toRotatePreviews(
     )
     .map((annotation) => ({
       pathKey: annotation.target.referencePathKey,
+      followPathKeys: annotation.followPathKeys,
       axisMode: annotation.axisMode,
       axisPathKey: annotation.axisPathKey,
       axisDirection: annotation.axisDirection,

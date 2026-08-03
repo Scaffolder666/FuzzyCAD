@@ -724,7 +724,14 @@ function ScaleCard({
         </span>
       </div>
 
-      <div className={styles.cardTitle}>{annotation.target.referencePathKey}</div>
+      <div className={styles.cardTitle}>
+        {annotation.target.referencePathKey}
+        {annotation.followPathKeys.length > 0 ? (
+          <span className={styles.proposalModeTag}>
+            +{annotation.followPathKeys.length} linked
+          </span>
+        ) : null}
+      </div>
 
       <div className={styles.valueLine}>
         <span className={styles.valueOld}>{annotation.previousValueLabel}</span>
@@ -807,6 +814,11 @@ function RotateCard({
             ? `around ${annotation.axisPathKey}`
             : "around custom axis"}
         </span>
+        {annotation.followPathKeys.length > 0 ? (
+          <span className={styles.proposalModeTag}>
+            +{annotation.followPathKeys.length} linked
+          </span>
+        ) : null}
       </div>
 
       <div className={styles.valueLine}>

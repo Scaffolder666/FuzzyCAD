@@ -136,25 +136,33 @@ export type MovePreview = {
   deltaWorld: [number, number, number];
 };
 
-/** A single-object plan for the "Scale" tool's active drag session. */
+/** A single-object-plus-followers plan for the "Scale" tool's active drag session. */
 export type ScaleRolePlan = {
   pathKey: string;
+  followPathKeys: string[];
 };
 
 /** A saved scale proposal's factor, structurally the same shape as document.ts's. */
 export type ScalePreview = {
   pathKey: string;
+  followPathKeys: string[];
   factor: number;
 };
 
 /** Which of the object's or a custom point's coordinate frame the Rotate axis comes from — structurally the same as document.ts's RotateAxisMode. */
 export type RotateAxisMode = "object" | "custom";
 
-/** A plan for the "Rotate" tool's active drag session — either borrows a pivot from another object ("object" mode) or from two picked points ("custom" mode). */
+/** A plan for the "Rotate" tool's active drag session — either borrows a pivot from another object ("object" mode) or from two picked points ("custom" mode). followPathKeys share the same pivot/axis as the primary target. */
 export type RotateRolePlan =
-  | { pathKey: string; axisMode: "object"; axisPathKey: string }
   | {
       pathKey: string;
+      followPathKeys: string[];
+      axisMode: "object";
+      axisPathKey: string;
+    }
+  | {
+      pathKey: string;
+      followPathKeys: string[];
       axisMode: "custom";
       pivotWorld: [number, number, number];
       axisVectorWorld: [number, number, number];
@@ -163,6 +171,7 @@ export type RotateRolePlan =
 /** A saved rotate proposal's axis + angle, structurally the same shape as document.ts's. */
 export type RotatePreview = {
   pathKey: string;
+  followPathKeys: string[];
   axisMode: RotateAxisMode;
   axisPathKey: string | null;
   axisDirection: RotateAxisDirection | null;
@@ -1514,32 +1523,66 @@ function Model({
   // Direction from the object's center toward a corner of its bounding
   // box, and the distance to that corner at factor 1 — used both as the
   // scale handle's position and as the pivot/axis for the ghost preview.
+  // With followers, the pivot is the combined bounding-box center of the
+  // whole group (matching createScalePreviewSession's pivot), so the
+  // handle and the ghost scale around the same point.
   const activeScaleFrame = useMemo(() => {
     if (!activeScaleSummary) {
       return null;
     }
 
-    const halfSize = new THREE.Vector3(
+    const followSummaries = (scalePlan?.followPathKeys ?? [])
+      .map((key) => objectSummaries.find((item) => item.pathKey === key))
+      .filter((item): item is AxialStretchObjectSummary => Boolean(item));
+
+    const box = new THREE.Box3();
+    const primaryHalfSize = new THREE.Vector3(
       ...activeScaleSummary.aabbSizeWorld,
     ).multiplyScalar(0.5);
+    const primaryCenter = new THREE.Vector3(
+      ...activeScaleSummary.aabbCenterWorld,
+    );
+
+    box.union(
+      new THREE.Box3(
+        primaryCenter.clone().sub(primaryHalfSize),
+        primaryCenter.clone().add(primaryHalfSize),
+      ),
+    );
+
+    for (const summary of followSummaries) {
+      const center = new THREE.Vector3(...summary.aabbCenterWorld);
+      const halfSize = new THREE.Vector3(...summary.aabbSizeWorld).multiplyScalar(
+        0.5,
+      );
+
+      box.union(
+        new THREE.Box3(center.clone().sub(halfSize), center.clone().add(halfSize)),
+      );
+    }
+
+    const pivotWorld = box.getCenter(new THREE.Vector3());
+    const halfSize = primaryHalfSize;
     const referenceLength = Math.max(halfSize.length(), 1e-6);
     const axisWorld =
       halfSize.lengthSq() > 1e-12
         ? halfSize.clone().normalize()
         : new THREE.Vector3(1, 1, 1).normalize();
-    const pivotWorld = new THREE.Vector3(
-      ...activeScaleSummary.aabbCenterWorld,
-    );
 
     return { pivotWorld, axisWorld, referenceLength };
-  }, [activeScaleSummary]);
+  }, [activeScaleSummary, scalePlan, objectSummaries]);
 
   const scalePreviewSession = useMemo(() => {
     if (!scalePlan) {
       return null;
     }
 
-    return createScalePreviewSession(scene, objectSummaries, scalePlan.pathKey);
+    return createScalePreviewSession(
+      scene,
+      objectSummaries,
+      scalePlan.pathKey,
+      scalePlan.followPathKeys,
+    );
   }, [scene, objectSummaries, scalePlan]);
 
   useEffect(() => {
@@ -1594,6 +1637,7 @@ function Model({
           scene,
           objectSummaries,
           preview.pathKey,
+          preview.followPathKeys,
         );
 
         if (!session) {
@@ -1605,7 +1649,7 @@ function Model({
         return {
           session,
           factor: preview.factor,
-          pathKeys: [preview.pathKey],
+          pathKeys: [preview.pathKey, ...preview.followPathKeys],
         };
       })
       .filter(
@@ -1770,6 +1814,7 @@ function Model({
       rotatePlan.pathKey,
       activeRotateResolvedFrame.pivotWorld,
       activeRotateResolvedFrame.axisWorld,
+      rotatePlan.followPathKeys,
     );
   }, [scene, rotatePlan, activeRotateResolvedFrame]);
 
@@ -1849,6 +1894,7 @@ function Model({
           preview.pathKey,
           frame.pivotWorld,
           frame.axisWorld,
+          preview.followPathKeys,
         );
 
         if (!session) {
@@ -1862,8 +1908,8 @@ function Model({
           angleRad: preview.angleRad,
           pathKeys:
             preview.axisMode === "object" && preview.axisPathKey
-              ? [preview.pathKey, preview.axisPathKey]
-              : [preview.pathKey],
+              ? [preview.pathKey, preview.axisPathKey, ...preview.followPathKeys]
+              : [preview.pathKey, ...preview.followPathKeys],
         };
       })
       .filter(
@@ -2456,13 +2502,17 @@ function Model({
     [movePreviews],
   );
 
-  // Every open scale proposal's target gets the same marker treatment too.
+  // Every open scale proposal's target (and any linked followers) gets the
+  // same marker treatment too.
   const scaleMarkerTargets = useMemo<ScaleMarkerTarget[]>(
     () =>
-      (scalePreviews ?? []).map((preview) => ({
-        pathKey: preview.pathKey,
-        factor: preview.factor,
-      })),
+      (scalePreviews ?? []).flatMap((preview) => [
+        { pathKey: preview.pathKey, factor: preview.factor },
+        ...preview.followPathKeys.map((pathKey) => ({
+          pathKey,
+          factor: preview.factor,
+        })),
+      ]),
     [scalePreviews],
   );
 
@@ -2486,14 +2536,16 @@ function Model({
   );
 
   // Both the rotated object and its axis anchor get marked, so the pivot
-  // reads as "part of this flag" even though it never moves itself.
+  // reads as "part of this flag" even though it never moves itself. Any
+  // linked followers rotating along with it get marked too.
   const rotateMarkerTargets = useMemo<RotateMarkerTarget[]>(
     () =>
-      (rotatePreviews ?? []).flatMap((preview) =>
-        preview.axisMode === "object" && preview.axisPathKey
+      (rotatePreviews ?? []).flatMap((preview) => [
+        ...(preview.axisMode === "object" && preview.axisPathKey
           ? [{ pathKey: preview.pathKey }, { pathKey: preview.axisPathKey }]
-          : [{ pathKey: preview.pathKey }],
-      ),
+          : [{ pathKey: preview.pathKey }]),
+        ...preview.followPathKeys.map((pathKey) => ({ pathKey })),
+      ]),
     [rotatePreviews],
   );
 
