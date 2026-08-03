@@ -3247,7 +3247,14 @@ function Model({
       />
 
       {selectionBoxHelpers.map(({ key, helper }) => (
-        <primitive key={key} object={helper} />
+        // dispose={null}: the useEffect below already disposes this
+        // helper's geometry/material when selectionBoxHelpers changes —
+        // without this, react-three-fiber's own auto-dispose-on-unmount
+        // ALSO fires (a <primitive> unmounts every time the memo produces
+        // a new helper), double-disposing the same objects and crashing
+        // deep inside Three.js's own traversal ("X.dispose is not a
+        // function") on the second pass.
+        <primitive key={key} object={helper} dispose={null} />
       ))}
 
       {roleBadges.map((badge) => (
