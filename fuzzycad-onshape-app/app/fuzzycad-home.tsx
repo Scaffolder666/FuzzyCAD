@@ -1571,6 +1571,23 @@ function normalizeLoadedAnnotation(
     } as unknown as FuzzyCADUncertaintyAnnotation;
   }
 
+  // Move/Scale/Rotate gained followPathKeys (related-geometry group
+  // operations) after these tools already existed — project state saved
+  // to Onshape before that change won't have the field, so it must be
+  // backfilled rather than left undefined.
+  if (
+    annotation.type === "move" ||
+    annotation.type === "scale" ||
+    annotation.type === "rotate"
+  ) {
+    return {
+      ...annotation,
+      followPathKeys: Array.isArray(annotation.followPathKeys)
+        ? annotation.followPathKeys
+        : [],
+    } as unknown as FuzzyCADUncertaintyAnnotation;
+  }
+
   return annotation as unknown as FuzzyCADUncertaintyAnnotation;
 }
 
