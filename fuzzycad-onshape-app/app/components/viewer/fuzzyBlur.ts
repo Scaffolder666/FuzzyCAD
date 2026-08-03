@@ -25,6 +25,11 @@ const FUZZY_ORIGINAL_MATERIALS = "__fuzzycad_original_materials__";
 const FUZZY_ACTIVE_MATERIAL = "__fuzzycad_active_material__";
 const FUZZY_ORIGINAL_RENDER_ORDER = "__fuzzycad_original_render_order__";
 
+// Kept light relative to the sketchy outline (below), which is now the
+// primary "this is flagged" signal — transparency here is just enough to
+// keep the object reading as solid, not something to lean on for clarity.
+const MARKER_FILL_OPACITY = 0.1;
+
 function confidenceToStrength(level: ConfidenceLevel) {
   if (level === "low") {
     return 1.0;
@@ -273,9 +278,82 @@ export type RotateMarkerTarget = {
   pathKey: string;
 };
 
+// Deterministic pseudo-random in [0, 1) — same input always jitters the
+// same way, so an edge's wobble doesn't change every time the overlay gets
+// rebuilt (hover on/off, a different mark selected, etc).
+function hashToUnit(value: number) {
+  const x = Math.sin(value) * 43758.5453123;
+
+  return x - Math.floor(x);
+}
+
+const SKETCH_SEGMENTS = 5;
+const SKETCH_JITTER_RATIO = 0.05;
+const SKETCH_JITTER_CAP_METERS = 0.0025;
+
 /**
- * A clean, solid-colored edge wireframe over the real object — like
- * SketchUp's blueprint-style preview line work — the same treatment every
+ * Turns each clean straight edge from EdgesGeometry into a wobbly
+ * hand-drawn stroke — like SketchUp's "sketchy edges" style — so a flagged
+ * object's outline itself reads as uncertain/approximate instead of a
+ * precise, confident line. Corners (the true edge endpoints) stay put so
+ * edges still meet cleanly; only the middle of each edge bows.
+ */
+function buildSketchyEdgePositions(positions: ArrayLike<number>) {
+  const sketchy: number[] = [];
+  const a = new THREE.Vector3();
+  const b = new THREE.Vector3();
+  const dir = new THREE.Vector3();
+  const reference = new THREE.Vector3();
+  const perpA = new THREE.Vector3();
+  const perpB = new THREE.Vector3();
+
+  for (let i = 0; i + 5 < positions.length; i += 6) {
+    a.set(positions[i], positions[i + 1], positions[i + 2]);
+    b.set(positions[i + 3], positions[i + 4], positions[i + 5]);
+
+    const length = a.distanceTo(b);
+
+    if (length < 1e-9) {
+      continue;
+    }
+
+    dir.copy(b).sub(a).divideScalar(length);
+    reference.set(0, 1, 0);
+
+    if (Math.abs(dir.dot(reference)) > 0.9) {
+      reference.set(1, 0, 0);
+    }
+
+    perpA.crossVectors(dir, reference).normalize();
+    perpB.crossVectors(dir, perpA).normalize();
+
+    const jitter = Math.min(length * SKETCH_JITTER_RATIO, SKETCH_JITTER_CAP_METERS);
+    const seed = a.x * 12.9898 + a.y * 78.233 + a.z * 37.719 + b.x * 4.898 + b.y * 19.73;
+
+    let previous = a;
+
+    for (let step = 1; step <= SKETCH_SEGMENTS; step += 1) {
+      const point = a.clone().lerp(b, step / SKETCH_SEGMENTS);
+
+      if (step !== SKETCH_SEGMENTS) {
+        const n1 = hashToUnit(seed + step * 13.37) * 2 - 1;
+        const n2 = hashToUnit(seed + step * 7.91 + 51.3) * 2 - 1;
+
+        point.addScaledVector(perpA, n1 * jitter);
+        point.addScaledVector(perpB, n2 * jitter * 0.5);
+      }
+
+      sketchy.push(previous.x, previous.y, previous.z, point.x, point.y, point.z);
+      previous = point;
+    }
+  }
+
+  return new Float32Array(sketchy);
+}
+
+/**
+ * A hand-drawn, sketchy-style edge wireframe over the real object — the
+ * wobble itself is the uncertainty signal — the same treatment every
  * annotation type uses now, so "this object has an open mark" always reads
  * the same way regardless of which tool flagged it.
  */
@@ -304,6 +382,19 @@ function createWireframeMarkerOverlay(object: THREE.Object3D, colorHex: number) 
       .multiply(child.matrixWorld);
 
     const edgesGeometry = new THREE.EdgesGeometry(child.geometry, 25);
+    const sketchyPositions = buildSketchyEdgePositions(
+      edgesGeometry.attributes.position.array,
+    );
+
+    edgesGeometry.dispose();
+
+    const sketchyGeometry = new THREE.BufferGeometry();
+
+    sketchyGeometry.setAttribute(
+      "position",
+      new THREE.BufferAttribute(sketchyPositions, 3),
+    );
+
     const material = new THREE.LineBasicMaterial({
       color: colorHex,
       transparent: true,
@@ -312,7 +403,7 @@ function createWireframeMarkerOverlay(object: THREE.Object3D, colorHex: number) 
       depthWrite: false,
     });
 
-    const line = new THREE.LineSegments(edgesGeometry, material);
+    const line = new THREE.LineSegments(sketchyGeometry, material);
 
     line.matrixAutoUpdate = false;
     line.matrix.copy(childToObjectMatrix);
@@ -438,7 +529,7 @@ export function applyFuzzyConfidence(
         continue;
       }
 
-      applyTintedMaterials(object, SIZE_MARKER_COLOR, 0.16);
+      applyTintedMaterials(object, SIZE_MARKER_COLOR, MARKER_FILL_OPACITY);
 
       const overlay = createWireframeMarkerOverlay(object, SIZE_MARKER_COLOR);
 
@@ -452,7 +543,7 @@ export function applyFuzzyConfidence(
     const proposalTarget = proposalByPathKey.get(pathKey);
 
     if (proposalTarget) {
-      applyTintedMaterials(object, PROPOSAL_MARKER_COLOR, 0.16);
+      applyTintedMaterials(object, PROPOSAL_MARKER_COLOR, MARKER_FILL_OPACITY);
 
       const overlay = createWireframeMarkerOverlay(object, PROPOSAL_MARKER_COLOR);
 
@@ -466,7 +557,7 @@ export function applyFuzzyConfidence(
     const moveTarget = moveByPathKey.get(pathKey);
 
     if (moveTarget) {
-      applyTintedMaterials(object, MOVE_MARKER_COLOR, 0.16);
+      applyTintedMaterials(object, MOVE_MARKER_COLOR, MARKER_FILL_OPACITY);
 
       const overlay = createWireframeMarkerOverlay(object, MOVE_MARKER_COLOR);
 
@@ -480,7 +571,7 @@ export function applyFuzzyConfidence(
     const scaleTarget = scaleByPathKey.get(pathKey);
 
     if (scaleTarget) {
-      applyTintedMaterials(object, SCALE_MARKER_COLOR, 0.16);
+      applyTintedMaterials(object, SCALE_MARKER_COLOR, MARKER_FILL_OPACITY);
 
       const overlay = createWireframeMarkerOverlay(object, SCALE_MARKER_COLOR);
 
@@ -494,7 +585,7 @@ export function applyFuzzyConfidence(
     const distanceTarget = distanceByPathKey.get(pathKey);
 
     if (distanceTarget) {
-      applyTintedMaterials(object, distanceTarget.colorHex, 0.16);
+      applyTintedMaterials(object, distanceTarget.colorHex, MARKER_FILL_OPACITY);
 
       const overlay = createWireframeMarkerOverlay(object, distanceTarget.colorHex);
 
@@ -511,7 +602,7 @@ export function applyFuzzyConfidence(
       continue;
     }
 
-    applyTintedMaterials(object, ROTATE_MARKER_COLOR, 0.16);
+    applyTintedMaterials(object, ROTATE_MARKER_COLOR, MARKER_FILL_OPACITY);
 
     const overlay = createWireframeMarkerOverlay(object, ROTATE_MARKER_COLOR);
 

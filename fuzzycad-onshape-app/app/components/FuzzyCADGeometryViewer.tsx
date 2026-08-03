@@ -473,9 +473,33 @@ const DISTANCE_DEFAULT_WIDTH = DISTANCE_CONFIDENCE_WIDTH.medium;
 // the confident (thin) line regardless of what confidence was set before.
 const DISTANCE_ANSWERED_WIDTH = DISTANCE_CONFIDENCE_WIDTH.high;
 
-// How long one full there-and-back cycle of a saved-preview loop animation
-// (move ghosts, propose/stretch ghosts) takes, in seconds.
+// How long one full cycle of a saved-preview loop animation (move ghosts,
+// propose/stretch ghosts) takes, in seconds.
 const PREVIEW_LOOP_PERIOD_SECONDS = 2.6;
+
+// Fraction of the cycle spent holding at the fully-proposed state before
+// the instant reset — the rest is the eased ramp toward it.
+const PREVIEW_LOOP_HOLD_FRACTION = 0.15;
+
+/**
+ * 0 (original) -> 1 (proposed) interpolant for a saved-preview loop
+ * animation. Eases toward the proposed state, holds there briefly so it
+ * actually registers, then snaps straight back to 0 and repeats — no
+ * animated "return trip" back to the original state, just a clean reset.
+ */
+function getPreviewLoopT(elapsedTime: number) {
+  const cyclePosition =
+    (elapsedTime % PREVIEW_LOOP_PERIOD_SECONDS) / PREVIEW_LOOP_PERIOD_SECONDS;
+  const rampFraction = 1 - PREVIEW_LOOP_HOLD_FRACTION;
+
+  if (cyclePosition >= rampFraction) {
+    return 1;
+  }
+
+  const rampT = cyclePosition / rampFraction;
+
+  return 1 - (1 - rampT) ** 3;
+}
 
 // Matches the blue emissive glow applyPathHighlight uses for a selection, so
 // the bounding box and the glow read as the same "this is selected" signal.
@@ -1255,9 +1279,7 @@ function Model({
       return;
     }
 
-    const phase =
-      (clock.elapsedTime / PREVIEW_LOOP_PERIOD_SECONDS) * Math.PI * 2;
-    const loopT = (Math.sin(phase) + 1) / 2;
+    const loopT = getPreviewLoopT(clock.elapsedTime);
 
     for (const entry of entries) {
       const active = isPathKeysUnderInspection(
@@ -1431,9 +1453,7 @@ function Model({
       return;
     }
 
-    const phase =
-      (clock.elapsedTime / PREVIEW_LOOP_PERIOD_SECONDS) * Math.PI * 2;
-    const loopT = (Math.sin(phase) + 1) / 2;
+    const loopT = getPreviewLoopT(clock.elapsedTime);
 
     for (const entry of entries) {
       const active = isPathKeysUnderInspection(
@@ -1628,9 +1648,7 @@ function Model({
       return;
     }
 
-    const phase =
-      (clock.elapsedTime / PREVIEW_LOOP_PERIOD_SECONDS) * Math.PI * 2;
-    const loopT = (Math.sin(phase) + 1) / 2;
+    const loopT = getPreviewLoopT(clock.elapsedTime);
 
     for (const entry of entries) {
       const active = isPathKeysUnderInspection(
@@ -1888,9 +1906,7 @@ function Model({
       return;
     }
 
-    const phase =
-      (clock.elapsedTime / PREVIEW_LOOP_PERIOD_SECONDS) * Math.PI * 2;
-    const loopT = (Math.sin(phase) + 1) / 2;
+    const loopT = getPreviewLoopT(clock.elapsedTime);
 
     for (const entry of entries) {
       const active = isPathKeysUnderInspection(
@@ -2237,9 +2253,7 @@ function Model({
       return;
     }
 
-    const phase =
-      (clock.elapsedTime / PREVIEW_LOOP_PERIOD_SECONDS) * Math.PI * 2;
-    const loopT = (Math.sin(phase) + 1) / 2;
+    const loopT = getPreviewLoopT(clock.elapsedTime);
 
     for (const entry of entries) {
       const active = isPathKeysUnderInspection(
