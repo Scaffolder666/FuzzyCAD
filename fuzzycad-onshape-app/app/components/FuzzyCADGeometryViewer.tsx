@@ -483,14 +483,17 @@ function getBadgePosition(
 // Distinct accent colors per proposal-family tool, so a ruler/marker reads
 // as "this is a length change" vs "this is a move" at a glance instead of
 // looking like the same annotation type in the same color.
-const PROPOSAL_ACCENT_COLOR_MUTED = "#fdba74";
 const MOVE_ACCENT_COLOR = "#7c3aed";
-const MOVE_ACCENT_COLOR_MUTED = "#c4b5fd";
 const SCALE_ACCENT_COLOR = "#0d9488";
-const SCALE_ACCENT_COLOR_MUTED = "#99f6e4";
 const ROTATE_ACCENT_COLOR = "#4f46e5";
 const ROTATE_ACCENT_COLOR_MUTED = "#c7d2fe";
-const BEND_ACCENT_COLOR = "#db2777";
+// The Proposed-family tools' handles/markers stay in their own accent
+// colors (so a flagged object still tells you which tool touched it), but
+// the ruler/badge that shows the actual proposed value reads clearer in
+// plain near-black than in a light tint — legibility over color-coding
+// for the number that matters most.
+const RULER_COLOR = "#111827";
+const RULER_COLOR_MUTED = "#6b7280";
 const DISTANCE_ACCENT_COLOR = "#0ea5e9";
 const DISTANCE_ACCENT_COLOR_HEX = 0x0ea5e9;
 // Once someone answers a distance flag, its ruler switches to this color —
@@ -3212,6 +3215,7 @@ function Model({
               fromWorld={segment.from}
               toWorld={segment.to}
               deltaMeters={segment.deltaMeters}
+              color={RULER_COLOR}
             />
           ))
         : null}
@@ -3222,7 +3226,7 @@ function Model({
           fromWorld={ruler.from}
           toWorld={ruler.to}
           deltaMeters={ruler.deltaMeters}
-          color={PROPOSAL_ACCENT_COLOR_MUTED}
+          color={RULER_COLOR_MUTED}
         />
       ))}
 
@@ -3265,7 +3269,7 @@ function Model({
                 fromWorld={from}
                 toWorld={to}
                 deltaMeters={to.distanceTo(from)}
-                color={MOVE_ACCENT_COLOR}
+                color={RULER_COLOR}
                 variant="arrow"
               />
             );
@@ -3278,7 +3282,7 @@ function Model({
           fromWorld={ruler.from}
           toWorld={ruler.to}
           deltaMeters={ruler.deltaMeters}
-          color={MOVE_ACCENT_COLOR_MUTED}
+          color={RULER_COLOR_MUTED}
           variant="arrow"
         />
       ))}
@@ -3308,7 +3312,7 @@ function Model({
               padding: "3px 8px",
               borderRadius: 999,
               background: "rgba(255,255,255,0.95)",
-              border: `1.5px solid ${SCALE_ACCENT_COLOR_MUTED}`,
+              border: `1.5px solid ${RULER_COLOR_MUTED}`,
               color: "#0f172a",
               fontSize: 12,
               fontWeight: 700,
@@ -3368,7 +3372,7 @@ function Model({
               padding: "3px 8px",
               borderRadius: 999,
               background: "rgba(255,255,255,0.95)",
-              border: `1.5px solid ${ROTATE_ACCENT_COLOR_MUTED}`,
+              border: `1.5px solid ${RULER_COLOR_MUTED}`,
               color: "#0f172a",
               fontSize: 12,
               fontWeight: 700,
@@ -3387,7 +3391,7 @@ function Model({
         <BendControlPoints
           baseWorlds={activeBendControlPointBaseWorlds}
           offsetsMeters={bendControlPointOffsetsMeters}
-          color={BEND_ACCENT_COLOR}
+          color={RULER_COLOR}
           onChange={(index, amountMeters) =>
             onBendControlPointChange?.(index, amountMeters)
           }
