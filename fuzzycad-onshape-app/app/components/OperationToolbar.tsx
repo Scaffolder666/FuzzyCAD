@@ -65,6 +65,17 @@ function DistanceIcon() {
   );
 }
 
+function MoveQuestionIcon() {
+  return (
+    <svg viewBox="0 0 32 32" aria-hidden="true">
+      <path d="M4 16H28" strokeDasharray="2.5 2.5" />
+      <path d="M9 11L4 16L9 21" />
+      <path d="M23 11L28 16L23 21" />
+      <circle cx="16" cy="16" r="2.6" />
+    </svg>
+  );
+}
+
 function ExtendIcon() {
   return (
     <svg viewBox="0 0 32 32" aria-hidden="true">
@@ -273,6 +284,12 @@ const toolGroups: ToolGroup[] = [
         label: "Distance",
         title: "Click two parts to flag the gap between them as worth checking",
         icon: <DistanceIcon />,
+      },
+      {
+        id: "moveQuestion",
+        label: "Move range",
+        title: "Fix a direction and a range — someone else picks the exact value",
+        icon: <MoveQuestionIcon />,
       },
     ],
   },

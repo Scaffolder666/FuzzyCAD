@@ -9,11 +9,13 @@ import {
   setDistanceAnswer,
   setDistanceConfidence,
   setDistanceMoveMode,
+  setMoveQuestionAnswer,
   setSizeAxisAnswer,
   toBendPreviews,
   toDistancePreviews,
   toFuzzyConfidenceAnnotations,
   toMovePreviews,
+  toMoveQuestionPreviews,
   toProposalPreviews,
   toRotatePreviews,
   toScalePreviews,
@@ -21,6 +23,7 @@ import {
   upsertBend,
   upsertDistance,
   upsertMove,
+  upsertMoveQuestion,
   upsertRotate,
   upsertScale,
   upsertSizeAnnotation,
@@ -28,6 +31,7 @@ import {
   type BendAxisDirection,
   type FuzzyCADUncertaintyDocument,
   type FuzzyCADUncertaintySource,
+  type MoveQuestionAxisDirection,
   type ProposalAxisIndex,
   type ProposalAxisMode,
   type RotateAxisInput,
@@ -87,6 +91,11 @@ export function useUncertaintyDocument(source: FuzzyCADUncertaintySource) {
 
   const bendPreviews = useMemo(
     () => toBendPreviews(uncertaintyDocumentWithCurrentSource),
+    [uncertaintyDocumentWithCurrentSource],
+  );
+
+  const moveQuestionPreviews = useMemo(
+    () => toMoveQuestionPreviews(uncertaintyDocumentWithCurrentSource),
     [uncertaintyDocumentWithCurrentSource],
   );
 
@@ -357,6 +366,37 @@ export function useUncertaintyDocument(source: FuzzyCADUncertaintySource) {
     );
   }
 
+  function upsertMoveQuestionMark(input: {
+    pathKey: string;
+    axisDirection: MoveQuestionAxisDirection;
+    rangeMinMeters: number;
+    rangeMaxMeters: number;
+    author?: string;
+  }) {
+    setUncertaintyDocument((previous) =>
+      upsertMoveQuestion(
+        {
+          ...previous,
+          source,
+        },
+        input,
+      ),
+    );
+  }
+
+  function answerMoveQuestionMark(annotationId: string, resolvedDeltaMeters: number) {
+    setUncertaintyDocument((previous) =>
+      setMoveQuestionAnswer(
+        {
+          ...previous,
+          source,
+        },
+        annotationId,
+        resolvedDeltaMeters,
+      ),
+    );
+  }
+
   function selectAnnotationAlternativeOption(
     annotationId: string,
     optionId: string,
@@ -383,6 +423,7 @@ export function useUncertaintyDocument(source: FuzzyCADUncertaintySource) {
     distancePreviews,
     rotatePreviews,
     bendPreviews,
+    moveQuestionPreviews,
     resetUncertaintyDocument,
     replaceUncertaintyDocument,
     upsertSizeMark,
@@ -402,5 +443,7 @@ export function useUncertaintyDocument(source: FuzzyCADUncertaintySource) {
     answerDistanceMark,
     upsertRotateMark,
     upsertBendMark,
+    upsertMoveQuestionMark,
+    answerMoveQuestionMark,
   };
 }

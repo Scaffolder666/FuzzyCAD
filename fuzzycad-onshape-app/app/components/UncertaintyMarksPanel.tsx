@@ -8,6 +8,7 @@ import type {
   DistanceUncertaintyAnnotation,
   FuzzyCADUncertaintyAnnotation,
   FuzzyCADUncertaintyDocument,
+  MoveQuestionUncertaintyAnnotation,
   MoveUncertaintyAnnotation,
   ProposalUncertaintyAnnotation,
   RotateUncertaintyAnnotation,
@@ -47,6 +48,7 @@ type UncertaintyMarksPanelProps = {
     direction: ConfidenceDirection,
   ) => void;
   onSetDistanceMoveMode: (annotationId: string, moveMode: DistanceMoveMode) => void;
+  onAnswerMoveQuestion: (annotationId: string, deltaMm: number) => void;
   onSaveToOnshape: () => void;
   savingToOnshape?: boolean;
 };
@@ -92,22 +94,29 @@ function matchesFilter(
   filter: FilterKey,
 ) {
   if (filter === "proposal") {
-    // Move, Scale, and Rotate are all kinds of proposed change (a position,
-    // a size, or an orientation instead of one dimension) — they share the
-    // "Proposed" filter rather than getting their own top-level tab.
+    // Move, Scale, Rotate, and Bend are all kinds of proposed change (a
+    // position, a size, an orientation, or a curvature instead of one
+    // dimension) — they share the "Proposed" filter rather than getting
+    // their own top-level tab.
     return (
       annotation.type === "proposal" ||
       annotation.type === "move" ||
       annotation.type === "scale" ||
-      annotation.type === "rotate"
+      annotation.type === "rotate" ||
+      annotation.type === "bend"
     );
   }
 
   if (filter === "size") {
-    // Distance is also a "flag a concern, don't propose a fix" mark, same
-    // as Size — just between two objects instead of one object's own
-    // dimension — so it shares the "Needs input" filter.
-    return annotation.type === "size" || annotation.type === "distance";
+    // Distance and Move-question are also "flag a concern, don't propose a
+    // fix" marks, same as Size — just waiting on someone else's answer
+    // instead of one object's own dimension — so they share the "Needs
+    // input" filter.
+    return (
+      annotation.type === "size" ||
+      annotation.type === "distance" ||
+      annotation.type === "moveQuestion"
+    );
   }
 
   return annotation.type === filter;
@@ -947,6 +956,144 @@ function BendCard({
   );
 }
 
+function MoveQuestionCard({
+  annotation,
+  selected,
+  hovered,
+  onSelect,
+  onDelete,
+  onCommentChange,
+  onAnswer,
+  onResolve,
+}: {
+  annotation: MoveQuestionUncertaintyAnnotation;
+  selected: boolean;
+  hovered: boolean;
+  onSelect: () => void;
+  onDelete: () => void;
+  onCommentChange: (comment: string) => void;
+  onAnswer: (deltaMm: number) => void;
+  onResolve: () => void;
+}) {
+  const [answerDraft, setAnswerDraft] = useState("");
+  const rangeMinMm = annotation.rangeMinMeters * 1000;
+  const rangeMaxMm = annotation.rangeMaxMeters * 1000;
+  const resolvedMm =
+    annotation.resolvedDeltaMeters !== null
+      ? annotation.resolvedDeltaMeters * 1000
+      : null;
+
+  function submit() {
+    const parsed = parseFloat(answerDraft);
+
+    if (!Number.isNaN(parsed)) {
+      onAnswer(parsed);
+      setAnswerDraft("");
+    }
+  }
+
+  return (
+    <article
+      className={`${styles.card} ${selected ? styles.cardSelected : ""} ${
+        hovered ? styles.cardHovered : ""
+      }`}
+      onClick={onSelect}
+    >
+      <div className={styles.cardHeader}>
+        <span className={`${styles.kindPill} ${styles.kindPillMoveQuestion}`}>
+          Needs input
+        </span>
+      </div>
+
+      <div className={styles.cardTitle}>
+        {annotation.target.referencePathKey}
+        <span className={styles.proposalModeTag}>
+          along {annotation.axisDirection.toUpperCase()}
+        </span>
+      </div>
+
+      <div className={styles.valueLine}>
+        <span>
+          range: {rangeMinMm.toFixed(1)} to {rangeMaxMm.toFixed(1)} mm
+        </span>
+      </div>
+
+      {annotation.author ? (
+        <div className={styles.metaRow}>flagged by {annotation.author}</div>
+      ) : null}
+
+      {resolvedMm !== null ? (
+        <div className={styles.distanceAnsweredBox}>
+          <span className={styles.distanceAnsweredLabel}>Answered</span>
+          <span className={styles.valueNew}>
+            {resolvedMm >= 0 ? "+" : ""}
+            {resolvedMm.toFixed(1)} mm
+          </span>
+        </div>
+      ) : (
+        <div
+          className={styles.distanceQuestionBox}
+          onClick={(event) => event.stopPropagation()}
+        >
+          <div className={styles.distanceQuestionLabel}>
+            Where in this range should it actually move?
+          </div>
+          <div className={styles.answerRow}>
+            <input
+              type="number"
+              inputMode="decimal"
+              className={styles.answerInput}
+              placeholder="mm"
+              value={answerDraft}
+              onChange={(event) => setAnswerDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.currentTarget.blur();
+                  submit();
+                }
+              }}
+            />
+            <button type="button" className={styles.answerButton} onClick={submit}>
+              Submit
+            </button>
+          </div>
+        </div>
+      )}
+
+      <textarea
+        className={styles.comment}
+        value={annotation.comment ?? ""}
+        placeholder="Add a comment..."
+        onClick={(event) => event.stopPropagation()}
+        onChange={(event) => onCommentChange(event.target.value)}
+      />
+
+      <div className={styles.actions}>
+        <button
+          type="button"
+          className={styles.resolveButton}
+          onClick={(event) => {
+            event.stopPropagation();
+            onResolve();
+          }}
+        >
+          Accept
+        </button>
+        <button
+          type="button"
+          className={styles.deleteButton}
+          onClick={(event) => {
+            event.stopPropagation();
+            onDelete();
+          }}
+        >
+          Reject
+        </button>
+      </div>
+    </article>
+  );
+}
+
 function AlternativeCard({
   annotation,
   selected,
@@ -1043,6 +1190,7 @@ export default function UncertaintyMarksPanel({
   onAnswerDistance,
   onSetDistanceConfidence,
   onSetDistanceMoveMode,
+  onAnswerMoveQuestion,
   onSaveToOnshape,
   savingToOnshape = false,
 }: UncertaintyMarksPanelProps) {
@@ -1261,6 +1409,26 @@ export default function UncertaintyMarksPanel({
               );
             }
 
+            if (annotation.type === "moveQuestion") {
+              return (
+                <MoveQuestionCard
+                  key={annotation.id}
+                  annotation={annotation}
+                  selected={selected}
+                  hovered={hovered}
+                  onSelect={() => onSelectAnnotation(annotation.id)}
+                  onDelete={() => onDeleteAnnotation(annotation.id)}
+                  onCommentChange={(comment) =>
+                    onCommentChange(annotation.id, comment)
+                  }
+                  onAnswer={(deltaMm) =>
+                    onAnswerMoveQuestion(annotation.id, deltaMm)
+                  }
+                  onResolve={() => onResolveAnnotation(annotation.id)}
+                />
+              );
+            }
+
             return (
               <AlternativeCard
                 key={annotation.id}
@@ -1311,7 +1479,9 @@ export default function UncertaintyMarksPanel({
                                   ? `Distance: ${annotation.target.referencePathKey} ↔ ${annotation.otherPathKey}`
                                   : annotation.type === "bend"
                                     ? `Bend: ${annotation.target.referencePathKey}`
-                                    : "Alternative"}
+                                    : annotation.type === "moveQuestion"
+                                      ? `Move range: ${annotation.target.referencePathKey}`
+                                      : "Alternative"}
                     </span>
                     <button
                       type="button"

@@ -32,6 +32,7 @@ import {
   type ConfidenceAxisFrame,
   type DistanceMarkerTarget,
   type FuzzyConfidenceAnnotation,
+  type MoveQuestionMarkerTarget,
   type RotateMarkerTarget,
   type ScaleMarkerTarget,
 } from "./viewer/fuzzyBlur";
@@ -58,6 +59,8 @@ import ScaleHandle from "./viewer/ScaleHandle";
 import RotateHandle from "./viewer/RotateHandle";
 import RotateProtractor from "./viewer/RotateProtractor";
 import BendControlPoints from "./viewer/BendControlPoints";
+import MoveRangeHandles from "./viewer/MoveRangeHandles";
+import MoveQuestionRuler from "./viewer/MoveQuestionRuler";
 import {
   computeProposalTipSegments,
   type ProposalAxisIndex,
@@ -203,6 +206,25 @@ export type BendPreview = {
   controlPointOffsetsMeters: number[];
 };
 
+/** Structurally the same shape as document.ts's MoveQuestionAxisDirection — reuses RotateAxisDirection's runtime unit-vector helper since both are just world x/y/z. */
+export type MoveQuestionAxisDirection = RotateAxisDirection;
+
+/** A plan for the "Move (needs input)" tool's active range-definition session — single object, no followers. */
+export type MoveQuestionRolePlan = {
+  pathKey: string;
+  axisDirection: MoveQuestionAxisDirection;
+};
+
+/** A saved move-question's range + optional answer, structurally the same shape as document.ts's. */
+export type MoveQuestionPreview = {
+  id: string;
+  pathKey: string;
+  axisDirection: MoveQuestionAxisDirection;
+  rangeMinMeters: number;
+  rangeMaxMeters: number;
+  resolvedDeltaMeters: number | null;
+};
+
 /** A saved distance flag, structurally the same shape as document.ts's. */
 /** Which side(s) an answered distance flag's ghost preview moves — structurally the same as document.ts's. */
 export type DistanceMoveMode = "moveA" | "moveB" | "both";
@@ -293,6 +315,15 @@ type FuzzyCADGeometryViewerProps = {
   /** Signed lift in meters per control point, evenly spaced along bendPlan's axis. */
   bendControlPointOffsetsMeters?: number[];
   onBendControlPointChange?: (index: number, amountMeters: number) => void;
+  /** Single-object plan for the "Move (needs input)" tool's active range-definition session. */
+  moveQuestionPlan?: MoveQuestionRolePlan | null;
+  /** The range being dragged out while defining a new move-question (before it's saved). */
+  moveQuestionRangeMeters?: { min: number; max: number };
+  onMoveQuestionRangeChange?: (which: "min" | "max", valueMeters: number) => void;
+  /** Saved move-questions, shown as persistent range rulers (or a resolved arrow once answered). */
+  moveQuestionPreviews?: MoveQuestionPreview[];
+  /** Answer an open move-question directly from its 3D ruler. */
+  onAnswerMoveQuestion?: (annotationId: string, deltaMeters: number) => void;
   /** Saved distance flags, shown as persistent rulers. */
   distancePreviews?: DistancePreview[];
   /** Answer an open distance flag directly from its 3D ruler. */
@@ -1049,6 +1080,11 @@ function Model({
   bendPreviews,
   bendControlPointOffsetsMeters = [],
   onBendControlPointChange,
+  moveQuestionPlan,
+  moveQuestionRangeMeters,
+  onMoveQuestionRangeChange,
+  moveQuestionPreviews,
+  onAnswerMoveQuestion,
   distancePreviews,
   onAnswerDistance,
   hoveredPathKey,
@@ -1106,6 +1142,11 @@ function Model({
   bendPreviews?: BendPreview[];
   bendControlPointOffsetsMeters?: number[];
   onBendControlPointChange?: (index: number, amountMeters: number) => void;
+  moveQuestionPlan?: MoveQuestionRolePlan | null;
+  moveQuestionRangeMeters?: { min: number; max: number };
+  onMoveQuestionRangeChange?: (which: "min" | "max", valueMeters: number) => void;
+  moveQuestionPreviews?: MoveQuestionPreview[];
+  onAnswerMoveQuestion?: (annotationId: string, deltaMeters: number) => void;
   distancePreviews?: DistancePreview[];
   onAnswerDistance?: (annotationId: string, distanceMm: number) => void;
   hoveredPathKey?: string | null;
@@ -2315,6 +2356,61 @@ function Model({
     );
   }, [bendPreviewSession, bendControlPointOffsetsMeters.length]);
 
+  // Active "Move (needs input)" range-definition session — a single
+  // object, no ghost clone needed (there's no one "current value" yet,
+  // just a range), so this is a plain derived origin+axis rather than a
+  // full preview-session lifecycle like the Proposed tools use.
+  const activeMoveQuestionSummary = useMemo(
+    () =>
+      objectSummaries.find(
+        (item) => item.pathKey === moveQuestionPlan?.pathKey,
+      ) ?? null,
+    [objectSummaries, moveQuestionPlan],
+  );
+
+  const activeMoveQuestionOriginWorld = useMemo(() => {
+    if (!activeMoveQuestionSummary) {
+      return null;
+    }
+
+    return new THREE.Vector3(...activeMoveQuestionSummary.aabbCenterWorld);
+  }, [activeMoveQuestionSummary]);
+
+  const activeMoveQuestionAxisWorld = useMemo(() => {
+    if (!moveQuestionPlan) {
+      return null;
+    }
+
+    return getRotateAxisUnitVector(moveQuestionPlan.axisDirection);
+  }, [moveQuestionPlan]);
+
+  // Saved move-questions, each resolved to a world origin + axis for
+  // MoveQuestionRuler to render (range span + animated dot, or a settled
+  // arrow once answered).
+  const moveQuestionRulerFrames = useMemo(() => {
+    return (moveQuestionPreviews ?? []).flatMap((preview) => {
+      const summary = objectSummaries.find(
+        (item) => item.pathKey === preview.pathKey,
+      );
+
+      if (!summary) {
+        return [];
+      }
+
+      return [
+        {
+          id: preview.id,
+          pathKey: preview.pathKey,
+          originWorld: new THREE.Vector3(...summary.aabbCenterWorld),
+          axisWorld: getRotateAxisUnitVector(preview.axisDirection),
+          rangeMinMeters: preview.rangeMinMeters,
+          rangeMaxMeters: preview.rangeMaxMeters,
+          resolvedDeltaMeters: preview.resolvedDeltaMeters,
+        },
+      ];
+    });
+  }, [moveQuestionPreviews, objectSummaries]);
+
   // "Distance" is a needs-input flag, not a proposal: the gap is measured
   // live from the two objects' current positions (no dragging, no ghost
   // preview session needed), so this is a plain derived value.
@@ -2763,6 +2859,14 @@ function Model({
     [bendPreviews],
   );
 
+  const moveQuestionMarkerTargets = useMemo<MoveQuestionMarkerTarget[]>(
+    () =>
+      (moveQuestionPreviews ?? []).map((preview) => ({
+        pathKey: preview.pathKey,
+      })),
+    [moveQuestionPreviews],
+  );
+
   useEffect(() => {
     applyFuzzyConfidence(
       scene,
@@ -2774,6 +2878,7 @@ function Model({
       distanceMarkerTargets,
       rotateMarkerTargets,
       bendMarkerTargets,
+      moveQuestionMarkerTargets,
     );
     invalidate();
 
@@ -2791,6 +2896,7 @@ function Model({
     distanceMarkerTargets,
     rotateMarkerTargets,
     bendMarkerTargets,
+    moveQuestionMarkerTargets,
     invalidate,
   ]);
 
@@ -3399,6 +3505,42 @@ function Model({
         />
       ) : null}
 
+      {enableManipulationHandles &&
+      moveQuestionPlan &&
+      activeMoveQuestionOriginWorld &&
+      activeMoveQuestionAxisWorld &&
+      moveQuestionRangeMeters ? (
+        <MoveRangeHandles
+          originWorld={activeMoveQuestionOriginWorld}
+          axisWorld={activeMoveQuestionAxisWorld}
+          rangeMinMm={moveQuestionRangeMeters.min * 1000}
+          rangeMaxMm={moveQuestionRangeMeters.max * 1000}
+          color={RULER_COLOR}
+          onChange={(which, valueMm) =>
+            onMoveQuestionRangeChange?.(which, valueMm / 1000)
+          }
+          onDragStateChange={handleDragStateChange}
+        />
+      ) : null}
+
+      {moveQuestionRulerFrames.map((frame) => (
+        <MoveQuestionRuler
+          key={frame.id}
+          originWorld={frame.originWorld}
+          axisWorld={frame.axisWorld}
+          rangeMinMeters={frame.rangeMinMeters}
+          rangeMaxMeters={frame.rangeMaxMeters}
+          resolvedDeltaMeters={frame.resolvedDeltaMeters}
+          color={RULER_COLOR}
+          mutedColor={RULER_COLOR_MUTED}
+          onAnswer={
+            onAnswerMoveQuestion
+              ? (deltaMeters) => onAnswerMoveQuestion(frame.id, deltaMeters)
+              : undefined
+          }
+        />
+      ))}
+
       {distanceRulers.map((ruler) => (
         <ClearanceRuler
           key={ruler.key}
@@ -3480,6 +3622,11 @@ export default function FuzzyCADGeometryViewer({
   bendPreviews,
   bendControlPointOffsetsMeters,
   onBendControlPointChange,
+  moveQuestionPlan,
+  moveQuestionRangeMeters,
+  onMoveQuestionRangeChange,
+  moveQuestionPreviews,
+  onAnswerMoveQuestion,
   distancePreviews,
   onAnswerDistance,
   hoveredPathKey,
@@ -3594,6 +3741,11 @@ export default function FuzzyCADGeometryViewer({
                   bendPreviews={bendPreviews}
                   bendControlPointOffsetsMeters={bendControlPointOffsetsMeters}
                   onBendControlPointChange={onBendControlPointChange}
+                  moveQuestionPlan={moveQuestionPlan}
+                  moveQuestionRangeMeters={moveQuestionRangeMeters}
+                  onMoveQuestionRangeChange={onMoveQuestionRangeChange}
+                  moveQuestionPreviews={moveQuestionPreviews}
+                  onAnswerMoveQuestion={onAnswerMoveQuestion}
                   distancePreviews={distancePreviews}
                   onAnswerDistance={onAnswerDistance}
                   hoveredPathKey={hoveredPathKey}

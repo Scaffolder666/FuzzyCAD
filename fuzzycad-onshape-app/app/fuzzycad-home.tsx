@@ -17,6 +17,7 @@ import type {
   FocusRequest,
   MeshGraphNode,
   MoveDelta,
+  MoveQuestionRolePlan,
   RolePreviewPlan,
   RotateRolePlan,
 } from "./components/FuzzyCADGeometryViewer";
@@ -61,6 +62,7 @@ import {
   type BendAxisDirection,
   type DistanceMoveMode,
   type FuzzyCADUncertaintyAnnotation,
+  type MoveQuestionAxisDirection,
   type ProposalAxisIndex,
   type ProposalAxisMode,
   type RotateAxisDirection,
@@ -112,6 +114,7 @@ function buildRotatePlan(
 }
 
 const ZERO_MOVE_DELTA: MoveDelta = { x: 0, y: 0, z: 0 };
+const DEFAULT_MOVE_QUESTION_RANGE_METERS = { min: -0.01, max: 0.01 };
 
 function isElementArray(data: unknown): data is OnshapeElement[] {
   return (
@@ -304,6 +307,16 @@ export default function FuzzyCADHome() {
     number[]
   >(() => new Array(BEND_CONTROL_POINT_COUNT).fill(0));
 
+  // "Move (needs input)" tool: pick a part and an axis, then drag out a
+  // range instead of proposing one exact delta — "somewhere between 4 and
+  // 10mm along X" — and leave it for someone else with the relevant
+  // knowledge to answer with the actual value later.
+  const [activeMoveQuestionPlan, setActiveMoveQuestionPlan] =
+    useState<MoveQuestionRolePlan | null>(null);
+  const [moveQuestionRangeMeters, setMoveQuestionRangeMeters] = useState(
+    DEFAULT_MOVE_QUESTION_RANGE_METERS,
+  );
+
   // "Distance" tool: click one part, then a second, to flag the gap between
   // them. The flag saves itself the moment both are picked — it's a
   // request waiting on someone else's answer, not a value the marker
@@ -369,6 +382,7 @@ export default function FuzzyCADHome() {
     distancePreviews,
     rotatePreviews,
     bendPreviews,
+    moveQuestionPreviews,
     resetUncertaintyDocument,
     upsertSizeMark,
     removeSizeMarks,
@@ -388,6 +402,8 @@ export default function FuzzyCADHome() {
     answerDistanceMark,
     upsertRotateMark,
     upsertBendMark,
+    upsertMoveQuestionMark,
+    answerMoveQuestionMark,
   } = useUncertaintyDocument(currentUncertaintySource);
 
   const assemblyElements = useMemo(() => {
@@ -531,6 +547,8 @@ export default function FuzzyCADHome() {
     setPendingRotatePlan(null);
     setActiveBendPlan(null);
     setBendControlPointOffsets(new Array(BEND_CONTROL_POINT_COUNT).fill(0));
+    setActiveMoveQuestionPlan(null);
+    setMoveQuestionRangeMeters(DEFAULT_MOVE_QUESTION_RANGE_METERS);
     closeSizeUncertaintyEditor();
   }
 
@@ -1531,6 +1549,57 @@ export default function FuzzyCADHome() {
     setActiveTool("select");
   }
 
+  function startMoveQuestion() {
+    if (!selectedObjectSummary) {
+      return;
+    }
+
+    setActiveTool("moveQuestion");
+    resetSizeOperationState();
+    setLassoPathKeys([]);
+    setActiveMoveQuestionPlan({
+      pathKey: selectedObjectSummary.pathKey,
+      axisDirection: "x",
+    });
+    setMoveQuestionRangeMeters(DEFAULT_MOVE_QUESTION_RANGE_METERS);
+  }
+
+  function setMoveQuestionAxis(axisDirection: MoveQuestionAxisDirection) {
+    setActiveMoveQuestionPlan((previous) =>
+      previous ? { ...previous, axisDirection } : previous,
+    );
+  }
+
+  function setMoveQuestionRange(which: "min" | "max", valueMeters: number) {
+    setMoveQuestionRangeMeters((previous) => ({
+      ...previous,
+      [which]: valueMeters,
+    }));
+  }
+
+  function cancelMoveQuestion() {
+    setActiveMoveQuestionPlan(null);
+    setMoveQuestionRangeMeters(DEFAULT_MOVE_QUESTION_RANGE_METERS);
+    setActiveTool("select");
+  }
+
+  function applyMoveQuestion() {
+    if (!activeMoveQuestionPlan) {
+      return;
+    }
+
+    upsertMoveQuestionMark({
+      pathKey: activeMoveQuestionPlan.pathKey,
+      axisDirection: activeMoveQuestionPlan.axisDirection,
+      rangeMinMeters: moveQuestionRangeMeters.min,
+      rangeMaxMeters: moveQuestionRangeMeters.max,
+    });
+
+    setActiveMoveQuestionPlan(null);
+    setMoveQuestionRangeMeters(DEFAULT_MOVE_QUESTION_RANGE_METERS);
+    setActiveTool("select");
+  }
+
 async function saveProjectStateToOnshape() {
   if (!documentId || !workspaceId) {
     console.warn("Missing documentId or workspaceId");
@@ -1838,6 +1907,11 @@ if (result.ok && result.state) {
           bendPreviews={bendPreviews}
           bendControlPointOffsetsMeters={bendControlPointOffsets}
           onBendControlPointChange={setBendControlPointOffset}
+          moveQuestionPlan={activeMoveQuestionPlan}
+          moveQuestionRangeMeters={moveQuestionRangeMeters}
+          onMoveQuestionRangeChange={setMoveQuestionRange}
+          moveQuestionPreviews={moveQuestionPreviews}
+          onAnswerMoveQuestion={answerMoveQuestionMark}
           distancePreviews={distancePreviews}
           onAnswerDistance={(annotationId, distanceMm) =>
             answerDistanceMark(annotationId, distanceMm / 1000)
@@ -1852,7 +1926,8 @@ if (result.ok && result.state) {
               Boolean(activeMovePlan) ||
               Boolean(activeScalePlan) ||
               Boolean(activeRotatePlan) ||
-              Boolean(activeBendPlan))
+              Boolean(activeBendPlan) ||
+              Boolean(activeMoveQuestionPlan))
           }
           manipulationValue={manipulationValue}
           confidenceAnnotations={confidenceAnnotations}
@@ -1935,6 +2010,11 @@ if (result.ok && result.state) {
 
             if (tool === "bend") {
               startBend();
+              return;
+            }
+
+            if (tool === "moveQuestion") {
+              startMoveQuestion();
               return;
             }
 
@@ -2175,6 +2255,44 @@ if (result.ok && result.state) {
           </div>
         ) : null}
 
+        {activeTool === "moveQuestion" && activeMoveQuestionPlan ? (
+          <div className={styles.manipulationReadout}>
+            <span className={styles.manipulationValue}>
+              Move range: {(moveQuestionRangeMeters.min * 1000).toFixed(1)} to{" "}
+              {(moveQuestionRangeMeters.max * 1000).toFixed(1)} mm along{" "}
+              {activeMoveQuestionPlan.axisDirection.toUpperCase()}
+            </span>
+            {(["x", "y", "z"] as const).map((axis) => (
+              <button
+                key={axis}
+                type="button"
+                className={`${styles.manipulationResetButton} ${
+                  activeMoveQuestionPlan.axisDirection === axis
+                    ? styles.manipulationToggleActive
+                    : ""
+                }`}
+                onClick={() => setMoveQuestionAxis(axis)}
+              >
+                {axis.toUpperCase()}
+              </button>
+            ))}
+            <button
+              type="button"
+              className={styles.manipulationResetButton}
+              onClick={cancelMoveQuestion}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              className={styles.manipulationResetButton}
+              onClick={applyMoveQuestion}
+            >
+              Save question
+            </button>
+          </div>
+        ) : null}
+
         <UncertaintyMarksPanel
           document={uncertaintyDocumentWithCurrentSource}
           selectedAnnotationId={selectedUncertaintyId}
@@ -2194,6 +2312,9 @@ if (result.ok && result.state) {
           }
           onSetDistanceConfidence={setDistanceConfidenceMark}
           onSetDistanceMoveMode={setDistanceMoveModeMark}
+          onAnswerMoveQuestion={(annotationId, deltaMm) =>
+            answerMoveQuestionMark(annotationId, deltaMm / 1000)
+          }
           onSaveToOnshape={() => void saveProjectStateToOnshape()}
           savingToOnshape={savingToOnshape}
         />

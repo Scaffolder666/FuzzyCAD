@@ -209,6 +209,11 @@
   color: #15803d;
 }
 
+.kindPillMoveQuestion {
+  background: rgba(8, 145, 178, 0.12);
+  color: #0e7490;
+}
+
 .answerRow {
   display: flex;
   gap: 6px;

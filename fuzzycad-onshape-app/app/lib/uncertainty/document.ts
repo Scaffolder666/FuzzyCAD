@@ -198,6 +198,24 @@ export type BendUncertaintyAnnotation = BaseAnnotationFields & {
   proposedValueLabel: string;
 };
 
+/**
+ * "Move (needs input)": instead of the flagger proposing an exact delta,
+ * they fix a direction and a range — "somewhere between 4 and 10mm along
+ * X" — and someone else with the relevant knowledge picks the actual
+ * value later. Mirrors Distance's question/answer split:
+ * resolvedDeltaMeters stays null until answered, and answering doesn't
+ * resolve the mark by itself (same as Distance).
+ */
+export type MoveQuestionAxisDirection = "x" | "y" | "z";
+
+export type MoveQuestionUncertaintyAnnotation = BaseAnnotationFields & {
+  type: "moveQuestion";
+  axisDirection: MoveQuestionAxisDirection;
+  rangeMinMeters: number;
+  rangeMaxMeters: number;
+  resolvedDeltaMeters: number | null;
+};
+
 export type FuzzyCADUncertaintyAnnotation =
   | SizeUncertaintyAnnotation
   | ProposalUncertaintyAnnotation
@@ -206,7 +224,8 @@ export type FuzzyCADUncertaintyAnnotation =
   | ScaleUncertaintyAnnotation
   | DistanceUncertaintyAnnotation
   | RotateUncertaintyAnnotation
-  | BendUncertaintyAnnotation;
+  | BendUncertaintyAnnotation
+  | MoveQuestionUncertaintyAnnotation;
 
 export function createEmptyUncertaintyDocument(
   source: FuzzyCADUncertaintySource,
@@ -1343,5 +1362,147 @@ export function toBendPreviews(
       pathKey: annotation.target.referencePathKey,
       axisDirection: annotation.axisDirection,
       controlPointOffsetsMeters: annotation.controlPointOffsetsMeters,
+    }));
+}
+
+export function makeMoveQuestionAnnotationId(pathKey: string) {
+  return `moveQuestion:${pathKey}`;
+}
+
+function createMoveQuestionAnnotation(input: {
+  pathKey: string;
+  axisDirection: MoveQuestionAxisDirection;
+  rangeMinMeters: number;
+  rangeMaxMeters: number;
+  resolvedDeltaMeters?: number | null;
+  comment?: string;
+  author?: string;
+  assignee?: string;
+  status?: AnnotationStatus;
+  createdAt?: string;
+  updatedAt?: string;
+}): MoveQuestionUncertaintyAnnotation | null {
+  if (!input.pathKey) {
+    return null;
+  }
+
+  const now = new Date().toISOString();
+
+  return {
+    id: makeMoveQuestionAnnotationId(input.pathKey),
+    type: "moveQuestion",
+    target: {
+      pathKeys: [input.pathKey],
+      referencePathKey: input.pathKey,
+      scope: "single",
+    },
+    axisDirection: input.axisDirection,
+    rangeMinMeters: Math.min(input.rangeMinMeters, input.rangeMaxMeters),
+    rangeMaxMeters: Math.max(input.rangeMinMeters, input.rangeMaxMeters),
+    resolvedDeltaMeters: input.resolvedDeltaMeters ?? null,
+    comment: input.comment,
+    author: input.author,
+    assignee: input.assignee,
+    status: input.status ?? "open",
+    createdAt: input.createdAt ?? now,
+    updatedAt: input.updatedAt ?? now,
+  };
+}
+
+/** One open move-question per object — a new save replaces the range but keeps any existing answer. */
+export function upsertMoveQuestion(
+  document: FuzzyCADUncertaintyDocument,
+  input: {
+    pathKey: string;
+    axisDirection: MoveQuestionAxisDirection;
+    rangeMinMeters: number;
+    rangeMaxMeters: number;
+    author?: string;
+  },
+): FuzzyCADUncertaintyDocument {
+  const id = makeMoveQuestionAnnotationId(input.pathKey);
+  const existing = document.annotations.find((annotation) => annotation.id === id);
+  const existingMoveQuestion =
+    existing?.type === "moveQuestion" ? existing : null;
+
+  const nextAnnotation = createMoveQuestionAnnotation({
+    pathKey: input.pathKey,
+    axisDirection: input.axisDirection,
+    rangeMinMeters: input.rangeMinMeters,
+    rangeMaxMeters: input.rangeMaxMeters,
+    resolvedDeltaMeters: existingMoveQuestion?.resolvedDeltaMeters,
+    comment: existing?.comment,
+    author: existing?.author ?? input.author,
+    assignee: existing?.assignee,
+    status: "open",
+    createdAt: existing?.createdAt,
+  });
+
+  if (!nextAnnotation) {
+    return document;
+  }
+
+  return {
+    ...document,
+    annotations: [
+      ...document.annotations.filter((annotation) => annotation.id !== id),
+      nextAnnotation,
+    ],
+  };
+}
+
+/**
+ * Someone with the relevant domain knowledge answers a move-question with
+ * the actual delta it should be. This records the answer but does *not*
+ * resolve the mark by itself — same as Distance's setDistanceAnswer.
+ */
+export function setMoveQuestionAnswer(
+  document: FuzzyCADUncertaintyDocument,
+  annotationId: string,
+  resolvedDeltaMeters: number,
+): FuzzyCADUncertaintyDocument {
+  const now = new Date().toISOString();
+
+  return {
+    ...document,
+    annotations: document.annotations.map((annotation) => {
+      if (annotation.id !== annotationId || annotation.type !== "moveQuestion") {
+        return annotation;
+      }
+
+      return {
+        ...annotation,
+        resolvedDeltaMeters,
+        updatedAt: now,
+      };
+    }),
+  };
+}
+
+export type MoveQuestionPreview = {
+  id: string;
+  pathKey: string;
+  axisDirection: MoveQuestionAxisDirection;
+  rangeMinMeters: number;
+  rangeMaxMeters: number;
+  resolvedDeltaMeters: number | null;
+};
+
+/** Open move-questions, for the 3D viewer to render as a persistent range + optional answered ghost. */
+export function toMoveQuestionPreviews(
+  document: FuzzyCADUncertaintyDocument,
+): MoveQuestionPreview[] {
+  return document.annotations
+    .filter(
+      (annotation): annotation is MoveQuestionUncertaintyAnnotation =>
+        annotation.type === "moveQuestion" && annotation.status === "open",
+    )
+    .map((annotation) => ({
+      id: annotation.id,
+      pathKey: annotation.target.referencePathKey,
+      axisDirection: annotation.axisDirection,
+      rangeMinMeters: annotation.rangeMinMeters,
+      rangeMaxMeters: annotation.rangeMaxMeters,
+      resolvedDeltaMeters: annotation.resolvedDeltaMeters,
     }));
 }

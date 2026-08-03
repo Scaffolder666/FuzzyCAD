@@ -10,4 +10,5 @@ export type OperationTool =
   | "rotate"
   | "rotateAxis"
   | "moveFace"
-  | "bend";
+  | "bend"
+  | "moveQuestion";
