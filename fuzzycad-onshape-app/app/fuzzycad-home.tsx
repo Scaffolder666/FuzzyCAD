@@ -70,6 +70,7 @@ import {
   type MoveQuestionAxisDirection,
   type ProposalAxisIndex,
   type ProposalAxisMode,
+  type ResolvedRigidDelta,
   type RotateAxisDirection,
   type SizeUncertaintyAnnotation,
 } from "./lib/uncertainty/document";
@@ -1754,7 +1755,52 @@ async function pushAcceptedChangesToOnshape() {
       return;
     }
 
-    const updates = computeRigidOccurrenceUpdates(deltas, placements);
+    // Which annotation touches which pathKeys, across ALL deltas (not just
+    // the pushable ones) — needed below to only delete an annotation once
+    // EVERY pathKey it affects has actually landed in Onshape, not just some.
+    const annotationPathKeys = new Map<string, Set<string>>();
+    for (const [pathKey, delta] of deltas) {
+      for (const id of delta.sourceAnnotationIds) {
+        if (!annotationPathKeys.has(id)) {
+          annotationPathKeys.set(id, new Set());
+        }
+        annotationPathKeys.get(id)!.add(pathKey);
+      }
+    }
+
+    // A mate-constrained occurrence's position is owned by Onshape's mate
+    // solver — trying to set an arbitrary absolute transform on one fails
+    // server-side (confirmed live: a 500 "internal error" on a mated part,
+    // vs. the same request succeeding on an unmated one). partGraph already
+    // has mate data loaded (same graph the Move/Scale/Rotate "include
+    // mate-linked neighbors" prompt uses), so this is checked up front
+    // instead of discovering it via a failed push.
+    const mateConstrainedPathKeys = new Set<string>();
+    const pushableDeltas = new Map<string, ResolvedRigidDelta>();
+
+    for (const [pathKey, delta] of deltas) {
+      const hasMates = (partGraph?.byPathKey.get(pathKey)?.mateEdges.length ?? 0) > 0;
+
+      if (hasMates) {
+        mateConstrainedPathKeys.add(pathKey);
+      } else {
+        pushableDeltas.set(pathKey, delta);
+      }
+    }
+
+    if (mateConstrainedPathKeys.size > 0) {
+      console.warn(
+        "Skipping push for mate-constrained parts — Onshape's mate solver owns their position, so an arbitrary absolute transform isn't valid for them:",
+        Array.from(mateConstrainedPathKeys),
+      );
+    }
+
+    if (pushableDeltas.size === 0) {
+      console.warn("Nothing pushable — every affected part is mate-constrained.");
+      return;
+    }
+
+    const updates = computeRigidOccurrenceUpdates(pushableDeltas, placements);
 
     if (updates.length === 0) {
       console.warn("No pushable occurrence updates — missing current placements for the affected parts.");
@@ -1771,33 +1817,42 @@ async function pushAcceptedChangesToOnshape() {
       updates,
     );
 
+    const perOccurrenceResults = Array.isArray(result.results)
+      ? (result.results as { path: string[]; ok: boolean }[])
+      : [];
+    const succeededPathKeys = new Set(
+      perOccurrenceResults.filter((r) => r.ok).map((r) => r.path.join("/")),
+    );
+
     if (!result.ok) {
-      // Onshape's error body is what actually explains a 400 — log it
+      // Onshape's error body is what actually explains a failure — log it
       // stringified so it survives a plain-text console copy instead of
       // collapsing to "{…}", plus the request payload that triggered it.
       console.error(
-        "Push accepted changes failed:",
+        "Push accepted changes failed (partially or fully):",
         JSON.stringify(
           { status: result.status, results: result.results, data: result.data, updates },
           null,
           2,
         ),
       );
-      return;
+    } else {
+      console.log("Pushed accepted changes to Onshape:", result);
     }
 
-    console.log("Pushed accepted changes to Onshape:", result);
+    // Only delete an annotation once EVERY pathKey it touches actually
+    // succeeded — a partially-applied group edit should stay visible as
+    // open work, not silently disappear.
+    for (const [id, pathKeys] of annotationPathKeys) {
+      const allSucceeded = Array.from(pathKeys).every((pathKey) => succeededPathKeys.has(pathKey));
 
-    const pushedAnnotationIds = new Set<string>();
-
-    for (const delta of deltas.values()) {
-      for (const id of delta.sourceAnnotationIds) {
-        pushedAnnotationIds.add(id);
+      if (allSucceeded) {
+        deleteAnnotation(id);
       }
     }
 
-    for (const id of pushedAnnotationIds) {
-      deleteAnnotation(id);
+    if (succeededPathKeys.size === 0) {
+      return;
     }
 
     // Refresh placements from Onshape so the viewer's part positions catch
