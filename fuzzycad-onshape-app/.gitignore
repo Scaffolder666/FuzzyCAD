@@ -39,3 +39,9 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# OCCT wasm assets are copied from node_modules/opencascade.js/dist at
+# install time (see scripts/copy-occt-assets.mjs) — not committed, since
+# they're a byte-identical copy of a dependency's build output.
+/public/occt/opencascade.wasm.js
+/public/occt/opencascade.wasm.wasm

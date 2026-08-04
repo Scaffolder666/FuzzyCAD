@@ -1,0 +1,3 @@
+`opencascade.wasm.js` and `opencascade.wasm.wasm` in this directory are generated (copied verbatim from `node_modules/opencascade.js/dist/`) by `scripts/copy-occt-assets.mjs`, which runs automatically via the `postinstall` npm script. They are gitignored — do not edit or commit them. If they're missing, run `npm install` (or `node scripts/copy-occt-assets.mjs` directly) to regenerate them.
+
+They're served as plain static files instead of going through Turbopack's module graph, since `app/lib/occt/occtWorker.ts` loads `opencascade.wasm.js` via a runtime `import()` of an absolute URL and points its `locateFile` at `opencascade.wasm.wasm` directly.
