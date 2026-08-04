@@ -132,7 +132,7 @@ function getFollowAnchorWorld(
     : positiveEnd;
 }
 
-function createInvisiblePreviewMaterial(color: number) {
+export function createInvisiblePreviewMaterial(color: number) {
   return new THREE.MeshBasicMaterial({
     color,
     transparent: true,
@@ -231,7 +231,7 @@ export function cloneObjectForPreview(
   return clone;
 }
 
-const PREVIEW_LINE_COLOR = 0x64748b;
+export const PREVIEW_LINE_COLOR = 0x64748b;
 
 function createWideDashedMaterial() {
   return new LineMaterial({
@@ -271,7 +271,7 @@ function createWideDashedGeometry(mesh: THREE.Mesh) {
   return geometry;
 }
 
-function addWideDashedOverlay(mesh: THREE.Mesh) {
+export function addWideDashedOverlay(mesh: THREE.Mesh) {
   const geometry = createWideDashedGeometry(mesh);
   const material = createWideDashedMaterial();
   const line = new LineSegments2(geometry, material);

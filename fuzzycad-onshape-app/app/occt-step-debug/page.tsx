@@ -7,6 +7,7 @@ import { Canvas } from "@react-three/fiber";
 import { OrbitControls } from "@react-three/drei";
 import { getOcctClient } from "../lib/occt/occtClient";
 import { bindSolidsToPathKeysPositionally } from "../lib/occt/stepPathKeyBinding";
+import { extractOrderedAssemblyPathKeys } from "../lib/occt/orderedAssemblyPathKeys";
 import { fetchOnshapeAssembly, fetchOnshapeAssemblyStep, uploadOnshapeImportStep } from "../lib/onshapeClient";
 
 /**
@@ -21,44 +22,6 @@ import { fetchOnshapeAssembly, fetchOnshapeAssemblyStep, uploadOnshapeImportStep
  * Not linked from any nav. Remove once Phase 1-3 land in the real viewer.
  */
 const SOLID_COLORS = ["#4f7cff", "#ff7a45", "#22c55e", "#eab308", "#a855f7", "#06b6d4", "#f472b6", "#84cc16"];
-
-function extractOrderedPathKeys(assemblyJson: unknown): { pathKey: string; partName: string | null }[] {
-  const def = assemblyJson as { data?: unknown } | null;
-  const root = (((def?.data ?? def) as { rootAssembly?: unknown })?.rootAssembly ?? def?.data ?? def) as {
-    occurrences?: unknown;
-    instances?: unknown;
-  };
-  const subs = (((def?.data ?? def) as { subAssemblies?: unknown })?.subAssemblies ?? []) as unknown[];
-
-  const nameById = new Map<string, string>();
-  const addInstanceNames = (arr: unknown) => {
-    if (!Array.isArray(arr)) return;
-    for (const inst of arr) {
-      const i = inst as { id?: unknown; name?: unknown };
-      if (typeof i.id === "string") {
-        nameById.set(i.id, typeof i.name === "string" ? i.name : i.id);
-      }
-    }
-  };
-  addInstanceNames(root.instances);
-  for (const sub of subs) {
-    addInstanceNames((sub as { instances?: unknown })?.instances);
-  }
-
-  const occurrences = Array.isArray(root.occurrences) ? root.occurrences : [];
-  const out: { pathKey: string; partName: string | null }[] = [];
-
-  for (const rawOcc of occurrences) {
-    const occ = rawOcc as { path?: unknown };
-    if (!Array.isArray(occ.path) || occ.path.length === 0) continue;
-    const path = occ.path as string[];
-    const pathKey = path.join("/");
-    const leafId = path[path.length - 1];
-    out.push({ pathKey, partName: nameById.get(leafId) ?? null });
-  }
-
-  return out;
-}
 
 type BoundSolid = { handle: number; pathKey: string; partName: string | null };
 
@@ -91,7 +54,7 @@ function OcctStepDebugInner() {
         setStatus(`ERROR fetching occurrences: ${JSON.stringify(assemblyResult)}`);
         return;
       }
-      const orderedPathKeys = extractOrderedPathKeys(assemblyResult);
+      const orderedPathKeys = extractOrderedAssemblyPathKeys(assemblyResult);
 
       setStatus(`fetching STEP export from /api/onshape/assembly-step (${orderedPathKeys.length} occurrences found)...`);
       const stepRes = await fetchOnshapeAssemblyStep({ documentId, workspaceId, assemblyElementId, server });
