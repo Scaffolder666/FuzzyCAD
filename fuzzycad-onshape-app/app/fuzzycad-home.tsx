@@ -72,6 +72,7 @@ import { AXIS_LABEL } from "./components/viewer/AxisTriadHandle";
 import { useUncertaintyDocument } from "./hooks/useUncertaintyDocument";
 import { buildFuzzyCADProjectState } from "./lib/fuzzycad/projectState";
 import { exportAnnotatedSelectionStl } from "./lib/fuzzycad/exportAnnotatedSelectionStl";
+import { useBrepGhostSource } from "./lib/occt/useBrepGhostSource";
 
 const FuzzyCADGeometryViewer = dynamic(
   () => import("./components/FuzzyCADGeometryViewer"),
@@ -177,6 +178,12 @@ export default function FuzzyCADHome() {
     meshGraph,
     selectedMeshNode,
   });
+
+  // Lazily loads real B-rep data (STEP export + OCCT) to upgrade the
+  // Move/Scale/Rotate ghost previews from mesh-clone approximations to
+  // geometrically exact ones — nothing downloads until ensureLoaded() is
+  // first called from startMove()/startScale()/startRotate().
+  const brepGhostSource = useBrepGhostSource();
 
   const selectedPathKeysForPlanning = useMemo(() => {
     if (lassoPathKeys.length > 0) {
@@ -1001,6 +1008,18 @@ export default function FuzzyCADHome() {
     setActiveTool("move");
     resetSizeOperationState();
     setLassoPathKeys([]);
+
+    // Kick off the (lazy, only-happens-once) B-rep load in the
+    // background — the ghost preview upgrades from mesh-clone to
+    // geometrically exact automatically once/if it resolves.
+    if (documentId && workspaceId && selectedAssemblyId) {
+      brepGhostSource.ensureLoaded({
+        documentId,
+        workspaceId,
+        assemblyElementId: selectedAssemblyId,
+        server,
+      });
+    }
 
     // Reuse the mate graph already fetched for the assembly (see
     // usePartGraph), plus same-source-Part-Studio siblings, to find parts
@@ -1891,6 +1910,7 @@ if (result.ok && result.state) {
           movePreviews={movePreviews}
           moveDelta={moveDelta}
           onMoveDeltaChange={setMoveDelta}
+          brepGhostSource={brepGhostSource}
           moveConstraintNormal={moveConstraintNormal}
           moveConstraintMeshUuid={moveConstraintMeshUuid}
           moveConstraintStandoff={moveConstraintStandoff}

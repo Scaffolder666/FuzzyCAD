@@ -81,6 +81,14 @@ import {
   type MoveTranslatePreviewSession,
 } from "./viewer/moveTranslatePreview";
 import {
+  createBrepGhostMesh,
+  updateBrepGhostMesh,
+  STEP_MM_TO_THREE_M,
+  type BrepGhostMesh,
+} from "./viewer/brepGhost";
+import { getOcctClient } from "../lib/occt/occtClient";
+import type { BrepGhostSource } from "../lib/occt/useBrepGhostSource";
+import {
   createScalePreviewSession,
   disposeScalePreviewSession,
   updateScalePreviewSession,
@@ -288,6 +296,8 @@ type FuzzyCADGeometryViewerProps = {
   /** Other saved (not currently being dragged) moves, shown as static ghosts. */
   movePreviews?: MovePreview[];
   moveDelta?: MoveDelta;
+  /** Lazily-loaded B-rep handle lookup, used to upgrade the Move ghost from a mesh-clone approximation to a geometrically exact preview once loaded. */
+  brepGhostSource?: BrepGhostSource | null;
   onMoveDeltaChange?: (delta: MoveDelta) => void;
   /** Set while the "Move (along face)" tool has a picked constraint face — renders MovePlaneHandle instead of the free 3-axis MoveTriadHandle. */
   moveConstraintNormal?: [number, number, number] | null;
@@ -1064,6 +1074,7 @@ function Model({
   movePreviews,
   moveDelta = { x: 0, y: 0, z: 0 },
   onMoveDeltaChange,
+  brepGhostSource,
   moveConstraintNormal,
   moveConstraintMeshUuid,
   moveConstraintStandoff = 0,
@@ -1126,6 +1137,7 @@ function Model({
   movePreviews?: MovePreview[];
   moveDelta?: MoveDelta;
   onMoveDeltaChange?: (delta: MoveDelta) => void;
+  brepGhostSource?: BrepGhostSource | null;
   moveConstraintNormal?: [number, number, number] | null;
   moveConstraintMeshUuid?: string | null;
   moveConstraintStandoff?: number;
@@ -1434,6 +1446,12 @@ function Model({
     ]);
   }, [scene, movePlan]);
 
+  // The optional B-rep-accurate upgrade for the Move ghost (see below) —
+  // tracked outside the session object since it's added/removed on its
+  // own schedule, independent of the mesh-clone ghosts' lifecycle.
+  const brepMoveGhostRef = useRef<BrepGhostMesh | null>(null);
+  const brepMoveDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   useEffect(() => {
     if (!moveTranslatePreviewSession) {
       return;
@@ -1444,6 +1462,11 @@ function Model({
 
     return () => {
       disposeMoveTranslatePreviewSession(moveTranslatePreviewSession);
+      if (brepMoveDebounceRef.current) {
+        clearTimeout(brepMoveDebounceRef.current);
+        brepMoveDebounceRef.current = null;
+      }
+      brepMoveGhostRef.current = null;
       invalidate();
     };
   }, [scene, moveTranslatePreviewSession, invalidate]);
@@ -1459,6 +1482,77 @@ function Model({
     );
     invalidate();
   }, [moveTranslatePreviewSession, moveDelta, invalidate]);
+
+  // Upgrades the Move ghost from the instant mesh-clone approximation
+  // above to a geometrically exact one, once real B-rep data is loaded
+  // (see useBrepGhostSource — lazy, only starts on first Move/Scale/
+  // Rotate use). Debounced so dragging itself stays instant/responsive;
+  // the worker round-trip only fires ~200ms after the delta settles.
+  // Only the plan's primary pathKey is upgraded for now — followPathKeys
+  // (mate-linked neighbors moved along) keep the mesh-clone ghost.
+  useEffect(() => {
+    if (!moveTranslatePreviewSession || !movePlan || !brepGhostSource) {
+      return;
+    }
+
+    if (brepGhostSource.status !== "ready") {
+      return;
+    }
+
+    const handle = brepGhostSource.getHandle(movePlan.pathKey);
+
+    if (handle === null) {
+      return;
+    }
+
+    const deltaMm: [number, number, number] = [
+      moveDelta.x / STEP_MM_TO_THREE_M,
+      moveDelta.y / STEP_MM_TO_THREE_M,
+      moveDelta.z / STEP_MM_TO_THREE_M,
+    ];
+
+    if (brepMoveDebounceRef.current) {
+      clearTimeout(brepMoveDebounceRef.current);
+    }
+
+    brepMoveDebounceRef.current = setTimeout(() => {
+      getOcctClient()
+        .translateSolid(handle, deltaMm, false)
+        .then(({ mesh, valid }) => {
+          if (!valid || !moveTranslatePreviewSession) {
+            return;
+          }
+
+          if (!brepMoveGhostRef.current) {
+            const ghost = createBrepGhostMesh(mesh, "FuzzyCAD Move Preview (B-rep)");
+            brepMoveGhostRef.current = ghost;
+            moveTranslatePreviewSession.group.add(ghost);
+
+            // The exact ghost replaces the approximate one visually —
+            // hide the primary target's mesh-clone (followPathKeys stay).
+            const primaryClone = moveTranslatePreviewSession.clones.find(
+              (item) => item.pathKey === movePlan.pathKey,
+            );
+            if (primaryClone) {
+              primaryClone.clone.visible = false;
+            }
+          } else {
+            updateBrepGhostMesh(brepMoveGhostRef.current, mesh);
+          }
+
+          invalidate();
+        })
+        .catch(() => {
+          // Best-effort upgrade — keep showing the mesh-clone ghost on failure.
+        });
+    }, 200);
+
+    return () => {
+      if (brepMoveDebounceRef.current) {
+        clearTimeout(brepMoveDebounceRef.current);
+      }
+    };
+  }, [moveTranslatePreviewSession, movePlan, moveDelta, brepGhostSource, invalidate]);
 
   // Every OTHER saved move (not the one currently being dragged) shows as a
   // static ghost at its saved delta.
@@ -3614,6 +3708,7 @@ export default function FuzzyCADGeometryViewer({
   movePreviews,
   moveDelta,
   onMoveDeltaChange,
+  brepGhostSource,
   moveConstraintNormal,
   moveConstraintMeshUuid,
   moveConstraintStandoff,
@@ -3733,6 +3828,7 @@ export default function FuzzyCADGeometryViewer({
                   movePreviews={movePreviews}
                   moveDelta={moveDelta}
                   onMoveDeltaChange={onMoveDeltaChange}
+                  brepGhostSource={brepGhostSource}
                   moveConstraintNormal={moveConstraintNormal}
                   moveConstraintMeshUuid={moveConstraintMeshUuid}
                   moveConstraintStandoff={moveConstraintStandoff}
