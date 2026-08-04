@@ -208,6 +208,12 @@ export async function fetchOnshapeAssemblyGltf(query: AssemblyQuery) {
   return fetch(`/api/onshape/assembly-gltf?${params.toString()}`);
 }
 
+export async function fetchOnshapeAssemblyStep(query: AssemblyQuery) {
+  const params = makeAssemblyParams(query);
+
+  return fetch(`/api/onshape/assembly-step?${params.toString()}`);
+}
+
 export async function fetchOnshapeAssemblyZipManifest(
   query: AssemblyQuery,
 ): Promise<ApiResult> {
