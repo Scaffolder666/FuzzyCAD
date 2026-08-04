@@ -7,17 +7,18 @@ import { Canvas } from "@react-three/fiber";
 import { OrbitControls } from "@react-three/drei";
 import { getOcctClient } from "../lib/occt/occtClient";
 import { bindSolidsToPathKeysPositionally } from "../lib/occt/stepPathKeyBinding";
-import { fetchOnshapeAssembly, fetchOnshapeAssemblyStep } from "../lib/onshapeClient";
+import { fetchOnshapeAssembly, fetchOnshapeAssemblyStep, uploadOnshapeImportStep } from "../lib/onshapeClient";
 
 /**
  * Verification page for the real Onshape STEP export + solid-splitting +
- * pathKey-binding pipeline, against a real live assembly (unlike
+ * pathKey-binding pipeline, and (second button) the edit + export +
+ * import-back round trip, against a real live assembly (unlike
  * /occt-debug, which only exercises synthetic in-worker test shapes).
  * Requires an active Onshape OAuth session (the same cookie the FuzzyCAD
  * panel itself uses) and the assembly's documentId/workspaceId/
  * assemblyElementId as URL query params, e.g.:
  *   /occt-step-debug?documentId=...&workspaceId=...&assemblyElementId=...&server=https://cad.onshape.com
- * Not linked from any nav. Remove once Phase 1 lands in the real viewer.
+ * Not linked from any nav. Remove once Phase 1-3 land in the real viewer.
  */
 const SOLID_COLORS = ["#4f7cff", "#ff7a45", "#22c55e", "#eab308", "#a855f7", "#06b6d4", "#f472b6", "#84cc16"];
 
@@ -59,10 +60,13 @@ function extractOrderedPathKeys(assemblyJson: unknown): { pathKey: string; partN
   return out;
 }
 
+type BoundSolid = { handle: number; pathKey: string; partName: string | null };
+
 function OcctStepDebugInner() {
   const searchParams = useSearchParams();
   const [status, setStatus] = useState("idle");
   const [solidGeometries, setSolidGeometries] = useState<{ geom: THREE.BufferGeometry; label: string }[]>([]);
+  const [loadedSolids, setLoadedSolids] = useState<BoundSolid[] | null>(null);
 
   const documentId = searchParams.get("documentId") ?? "";
   const workspaceId = searchParams.get("workspaceId") ?? "";
@@ -71,6 +75,7 @@ function OcctStepDebugInner() {
 
   async function run() {
     setSolidGeometries([]);
+    setLoadedSolids(null);
 
     if (!documentId || !workspaceId || !assemblyElementId) {
       setStatus(
@@ -97,17 +102,24 @@ function OcctStepDebugInner() {
       }
       const stepBuffer = await stepRes.arrayBuffer();
 
-      setStatus(`loading OCCT and parsing ${stepBuffer.byteLength} bytes of STEP...`);
+      setStatus(`loading OCCT and parsing ${stepBuffer.byteLength} bytes of STEP as persistent assembly state...`);
       const client = getOcctClient();
       await client.ready();
-      const solidMeshes = await client.loadStepSolids(stepBuffer);
+      const solids = await client.loadAssemblySolids(stepBuffer);
 
       const { bound, unmatchedSolidCount, unmatchedPathKeys } = bindSolidsToPathKeysPositionally(
-        solidMeshes,
+        solids.map((s) => s.mesh),
         orderedPathKeys.map((p) => p.pathKey),
       );
 
-      const geoms = bound.map(({ pathKey, mesh }, i) => {
+      const boundSolids: BoundSolid[] = bound.map((b, i) => ({
+        handle: solids[i].handle,
+        pathKey: b.pathKey,
+        partName: orderedPathKeys[i]?.partName ?? null,
+      }));
+      setLoadedSolids(boundSolids);
+
+      const geoms = bound.map(({ mesh, pathKey }, i) => {
         const geom = new THREE.BufferGeometry();
         geom.setAttribute("position", new THREE.BufferAttribute(mesh.positions, 3));
         geom.setIndex(new THREE.BufferAttribute(mesh.indices, 1));
@@ -118,9 +130,50 @@ function OcctStepDebugInner() {
       setSolidGeometries(geoms);
 
       setStatus(
-        `OK: ${solidMeshes.length} solids from STEP, ${orderedPathKeys.length} occurrences, ${bound.length} bound. ` +
+        `OK: ${solids.length} solids from STEP, ${orderedPathKeys.length} occurrences, ${bound.length} bound. ` +
           `unmatchedSolidCount=${unmatchedSolidCount}, unmatchedPathKeys=[${unmatchedPathKeys.join(", ")}]. ` +
-          `Bound: [${bound.map((b, i) => orderedPathKeys[i]?.partName ?? b.pathKey).join(", ")}]`,
+          `Bound: [${boundSolids.map((b) => b.partName ?? b.pathKey).join(", ")}]. ` +
+          `Now click "Move first part + export + import back" to test Phase 3.`,
+      );
+    } catch (error) {
+      setStatus(`ERROR: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  async function editExportAndImportBack() {
+    if (!loadedSolids || loadedSolids.length === 0) {
+      setStatus("ERROR: load the assembly first (click the other button).");
+      return;
+    }
+
+    try {
+      const client = getOcctClient();
+      const target = loadedSolids[0];
+
+      setStatus(`translating "${target.partName ?? target.pathKey}" by 50 units along Z and committing...`);
+      const result = await client.translateSolid(target.handle, [0, 0, 50], true);
+
+      if (!result.valid) {
+        setStatus(`ERROR: committed translate produced an invalid B-rep shape for "${target.partName ?? target.pathKey}".`);
+        return;
+      }
+
+      const geom = new THREE.BufferGeometry();
+      geom.setAttribute("position", new THREE.BufferAttribute(result.mesh.positions, 3));
+      geom.setIndex(new THREE.BufferAttribute(result.mesh.indices, 1));
+      geom.computeVertexNormals();
+      setSolidGeometries((prev) => prev.map((g, i) => (i === 0 ? { ...g, geom } : g)));
+
+      setStatus("edit is a valid B-rep. Exporting the whole assembly (with this edit) as STEP...");
+      const stepBuffer = await client.exportAssemblyStep();
+
+      setStatus(`got ${stepBuffer.byteLength} bytes of edited STEP. Uploading back into the Onshape document...`);
+      const importRes = await uploadOnshapeImportStep({ documentId, workspaceId, server }, stepBuffer);
+      const importResult = await importRes.json();
+
+      setStatus(
+        `${importResult.ok ? "OK" : "ERROR"}: import ${importResult.ok ? "succeeded" : "failed"}. ` +
+          JSON.stringify(importResult, null, 2),
       );
     } catch (error) {
       setStatus(`ERROR: ${error instanceof Error ? error.message : String(error)}`);
@@ -135,6 +188,9 @@ function OcctStepDebugInner() {
       </div>
       <button onClick={run} style={{ marginTop: 8 }}>
         Fetch real assembly as STEP and bind pathKeys
+      </button>
+      <button onClick={editExportAndImportBack} style={{ marginTop: 8, marginLeft: 8 }}>
+        Move first part + export + import back (Phase 3)
       </button>
       <pre data-testid="occt-step-status" style={{ marginTop: 16, whiteSpace: "pre-wrap" }}>
         {status}

@@ -40,7 +40,8 @@ type OcctWorkerRequest =
       axisWorld: [number, number, number];
       angleRad: number;
       commit: boolean;
-    };
+    }
+  | { id: number; type: "exportAssemblyStep" };
 
 type TessellatedShape = {
   positions: Float32Array;
@@ -64,6 +65,7 @@ type OcctWorkerResponse =
   | { id: number; type: "scaleSolidResult"; handle: number; mesh: TessellatedShape; valid: boolean }
   | { id: number; type: "rotateSolidResult"; handle: number; mesh: TessellatedShape; valid: boolean }
   | { id: number; type: "testStepBytesResult"; buffer: ArrayBuffer }
+  | { id: number; type: "exportAssemblyStepResult"; buffer: ArrayBuffer }
   | { id: number; type: "error"; message: string };
 
 // Minimal structural typing for the parts of the embind API this file
@@ -576,6 +578,31 @@ self.onmessage = async (event: MessageEvent<OcctWorkerRequest>) => {
       const mesh = tessellateShape(oc, transformed);
       const response: OcctWorkerResponse = { id, type: "rotateSolidResult", handle, mesh, valid };
       self.postMessage(response, [mesh.positions.buffer, mesh.indices.buffer]);
+      return;
+    }
+
+    if (type === "exportAssemblyStep") {
+      const oc = await loadOcct();
+
+      if (shapeStore.size === 0) {
+        throw new Error("exportAssemblyStep: no assembly loaded (call loadAssemblySolids first)");
+      }
+
+      const compound = new oc.TopoDS_Compound();
+      const builder = new oc.BRep_Builder();
+      builder.MakeCompound(compound);
+      for (const shape of shapeStore.values()) {
+        builder.Add(compound, shape);
+      }
+      builder.delete();
+
+      const stepBytes = shapeToStepBytes(oc, compound);
+      const buffer = stepBytes.buffer.slice(
+        stepBytes.byteOffset,
+        stepBytes.byteOffset + stepBytes.byteLength,
+      ) as ArrayBuffer;
+      const response: OcctWorkerResponse = { id, type: "exportAssemblyStepResult", buffer };
+      self.postMessage(response, [buffer]);
       return;
     }
 

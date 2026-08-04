@@ -214,6 +214,18 @@ export async function fetchOnshapeAssemblyStep(query: AssemblyQuery) {
   return fetch(`/api/onshape/assembly-step?${params.toString()}`);
 }
 
+export async function uploadOnshapeImportStep(
+  query: DocumentQuery,
+  stepBuffer: ArrayBuffer,
+) {
+  const params = makeDocumentParams(query);
+
+  return fetch(`/api/onshape/import-step?${params.toString()}`, {
+    method: "POST",
+    body: stepBuffer,
+  });
+}
+
 export async function fetchOnshapeAssemblyZipManifest(
   query: AssemblyQuery,
 ): Promise<ApiResult> {

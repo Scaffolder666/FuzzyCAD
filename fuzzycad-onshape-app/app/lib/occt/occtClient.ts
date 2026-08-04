@@ -173,6 +173,16 @@ class OcctClient {
     return { mesh: response.mesh, valid: response.valid };
   }
 
+  /** Combines every currently-loaded solid (including any committed edits) into one compound and writes it out as STEP bytes. */
+  async exportAssemblyStep(): Promise<ArrayBuffer> {
+    await this.ready();
+    const response = await this.send({ type: "exportAssemblyStep" });
+    if (response.type !== "exportAssemblyStepResult") {
+      throw new Error(`Unexpected response type: ${response.type}`);
+    }
+    return response.buffer;
+  }
+
   dispose(): void {
     this.worker.terminate();
   }
