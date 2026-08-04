@@ -128,18 +128,18 @@ export default function OcctDebugPage() {
       const before = avgY(boxA.mesh);
 
       const preview1 = await client.translateSolid(boxA.handle, [0, 20, 0], false);
-      const afterPreview1 = avgY(preview1);
+      const afterPreview1 = avgY(preview1.mesh);
 
       const preview2 = await client.translateSolid(boxA.handle, [0, 5, 0], false);
-      const afterPreview2 = avgY(preview2);
+      const afterPreview2 = avgY(preview2.mesh);
 
       const committed = await client.translateSolid(boxA.handle, [0, 20, 0], true);
-      const afterCommit = avgY(committed);
+      const afterCommit = avgY(committed.mesh);
 
       const preview3 = await client.translateSolid(boxA.handle, [0, 5, 0], false);
-      const afterPreview3 = avgY(preview3);
+      const afterPreview3 = avgY(preview3.mesh);
 
-      const geoms = [committed, boxB.mesh].map((mesh) => {
+      const geoms = [committed.mesh, boxB.mesh].map((mesh) => {
         const geom = new THREE.BufferGeometry();
         geom.setAttribute("position", new THREE.BufferAttribute(mesh.positions, 3));
         geom.setIndex(new THREE.BufferAttribute(mesh.indices, 1));
@@ -153,6 +153,7 @@ export default function OcctDebugPage() {
         { label: "preview +5 NOT stacked on prior preview", got: afterPreview2 - before, want: 5 },
         { label: "commit +20", got: afterCommit - before, want: 20 },
         { label: "preview +5 stacked on commit", got: afterPreview3 - before, want: 25 },
+        { label: "commit is valid B-rep", got: committed.valid ? 1 : 0, want: 1 },
       ];
       const allOk = checks.every((c) => Math.abs(c.got - c.want) < 1e-6);
 
@@ -197,18 +198,18 @@ export default function OcctDebugPage() {
       const before = extentX(boxA.mesh);
 
       const preview1 = await client.scaleSolid(boxA.handle, pivot, 2, false);
-      const afterPreview1 = extentX(preview1);
+      const afterPreview1 = extentX(preview1.mesh);
 
       const preview2 = await client.scaleSolid(boxA.handle, pivot, 3, false);
-      const afterPreview2 = extentX(preview2);
+      const afterPreview2 = extentX(preview2.mesh);
 
       const committed = await client.scaleSolid(boxA.handle, pivot, 2, true);
-      const afterCommit = extentX(committed);
+      const afterCommit = extentX(committed.mesh);
 
       const preview3 = await client.scaleSolid(boxA.handle, pivot, 3, false);
-      const afterPreview3 = extentX(preview3);
+      const afterPreview3 = extentX(preview3.mesh);
 
-      const geoms = [committed, boxB.mesh].map((mesh) => {
+      const geoms = [committed.mesh, boxB.mesh].map((mesh) => {
         const geom = new THREE.BufferGeometry();
         geom.setAttribute("position", new THREE.BufferAttribute(mesh.positions, 3));
         geom.setIndex(new THREE.BufferAttribute(mesh.indices, 1));
@@ -223,6 +224,7 @@ export default function OcctDebugPage() {
         { label: "preview x3 NOT stacked on prior preview", got: afterPreview2.extent, want: before.extent * 3 },
         { label: "commit x2 extent", got: afterCommit.extent, want: before.extent * 2 },
         { label: "preview x3 stacked on commit", got: afterPreview3.extent, want: before.extent * 2 * 3 },
+        { label: "commit is valid B-rep", got: committed.valid ? 1 : 0, want: 1 },
       ];
       const allOk = checks.every((c) => Math.abs(c.got - c.want) < 1e-6);
 
@@ -287,22 +289,22 @@ export default function OcctDebugPage() {
       const before = avgPoint(boxB.mesh);
 
       const preview1 = await client.rotateSolid(boxB.handle, pivot, axis, Math.PI / 2, false);
-      const afterPreview1 = avgPoint(preview1);
+      const afterPreview1 = avgPoint(preview1.mesh);
       const predicted1 = rotateAroundX(before, pivot, Math.PI / 2);
 
       const preview2 = await client.rotateSolid(boxB.handle, pivot, axis, Math.PI / 4, false);
-      const afterPreview2 = avgPoint(preview2);
+      const afterPreview2 = avgPoint(preview2.mesh);
       const predicted2 = rotateAroundX(before, pivot, Math.PI / 4);
 
       const committed = await client.rotateSolid(boxB.handle, pivot, axis, Math.PI / 2, true);
-      const afterCommit = avgPoint(committed);
+      const afterCommit = avgPoint(committed.mesh);
       const predictedCommit = rotateAroundX(before, pivot, Math.PI / 2);
 
       const preview3 = await client.rotateSolid(boxB.handle, pivot, axis, Math.PI / 4, false);
-      const afterPreview3 = avgPoint(preview3);
+      const afterPreview3 = avgPoint(preview3.mesh);
       const predicted3 = rotateAroundX(before, pivot, Math.PI / 2 + Math.PI / 4);
 
-      const geoms = [solids[0].mesh, committed].map((mesh) => {
+      const geoms = [solids[0].mesh, committed.mesh].map((mesh) => {
         const geom = new THREE.BufferGeometry();
         geom.setAttribute("position", new THREE.BufferAttribute(mesh.positions, 3));
         geom.setIndex(new THREE.BufferAttribute(mesh.indices, 1));
@@ -316,12 +318,13 @@ export default function OcctDebugPage() {
         { label: "preview 45deg NOT stacked on prior preview", got: dist(afterPreview2, predicted2), want: 0 },
         { label: "commit 90deg centroid", got: dist(afterCommit, predictedCommit), want: 0 },
         { label: "preview 45deg stacked on commit (135deg total)", got: dist(afterPreview3, predicted3), want: 0 },
+        { label: "commit is valid B-rep", got: committed.valid ? 0 : 1, want: 0 },
       ];
       const allOk = checks.every((c) => Math.abs(c.got - c.want) < 1e-4);
 
       setStatus(
         `${allOk ? "OK" : "MISMATCH"}: ` +
-          checks.map((c) => `${c.label}: centroid error ${c.got.toFixed(6)}`).join(" | "),
+          checks.map((c) => `${c.label}: ${c.got.toFixed(6)}`).join(" | "),
       );
     } catch (error) {
       setStatus(`ERROR: ${error instanceof Error ? error.message : String(error)}`);

@@ -60,9 +60,9 @@ type OcctWorkerResponse =
   | { id: number; type: "loadStepResult"; mesh: TessellatedShape }
   | { id: number; type: "loadStepSolidsResult"; meshes: TessellatedShape[] }
   | { id: number; type: "loadAssemblySolidsResult"; solids: { handle: number; mesh: TessellatedShape }[] }
-  | { id: number; type: "translateSolidResult"; handle: number; mesh: TessellatedShape }
-  | { id: number; type: "scaleSolidResult"; handle: number; mesh: TessellatedShape }
-  | { id: number; type: "rotateSolidResult"; handle: number; mesh: TessellatedShape }
+  | { id: number; type: "translateSolidResult"; handle: number; mesh: TessellatedShape; valid: boolean }
+  | { id: number; type: "scaleSolidResult"; handle: number; mesh: TessellatedShape; valid: boolean }
+  | { id: number; type: "rotateSolidResult"; handle: number; mesh: TessellatedShape; valid: boolean }
   | { id: number; type: "testStepBytesResult"; buffer: ArrayBuffer }
   | { id: number; type: "error"; message: string };
 
@@ -155,6 +155,10 @@ type OpenCascadeInstance = {
     copy: boolean,
   ) => {
     Shape: () => TopoDS_Shape;
+    delete: () => void;
+  };
+  BRepCheck_Analyzer: new (shape: TopoDS_Shape, geomControls: boolean) => {
+    IsValid_2: () => boolean;
     delete: () => void;
   };
 };
@@ -368,6 +372,14 @@ function rotateShape(
   return result;
 }
 
+/** Runs OCCT's own topology/geometry validity checker — confirms an edit didn't produce a broken solid. */
+function checkShapeValid(oc: OpenCascadeInstance, shape: TopoDS_Shape): boolean {
+  const analyzer = new oc.BRepCheck_Analyzer(shape, true);
+  const valid = analyzer.IsValid_2();
+  analyzer.delete();
+  return valid;
+}
+
 function shapeToStepBytes(oc: OpenCascadeInstance, shape: TopoDS_Shape): Uint8Array {
   const writer = new oc.STEPControl_Writer_1();
   writer.Transfer(shape, oc.STEPControl_StepModelType.STEPControl_AsIs, true);
@@ -511,13 +523,14 @@ self.onmessage = async (event: MessageEvent<OcctWorkerRequest>) => {
       }
 
       const transformed = translateShape(oc, shape, deltaWorld);
+      const valid = checkShapeValid(oc, transformed);
 
       if (commit) {
         shapeStore.set(handle, transformed);
       }
 
       const mesh = tessellateShape(oc, transformed);
-      const response: OcctWorkerResponse = { id, type: "translateSolidResult", handle, mesh };
+      const response: OcctWorkerResponse = { id, type: "translateSolidResult", handle, mesh, valid };
       self.postMessage(response, [mesh.positions.buffer, mesh.indices.buffer]);
       return;
     }
@@ -532,13 +545,14 @@ self.onmessage = async (event: MessageEvent<OcctWorkerRequest>) => {
       }
 
       const transformed = scaleShape(oc, shape, pivotWorld, factor);
+      const valid = checkShapeValid(oc, transformed);
 
       if (commit) {
         shapeStore.set(handle, transformed);
       }
 
       const mesh = tessellateShape(oc, transformed);
-      const response: OcctWorkerResponse = { id, type: "scaleSolidResult", handle, mesh };
+      const response: OcctWorkerResponse = { id, type: "scaleSolidResult", handle, mesh, valid };
       self.postMessage(response, [mesh.positions.buffer, mesh.indices.buffer]);
       return;
     }
@@ -553,13 +567,14 @@ self.onmessage = async (event: MessageEvent<OcctWorkerRequest>) => {
       }
 
       const transformed = rotateShape(oc, shape, pivotWorld, axisWorld, angleRad);
+      const valid = checkShapeValid(oc, transformed);
 
       if (commit) {
         shapeStore.set(handle, transformed);
       }
 
       const mesh = tessellateShape(oc, transformed);
-      const response: OcctWorkerResponse = { id, type: "rotateSolidResult", handle, mesh };
+      const response: OcctWorkerResponse = { id, type: "rotateSolidResult", handle, mesh, valid };
       self.postMessage(response, [mesh.positions.buffer, mesh.indices.buffer]);
       return;
     }

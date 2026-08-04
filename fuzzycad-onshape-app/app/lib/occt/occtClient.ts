@@ -128,49 +128,49 @@ class OcctClient {
     return response.solids;
   }
 
-  /** commit=false: preview only, always from the last committed state. commit=true: replaces the stored solid. */
+  /** commit=false: preview only, always from the last committed state. commit=true: replaces the stored solid. `valid` is OCCT's own BRepCheck_Analyzer verdict on the transformed shape. */
   async translateSolid(
     handle: number,
     deltaWorld: [number, number, number],
     commit: boolean,
-  ): Promise<{ positions: Float32Array; indices: Uint32Array }> {
+  ): Promise<{ mesh: { positions: Float32Array; indices: Uint32Array }; valid: boolean }> {
     await this.ready();
     const response = await this.send({ type: "translateSolid", handle, deltaWorld, commit });
     if (response.type !== "translateSolidResult") {
       throw new Error(`Unexpected response type: ${response.type}`);
     }
-    return response.mesh;
+    return { mesh: response.mesh, valid: response.valid };
   }
 
-  /** commit=false: preview only, always from the last committed state. commit=true: replaces the stored solid. */
+  /** commit=false: preview only, always from the last committed state. commit=true: replaces the stored solid. `valid` is OCCT's own BRepCheck_Analyzer verdict on the transformed shape. */
   async scaleSolid(
     handle: number,
     pivotWorld: [number, number, number],
     factor: number,
     commit: boolean,
-  ): Promise<{ positions: Float32Array; indices: Uint32Array }> {
+  ): Promise<{ mesh: { positions: Float32Array; indices: Uint32Array }; valid: boolean }> {
     await this.ready();
     const response = await this.send({ type: "scaleSolid", handle, pivotWorld, factor, commit });
     if (response.type !== "scaleSolidResult") {
       throw new Error(`Unexpected response type: ${response.type}`);
     }
-    return response.mesh;
+    return { mesh: response.mesh, valid: response.valid };
   }
 
-  /** commit=false: preview only, always from the last committed state. commit=true: replaces the stored solid. */
+  /** commit=false: preview only, always from the last committed state. commit=true: replaces the stored solid. `valid` is OCCT's own BRepCheck_Analyzer verdict on the transformed shape. */
   async rotateSolid(
     handle: number,
     pivotWorld: [number, number, number],
     axisWorld: [number, number, number],
     angleRad: number,
     commit: boolean,
-  ): Promise<{ positions: Float32Array; indices: Uint32Array }> {
+  ): Promise<{ mesh: { positions: Float32Array; indices: Uint32Array }; valid: boolean }> {
     await this.ready();
     const response = await this.send({ type: "rotateSolid", handle, pivotWorld, axisWorld, angleRad, commit });
     if (response.type !== "rotateSolidResult") {
       throw new Error(`Unexpected response type: ${response.type}`);
     }
-    return response.mesh;
+    return { mesh: response.mesh, valid: response.valid };
   }
 
   dispose(): void {
