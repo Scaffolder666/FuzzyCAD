@@ -142,6 +142,21 @@ class OcctClient {
     return response.mesh;
   }
 
+  /** commit=false: preview only, always from the last committed state. commit=true: replaces the stored solid. */
+  async scaleSolid(
+    handle: number,
+    pivotWorld: [number, number, number],
+    factor: number,
+    commit: boolean,
+  ): Promise<{ positions: Float32Array; indices: Uint32Array }> {
+    await this.ready();
+    const response = await this.send({ type: "scaleSolid", handle, pivotWorld, factor, commit });
+    if (response.type !== "scaleSolidResult") {
+      throw new Error(`Unexpected response type: ${response.type}`);
+    }
+    return response.mesh;
+  }
+
   dispose(): void {
     this.worker.terminate();
   }

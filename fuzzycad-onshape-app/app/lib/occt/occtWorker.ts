@@ -23,6 +23,14 @@ type OcctWorkerRequest =
       handle: number;
       deltaWorld: [number, number, number];
       commit: boolean;
+    }
+  | {
+      id: number;
+      type: "scaleSolid";
+      handle: number;
+      pivotWorld: [number, number, number];
+      factor: number;
+      commit: boolean;
     };
 
 type TessellatedShape = {
@@ -44,6 +52,7 @@ type OcctWorkerResponse =
   | { id: number; type: "loadStepSolidsResult"; meshes: TessellatedShape[] }
   | { id: number; type: "loadAssemblySolidsResult"; solids: { handle: number; mesh: TessellatedShape }[] }
   | { id: number; type: "translateSolidResult"; handle: number; mesh: TessellatedShape }
+  | { id: number; type: "scaleSolidResult"; handle: number; mesh: TessellatedShape }
   | { id: number; type: "testStepBytesResult"; buffer: ArrayBuffer }
   | { id: number; type: "error"; message: string };
 
@@ -124,6 +133,7 @@ type OpenCascadeInstance = {
   gp_Vec_4: new (dx: number, dy: number, dz: number) => unknown;
   gp_Trsf_1: new () => {
     SetTranslation_1: (v: unknown) => void;
+    SetScale: (p: unknown, s: number) => void;
     delete: () => void;
   };
   BRepBuilderAPI_Transform_2: new (
@@ -300,6 +310,27 @@ function translateShape(
   return result;
 }
 
+/**
+ * Uniform scale around a world pivot — the B-rep equivalent of
+ * scalePreview.ts's scaleObjectsAroundWorldPivot. Same real-gp_Trsf
+ * approach as translateShape.
+ */
+function scaleShape(
+  oc: OpenCascadeInstance,
+  shape: TopoDS_Shape,
+  pivotWorld: [number, number, number],
+  factor: number,
+): TopoDS_Shape {
+  const pivot = new oc.gp_Pnt_3(pivotWorld[0], pivotWorld[1], pivotWorld[2]);
+  const trsf = new oc.gp_Trsf_1();
+  trsf.SetScale(pivot, factor);
+  const transform = new oc.BRepBuilderAPI_Transform_2(shape, trsf, true);
+  const result = transform.Shape();
+  trsf.delete();
+  transform.delete();
+  return result;
+}
+
 function shapeToStepBytes(oc: OpenCascadeInstance, shape: TopoDS_Shape): Uint8Array {
   const writer = new oc.STEPControl_Writer_1();
   writer.Transfer(shape, oc.STEPControl_StepModelType.STEPControl_AsIs, true);
@@ -450,6 +481,27 @@ self.onmessage = async (event: MessageEvent<OcctWorkerRequest>) => {
 
       const mesh = tessellateShape(oc, transformed);
       const response: OcctWorkerResponse = { id, type: "translateSolidResult", handle, mesh };
+      self.postMessage(response, [mesh.positions.buffer, mesh.indices.buffer]);
+      return;
+    }
+
+    if (type === "scaleSolid") {
+      const oc = await loadOcct();
+      const { handle, pivotWorld, factor, commit } = event.data;
+      const shape = shapeStore.get(handle);
+
+      if (!shape) {
+        throw new Error(`scaleSolid: unknown handle ${handle}`);
+      }
+
+      const transformed = scaleShape(oc, shape, pivotWorld, factor);
+
+      if (commit) {
+        shapeStore.set(handle, transformed);
+      }
+
+      const mesh = tessellateShape(oc, transformed);
+      const response: OcctWorkerResponse = { id, type: "scaleSolidResult", handle, mesh };
       self.postMessage(response, [mesh.positions.buffer, mesh.indices.buffer]);
       return;
     }

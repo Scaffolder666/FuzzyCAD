@@ -165,6 +165,76 @@ export default function OcctDebugPage() {
     }
   }
 
+  async function runScaleTest() {
+    setStatus("loading OCCT...");
+    setGeometry(null);
+    try {
+      const client = getOcctClient();
+      await client.ready();
+
+      setStatus("making test multi-solid STEP bytes (two boxes)...");
+      const stepBytes = await client.makeTestMultiSolidStepBytes();
+
+      setStatus("loading as persistent assembly state...");
+      const solids = await client.loadAssemblySolids(stepBytes);
+      if (solids.length !== 2) {
+        setStatus(`ERROR: expected 2 solids, got ${solids.length}`);
+        return;
+      }
+
+      const extentX = (mesh: { positions: Float32Array }) => {
+        let min = Infinity;
+        let max = -Infinity;
+        for (let i = 0; i < mesh.positions.length; i += 3) {
+          min = Math.min(min, mesh.positions[i]);
+          max = Math.max(max, mesh.positions[i]);
+        }
+        return { min, max, extent: max - min };
+      };
+
+      const [boxA, boxB] = solids;
+      const pivot: [number, number, number] = [0, 0, 0];
+      const before = extentX(boxA.mesh);
+
+      const preview1 = await client.scaleSolid(boxA.handle, pivot, 2, false);
+      const afterPreview1 = extentX(preview1);
+
+      const preview2 = await client.scaleSolid(boxA.handle, pivot, 3, false);
+      const afterPreview2 = extentX(preview2);
+
+      const committed = await client.scaleSolid(boxA.handle, pivot, 2, true);
+      const afterCommit = extentX(committed);
+
+      const preview3 = await client.scaleSolid(boxA.handle, pivot, 3, false);
+      const afterPreview3 = extentX(preview3);
+
+      const geoms = [committed, boxB.mesh].map((mesh) => {
+        const geom = new THREE.BufferGeometry();
+        geom.setAttribute("position", new THREE.BufferAttribute(mesh.positions, 3));
+        geom.setIndex(new THREE.BufferAttribute(mesh.indices, 1));
+        geom.computeVertexNormals();
+        return geom;
+      });
+      setSolidGeometries(geoms);
+
+      const checks = [
+        { label: "preview x2 extent", got: afterPreview1.extent, want: before.extent * 2 },
+        { label: "preview x2 pivot unmoved", got: afterPreview1.min, want: before.min },
+        { label: "preview x3 NOT stacked on prior preview", got: afterPreview2.extent, want: before.extent * 3 },
+        { label: "commit x2 extent", got: afterCommit.extent, want: before.extent * 2 },
+        { label: "preview x3 stacked on commit", got: afterPreview3.extent, want: before.extent * 2 * 3 },
+      ];
+      const allOk = checks.every((c) => Math.abs(c.got - c.want) < 1e-6);
+
+      setStatus(
+        `${allOk ? "OK" : "MISMATCH"}: ` +
+          checks.map((c) => `${c.label}: got ${c.got.toFixed(3)}, want ${c.want.toFixed(3)}`).join(" | "),
+      );
+    } catch (error) {
+      setStatus(`ERROR: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
   return (
     <div style={{ padding: 24, fontFamily: "monospace" }}>
       <button onClick={runTest}>Run OCCT self-test</button>
@@ -179,6 +249,9 @@ export default function OcctDebugPage() {
       </button>
       <button onClick={runMoveTest} style={{ marginLeft: 8 }}>
         Run Move (translate) test
+      </button>
+      <button onClick={runScaleTest} style={{ marginLeft: 8 }}>
+        Run Scale test
       </button>
       <pre data-testid="occt-status" style={{ marginTop: 16 }}>
         {status}
