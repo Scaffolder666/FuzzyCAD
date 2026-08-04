@@ -65,12 +65,34 @@ function makeRigidRotationAboutPivot(
 }
 
 /**
+ * Scale is NOT a rigid transform — whether Onshape's /occurrencetransforms
+ * even accepts a matrix with a non-identity scale component is unverified.
+ * Built the same way as a rotation about a pivot (translate to pivot,
+ * apply, translate back) so it's ready to test; if Onshape rejects it,
+ * Scale needs a different (non-transform) write-back path, or none.
+ */
+function makeScaleAboutPivot(
+  factor: number,
+  pivotWorld: [number, number, number],
+): THREE.Matrix4 {
+  const pivot = toOnshapeVector(pivotWorld);
+
+  const scale = new THREE.Matrix4().makeScale(factor, factor, factor);
+
+  return new THREE.Matrix4()
+    .makeTranslation(pivot.x, pivot.y, pivot.z)
+    .multiply(scale)
+    .multiply(new THREE.Matrix4().makeTranslation(-pivot.x, -pivot.y, -pivot.z));
+}
+
+/**
  * Given the net rigid deltas per pathKey and each pathKey's CURRENT
  * occurrence transform (from live Onshape placements), builds the
  * absolute transforms to push. Rotations apply in listed order (world
- * space, about their own pivot), then the net translation applies last.
- * Skips pathKeys with no known current placement — can't build an
- * absolute transform without a base to apply the delta to.
+ * space, about their own pivot), then scales (also listed order), then
+ * the net translation applies last. Skips pathKeys with no known current
+ * placement — can't build an absolute transform without a base to apply
+ * the delta to.
  */
 export function computeRigidOccurrenceUpdates(
   deltas: Map<string, ResolvedRigidDelta>,
@@ -95,6 +117,11 @@ export function computeRigidOccurrenceUpdates(
         rotation.pivotWorld,
       );
       matrix = rigidMotion.multiply(matrix);
+    }
+
+    for (const scale of delta.scales) {
+      const scaleMotion = makeScaleAboutPivot(scale.factor, scale.pivotWorld);
+      matrix = scaleMotion.multiply(matrix);
     }
 
     const [dx, dy, dz] = delta.translationWorld;

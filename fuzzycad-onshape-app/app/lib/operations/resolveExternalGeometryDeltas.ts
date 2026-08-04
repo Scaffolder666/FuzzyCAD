@@ -1,17 +1,27 @@
 /**
- * Resolves the two rigid-delta annotation shapes computeAllFinalOccurrenceDeltas
- * (document.ts) deliberately leaves out, because both need CURRENT object
+ * Resolves the rigid-delta annotation shapes computeAllFinalOccurrenceDeltas
+ * (document.ts) deliberately leaves out, because they need CURRENT object
  * positions — data a pure document.ts function can't see:
  *  - Rotate in "object" axis mode: the pivot is another object's current
  *    bbox center.
  *  - Distance (once answered): the move direction comes from the two
  *    objects' current closest points, not anything stored on the
  *    annotation itself.
+ *  - Scale: the pivot is the combined bbox center of the target plus any
+ *    followPathKeys — the SAME shared pivot the whole group scales around,
+ *    not each part's own center.
  *
  * Mirrors the exact math the ghost previews already use in
- * FuzzyCADGeometryViewer.tsx (resolveRotateFrame's "object" branch, and
- * distanceAnswerMoves) so a pushed write-back matches what the reviewer
- * saw on screen before accepting.
+ * FuzzyCADGeometryViewer.tsx / scalePreview.ts (resolveRotateFrame's
+ * "object" branch, distanceAnswerMoves, and createScalePreviewSession's
+ * bbox-union pivot) so a pushed write-back matches what the reviewer saw
+ * on screen before accepting.
+ *
+ * Scale is a special case worth flagging: unlike the other three, it's
+ * not a rigid transform, and whether Onshape's /occurrencetransforms even
+ * accepts a non-identity-scale matrix is unverified as of this writing —
+ * this resolves the delta regardless, so it's ready to test; if Onshape
+ * rejects it, Scale needs to fall back to annotation-only (no write-back).
  */
 
 import type {
@@ -33,11 +43,36 @@ function ensure(deltas: Map<string, ResolvedRigidDelta>, pathKey: string): Resol
     pathKey,
     translationWorld: [0, 0, 0],
     rotations: [],
+    scales: [],
     sourceAnnotationIds: [],
   };
   deltas.set(pathKey, created);
 
   return created;
+}
+
+/** Combined world-axis-aligned bbox center of a group of objects — mirrors createScalePreviewSession's THREE.Box3 union, in plain tuples. */
+function unionAabbCenter(summaries: AxialStretchObjectSummary[]): Vec3Tuple {
+  let minX = Infinity;
+  let minY = Infinity;
+  let minZ = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  let maxZ = -Infinity;
+
+  for (const summary of summaries) {
+    const [cx, cy, cz] = summary.aabbCenterWorld;
+    const [sx, sy, sz] = summary.aabbSizeWorld;
+
+    minX = Math.min(minX, cx - sx / 2);
+    minY = Math.min(minY, cy - sy / 2);
+    minZ = Math.min(minZ, cz - sz / 2);
+    maxX = Math.max(maxX, cx + sx / 2);
+    maxY = Math.max(maxY, cy + sy / 2);
+    maxZ = Math.max(maxZ, cz + sz / 2);
+  }
+
+  return [(minX + maxX) / 2, (minY + maxY) / 2, (minZ + maxZ) / 2];
 }
 
 function addSource(entry: ResolvedRigidDelta, annotationId: string) {
@@ -69,6 +104,17 @@ function addRotation(
 ) {
   const entry = ensure(deltas, pathKey);
   entry.rotations.push(rotation);
+  addSource(entry, annotationId);
+}
+
+function addScale(
+  deltas: Map<string, ResolvedRigidDelta>,
+  pathKey: string,
+  scale: ResolvedRigidDelta["scales"][number],
+  annotationId: string,
+) {
+  const entry = ensure(deltas, pathKey);
+  entry.scales.push(scale);
   addSource(entry, annotationId);
 }
 
@@ -110,6 +156,25 @@ export function computeExternalGeometryDeltas(
           },
           annotation.id,
         );
+      }
+
+      continue;
+    }
+
+    if (annotation.type === "scale") {
+      const targets = [annotation.target.referencePathKey, ...annotation.followPathKeys];
+      const summaries = targets
+        .map((key) => summaryByPathKey.get(key))
+        .filter((summary): summary is AxialStretchObjectSummary => Boolean(summary));
+
+      if (summaries.length === 0) {
+        continue;
+      }
+
+      const pivotWorld = unionAabbCenter(summaries);
+
+      for (const pathKey of targets) {
+        addScale(deltas, pathKey, { factor: annotation.factor, pivotWorld }, annotation.id);
       }
 
       continue;

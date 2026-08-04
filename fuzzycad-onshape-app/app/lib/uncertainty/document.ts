@@ -1523,6 +1523,18 @@ export type ResolvedRigidDelta = {
     axisWorld: [number, number, number];
     pivotWorld: [number, number, number];
   }[];
+  /**
+   * Scale is NOT a rigid transform (that's why the type is still called
+   * ResolvedRigidDelta, not ResolvedTransformDelta — scale rides along as
+   * an extra, optional component). Whether Onshape's /occurrencetransforms
+   * actually accepts a non-identity-scale matrix is unverified as of this
+   * writing; computeRigidOccurrenceUpdates bakes it in the same way as a
+   * rotation (about a pivot) so it's ready to test.
+   */
+  scales: {
+    factor: number;
+    pivotWorld: [number, number, number];
+  }[];
   sourceAnnotationIds: string[];
 };
 
@@ -1567,6 +1579,7 @@ export function computeAllFinalOccurrenceDeltas(
       pathKey,
       translationWorld: [0, 0, 0],
       rotations: [],
+      scales: [],
       sourceAnnotationIds: [],
     };
     deltas.set(pathKey, created);
@@ -1652,10 +1665,10 @@ export function computeAllFinalOccurrenceDeltas(
  * Combines several ResolvedRigidDelta maps (e.g. computeAllFinalOccurrenceDeltas'
  * self-contained pass and computeExternalGeometryDeltas' external-geometry
  * pass in resolveExternalGeometryDeltas.ts) into one, keyed by pathKey —
- * translations sum, rotations concatenate in map-array order, and source
- * annotation ids union. Lets the two passes stay independent (one pure,
- * one needing live objectSummaries) while still producing a single
- * consistent transform per part.
+ * translations sum, rotations and scales each concatenate in map-array
+ * order, and source annotation ids union. Lets the two passes stay
+ * independent (one pure, one needing live objectSummaries) while still
+ * producing a single consistent transform per part.
  */
 export function mergeRigidDeltaMaps(
   maps: Map<string, ResolvedRigidDelta>[],
@@ -1671,6 +1684,7 @@ export function mergeRigidDeltaMaps(
           pathKey,
           translationWorld: [...delta.translationWorld],
           rotations: [...delta.rotations],
+          scales: [...delta.scales],
           sourceAnnotationIds: [...delta.sourceAnnotationIds],
         });
         continue;
@@ -1682,6 +1696,7 @@ export function mergeRigidDeltaMaps(
         existing.translationWorld[2] + delta.translationWorld[2],
       ];
       existing.rotations.push(...delta.rotations);
+      existing.scales.push(...delta.scales);
 
       for (const id of delta.sourceAnnotationIds) {
         if (!existing.sourceAnnotationIds.includes(id)) {
