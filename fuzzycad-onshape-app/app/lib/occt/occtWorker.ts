@@ -31,6 +31,15 @@ type OcctWorkerRequest =
       pivotWorld: [number, number, number];
       factor: number;
       commit: boolean;
+    }
+  | {
+      id: number;
+      type: "rotateSolid";
+      handle: number;
+      pivotWorld: [number, number, number];
+      axisWorld: [number, number, number];
+      angleRad: number;
+      commit: boolean;
     };
 
 type TessellatedShape = {
@@ -53,6 +62,7 @@ type OcctWorkerResponse =
   | { id: number; type: "loadAssemblySolidsResult"; solids: { handle: number; mesh: TessellatedShape }[] }
   | { id: number; type: "translateSolidResult"; handle: number; mesh: TessellatedShape }
   | { id: number; type: "scaleSolidResult"; handle: number; mesh: TessellatedShape }
+  | { id: number; type: "rotateSolidResult"; handle: number; mesh: TessellatedShape }
   | { id: number; type: "testStepBytesResult"; buffer: ArrayBuffer }
   | { id: number; type: "error"; message: string };
 
@@ -134,8 +144,11 @@ type OpenCascadeInstance = {
   gp_Trsf_1: new () => {
     SetTranslation_1: (v: unknown) => void;
     SetScale: (p: unknown, s: number) => void;
+    SetRotation_1: (axis: unknown, angleRad: number) => void;
     delete: () => void;
   };
+  gp_Dir_4: new (dx: number, dy: number, dz: number) => unknown;
+  gp_Ax1_2: new (point: unknown, dir: unknown) => unknown;
   BRepBuilderAPI_Transform_2: new (
     shape: TopoDS_Shape,
     trsf: unknown,
@@ -331,6 +344,30 @@ function scaleShape(
   return result;
 }
 
+/**
+ * Rotate around a world pivot + axis — the B-rep equivalent of
+ * rotatePreview.ts's rotateObjectsAroundWorldAxis. Same real-gp_Trsf
+ * approach as translateShape/scaleShape.
+ */
+function rotateShape(
+  oc: OpenCascadeInstance,
+  shape: TopoDS_Shape,
+  pivotWorld: [number, number, number],
+  axisWorld: [number, number, number],
+  angleRad: number,
+): TopoDS_Shape {
+  const pivot = new oc.gp_Pnt_3(pivotWorld[0], pivotWorld[1], pivotWorld[2]);
+  const dir = new oc.gp_Dir_4(axisWorld[0], axisWorld[1], axisWorld[2]);
+  const axis = new oc.gp_Ax1_2(pivot, dir);
+  const trsf = new oc.gp_Trsf_1();
+  trsf.SetRotation_1(axis, angleRad);
+  const transform = new oc.BRepBuilderAPI_Transform_2(shape, trsf, true);
+  const result = transform.Shape();
+  trsf.delete();
+  transform.delete();
+  return result;
+}
+
 function shapeToStepBytes(oc: OpenCascadeInstance, shape: TopoDS_Shape): Uint8Array {
   const writer = new oc.STEPControl_Writer_1();
   writer.Transfer(shape, oc.STEPControl_StepModelType.STEPControl_AsIs, true);
@@ -502,6 +539,27 @@ self.onmessage = async (event: MessageEvent<OcctWorkerRequest>) => {
 
       const mesh = tessellateShape(oc, transformed);
       const response: OcctWorkerResponse = { id, type: "scaleSolidResult", handle, mesh };
+      self.postMessage(response, [mesh.positions.buffer, mesh.indices.buffer]);
+      return;
+    }
+
+    if (type === "rotateSolid") {
+      const oc = await loadOcct();
+      const { handle, pivotWorld, axisWorld, angleRad, commit } = event.data;
+      const shape = shapeStore.get(handle);
+
+      if (!shape) {
+        throw new Error(`rotateSolid: unknown handle ${handle}`);
+      }
+
+      const transformed = rotateShape(oc, shape, pivotWorld, axisWorld, angleRad);
+
+      if (commit) {
+        shapeStore.set(handle, transformed);
+      }
+
+      const mesh = tessellateShape(oc, transformed);
+      const response: OcctWorkerResponse = { id, type: "rotateSolidResult", handle, mesh };
       self.postMessage(response, [mesh.positions.buffer, mesh.indices.buffer]);
       return;
     }

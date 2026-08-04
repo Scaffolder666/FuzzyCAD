@@ -157,6 +157,22 @@ class OcctClient {
     return response.mesh;
   }
 
+  /** commit=false: preview only, always from the last committed state. commit=true: replaces the stored solid. */
+  async rotateSolid(
+    handle: number,
+    pivotWorld: [number, number, number],
+    axisWorld: [number, number, number],
+    angleRad: number,
+    commit: boolean,
+  ): Promise<{ positions: Float32Array; indices: Uint32Array }> {
+    await this.ready();
+    const response = await this.send({ type: "rotateSolid", handle, pivotWorld, axisWorld, angleRad, commit });
+    if (response.type !== "rotateSolidResult") {
+      throw new Error(`Unexpected response type: ${response.type}`);
+    }
+    return response.mesh;
+  }
+
   dispose(): void {
     this.worker.terminate();
   }

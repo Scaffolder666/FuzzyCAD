@@ -235,6 +235,99 @@ export default function OcctDebugPage() {
     }
   }
 
+  async function runRotateTest() {
+    setStatus("loading OCCT...");
+    setGeometry(null);
+    try {
+      const client = getOcctClient();
+      await client.ready();
+
+      setStatus("making test multi-solid STEP bytes (two boxes)...");
+      const stepBytes = await client.makeTestMultiSolidStepBytes();
+
+      setStatus("loading as persistent assembly state...");
+      const solids = await client.loadAssemblySolids(stepBytes);
+      if (solids.length !== 2) {
+        setStatus(`ERROR: expected 2 solids, got ${solids.length}`);
+        return;
+      }
+
+      const avgPoint = (mesh: { positions: Float32Array }): [number, number, number] => {
+        let sx = 0,
+          sy = 0,
+          sz = 0;
+        const n = mesh.positions.length / 3;
+        for (let i = 0; i < mesh.positions.length; i += 3) {
+          sx += mesh.positions[i];
+          sy += mesh.positions[i + 1];
+          sz += mesh.positions[i + 2];
+        }
+        return [sx / n, sy / n, sz / n];
+      };
+
+      // 90deg-around-X rotation, applied analytically for comparison against OCCT's result.
+      const rotateAroundX = (
+        point: [number, number, number],
+        pivot: [number, number, number],
+        angleRad: number,
+      ): [number, number, number] => {
+        const [x, y, z] = [point[0] - pivot[0], point[1] - pivot[1], point[2] - pivot[2]];
+        const c = Math.cos(angleRad);
+        const s = Math.sin(angleRad);
+        return [x + pivot[0], y * c - z * s + pivot[1], y * s + z * c + pivot[2]];
+      };
+
+      const dist = (a: [number, number, number], b: [number, number, number]) =>
+        Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+
+      // Use boxB (5x5x20, corner at (30,0,0)) — its asymmetry along Z makes rotation clearly detectable via its centroid.
+      const [, boxB] = solids;
+      const pivot: [number, number, number] = [30, 0, 0];
+      const axis: [number, number, number] = [1, 0, 0];
+      const before = avgPoint(boxB.mesh);
+
+      const preview1 = await client.rotateSolid(boxB.handle, pivot, axis, Math.PI / 2, false);
+      const afterPreview1 = avgPoint(preview1);
+      const predicted1 = rotateAroundX(before, pivot, Math.PI / 2);
+
+      const preview2 = await client.rotateSolid(boxB.handle, pivot, axis, Math.PI / 4, false);
+      const afterPreview2 = avgPoint(preview2);
+      const predicted2 = rotateAroundX(before, pivot, Math.PI / 4);
+
+      const committed = await client.rotateSolid(boxB.handle, pivot, axis, Math.PI / 2, true);
+      const afterCommit = avgPoint(committed);
+      const predictedCommit = rotateAroundX(before, pivot, Math.PI / 2);
+
+      const preview3 = await client.rotateSolid(boxB.handle, pivot, axis, Math.PI / 4, false);
+      const afterPreview3 = avgPoint(preview3);
+      const predicted3 = rotateAroundX(before, pivot, Math.PI / 2 + Math.PI / 4);
+
+      const geoms = [solids[0].mesh, committed].map((mesh) => {
+        const geom = new THREE.BufferGeometry();
+        geom.setAttribute("position", new THREE.BufferAttribute(mesh.positions, 3));
+        geom.setIndex(new THREE.BufferAttribute(mesh.indices, 1));
+        geom.computeVertexNormals();
+        return geom;
+      });
+      setSolidGeometries(geoms);
+
+      const checks = [
+        { label: "preview 90deg centroid", got: dist(afterPreview1, predicted1), want: 0 },
+        { label: "preview 45deg NOT stacked on prior preview", got: dist(afterPreview2, predicted2), want: 0 },
+        { label: "commit 90deg centroid", got: dist(afterCommit, predictedCommit), want: 0 },
+        { label: "preview 45deg stacked on commit (135deg total)", got: dist(afterPreview3, predicted3), want: 0 },
+      ];
+      const allOk = checks.every((c) => Math.abs(c.got - c.want) < 1e-4);
+
+      setStatus(
+        `${allOk ? "OK" : "MISMATCH"}: ` +
+          checks.map((c) => `${c.label}: centroid error ${c.got.toFixed(6)}`).join(" | "),
+      );
+    } catch (error) {
+      setStatus(`ERROR: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
   return (
     <div style={{ padding: 24, fontFamily: "monospace" }}>
       <button onClick={runTest}>Run OCCT self-test</button>
@@ -252,6 +345,9 @@ export default function OcctDebugPage() {
       </button>
       <button onClick={runScaleTest} style={{ marginLeft: 8 }}>
         Run Scale test
+      </button>
+      <button onClick={runRotateTest} style={{ marginLeft: 8 }}>
+        Run Rotate test
       </button>
       <pre data-testid="occt-status" style={{ marginTop: 16 }}>
         {status}
