@@ -1777,7 +1777,11 @@ async function pushAcceptedChangesToOnshape() {
       // collapsing to "{…}", plus the request payload that triggered it.
       console.error(
         "Push accepted changes failed:",
-        JSON.stringify({ status: result.status, data: result.data, updates }, null, 2),
+        JSON.stringify(
+          { status: result.status, results: result.results, data: result.data, updates },
+          null,
+          2,
+        ),
       );
       return;
     }

@@ -11,6 +11,8 @@ export type ApiResult = {
   status?: number;
   ok?: boolean;
   data?: unknown;
+  /** Per-occurrence results from assembly-transforms — one Onshape API call is made per {path, transform} pair. */
+  results?: unknown;
   state?: unknown;
   graph?: unknown;
   error?: string;
