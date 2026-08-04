@@ -24,6 +24,7 @@ import type {
 import { usePartGraph } from "./hooks/usePartGraph";
 import { getRelatedGroup } from "./lib/partGraph";
 import {
+  applyOnshapeOccurrenceTransforms,
   fetchFuzzycadAssemblySummary,
   fetchFuzzycadRelationshipGraph,
   fetchOnshapeAssembly,
@@ -35,6 +36,7 @@ import {
   loadFuzzycadProjectState,
   saveFuzzycadProject,
 } from "./lib/onshapeClient";
+import { computeRigidOccurrenceUpdates } from "./lib/operations/computeRigidOccurrenceUpdates";
 import type { OperationTool } from "./lib/operations/types";
 import OperationToolbar from "./components/OperationToolbar";
 import UncertaintyMarksPanel from "./components/UncertaintyMarksPanel";
@@ -56,6 +58,7 @@ import {
   type ConfidenceLevel,
 } from "./lib/uncertainty/types";
 import {
+  computeAllFinalOccurrenceDeltas,
   findSizeAnnotationForPathKey,
   makeSizeAnnotationId,
   BEND_CONTROL_POINT_COUNT,
@@ -362,6 +365,11 @@ export default function FuzzyCADHome() {
   // while a save is already running must not fire a second request.
   const [savingToOnshape, setSavingToOnshape] = useState(false);
 
+  // Same overlapping-request guard as savingToOnshape, plus this one is
+  // writing real occurrence transforms — a stacked click must not fire a
+  // second /occurrencetransforms POST while the first is still in flight.
+  const [pushingAcceptedChanges, setPushingAcceptedChanges] = useState(false);
+
   const documentId = params.get("documentId");
   const workspaceId = params.get("workspaceId");
   const elementId = params.get("elementId");
@@ -412,6 +420,24 @@ export default function FuzzyCADHome() {
     upsertMoveQuestionMark,
     answerMoveQuestionMark,
   } = useUncertaintyDocument(currentUncertaintySource);
+
+  // Resolved Move/MoveQuestion(answered)/Rotate(custom-axis) marks — the
+  // ones computeAllFinalOccurrenceDeltas can turn into a real Onshape
+  // occurrence transform. Counted (not just checked non-empty) so the
+  // "Push N accepted changes" button can tell the reviewer what a click
+  // is about to do before it does it.
+  const pushableChangeCount = useMemo(() => {
+    const deltas = computeAllFinalOccurrenceDeltas(uncertaintyDocumentWithCurrentSource);
+    const ids = new Set<string>();
+
+    for (const delta of deltas.values()) {
+      for (const id of delta.sourceAnnotationIds) {
+        ids.add(id);
+      }
+    }
+
+    return ids.size;
+  }, [uncertaintyDocumentWithCurrentSource]);
 
   const assemblyElements = useMemo(() => {
     const data = elementsResult?.data;
@@ -1306,6 +1332,18 @@ export default function FuzzyCADHome() {
     setActiveTool("rotate");
     resetSizeOperationState();
     setLassoPathKeys([]);
+
+    // Kick off the (lazy, only-happens-once) B-rep load in the
+    // background — same as startMove(), the ghost preview upgrades from
+    // mesh-clone to geometrically exact automatically once/if it resolves.
+    if (documentId && workspaceId && selectedAssemblyId) {
+      brepGhostSource.ensureLoaded({
+        documentId,
+        workspaceId,
+        assemblyElementId: selectedAssemblyId,
+        server,
+      });
+    }
   }
 
   /** Click routing while the Rotate tool is active: first click picks the
@@ -1340,6 +1378,18 @@ export default function FuzzyCADHome() {
     setActiveTool("rotateAxis");
     resetSizeOperationState();
     setLassoPathKeys([]);
+
+    // Kick off the (lazy, only-happens-once) B-rep load in the
+    // background — same as startMove(), the ghost preview upgrades from
+    // mesh-clone to geometrically exact automatically once/if it resolves.
+    if (documentId && workspaceId && selectedAssemblyId) {
+      brepGhostSource.ensureLoaded({
+        documentId,
+        workspaceId,
+        assemblyElementId: selectedAssemblyId,
+        server,
+      });
+    }
   }
 
   /** Click routing while the "Rotate (custom axis)" tool is active: first
@@ -1667,6 +1717,76 @@ async function saveProjectStateToOnshape() {
   }
 }
 
+/**
+ * Track 1 of the B-rep write-back plan: turns every resolved (accepted)
+ * Move / answered MoveQuestion / custom-axis Rotate mark into a real
+ * Onshape occurrence transform — the ORIGINAL part actually moves, not an
+ * overlay. On success the pushed annotations are removed: their effect is
+ * now permanent in the document, so they shouldn't linger as "open work"
+ * (mirrors how Accept already deletes Reject's counterpart annotation
+ * outright rather than keeping a "handled" bucket around).
+ */
+async function pushAcceptedChangesToOnshape() {
+  if (!documentId || !workspaceId || !selectedAssemblyId) {
+    console.warn("Missing documentId, workspaceId, or selectedAssemblyId");
+    return;
+  }
+
+  if (pushingAcceptedChanges) {
+    return;
+  }
+
+  setPushingAcceptedChanges(true);
+
+  try {
+    const deltas = computeAllFinalOccurrenceDeltas(uncertaintyDocumentWithCurrentSource);
+
+    if (deltas.size === 0) {
+      return;
+    }
+
+    const updates = computeRigidOccurrenceUpdates(deltas, placements);
+
+    if (updates.length === 0) {
+      console.warn("No pushable occurrence updates — missing current placements for the affected parts.");
+      return;
+    }
+
+    const result = await applyOnshapeOccurrenceTransforms(
+      {
+        documentId,
+        workspaceId,
+        assemblyElementId: selectedAssemblyId,
+        server,
+      },
+      updates,
+    );
+
+    console.log("Pushed accepted changes to Onshape:", result);
+
+    if (!result.ok) {
+      return;
+    }
+
+    const pushedAnnotationIds = new Set<string>();
+
+    for (const delta of deltas.values()) {
+      for (const id of delta.sourceAnnotationIds) {
+        pushedAnnotationIds.add(id);
+      }
+    }
+
+    for (const id of pushedAnnotationIds) {
+      deleteAnnotation(id);
+    }
+
+    // Refresh placements from Onshape so the viewer's part positions catch
+    // up to the real, just-written occurrence transforms.
+    await buildRelationshipGraph({ force: true });
+  } finally {
+    setPushingAcceptedChanges(false);
+  }
+}
 
 // Fills in fields that were added to the schema after some annotations were
 // already saved to Onshape project storage — old saved records genuinely
@@ -2337,6 +2457,9 @@ if (result.ok && result.state) {
           }
           onSaveToOnshape={() => void saveProjectStateToOnshape()}
           savingToOnshape={savingToOnshape}
+          onPushAcceptedChanges={() => void pushAcceptedChangesToOnshape()}
+          pushingAcceptedChanges={pushingAcceptedChanges}
+          pushableChangeCount={pushableChangeCount}
         />
 
         {heightCandidateOpen ? (

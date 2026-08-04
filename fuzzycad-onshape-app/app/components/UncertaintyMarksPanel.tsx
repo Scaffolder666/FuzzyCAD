@@ -51,6 +51,11 @@ type UncertaintyMarksPanelProps = {
   onAnswerMoveQuestion: (annotationId: string, deltaMm: number) => void;
   onSaveToOnshape: () => void;
   savingToOnshape?: boolean;
+  /** Pushes accepted Move/Rotate/MoveQuestion marks to Onshape as real occurrence transforms, replacing the ghost preview with an actual placement change. */
+  onPushAcceptedChanges: () => void;
+  pushingAcceptedChanges?: boolean;
+  /** Count of resolved annotations eligible for a real write-back — shown so the reviewer knows what a click will do before doing it. */
+  pushableChangeCount?: number;
 };
 
 const FILTERS: { key: FilterKey; label: string }[] = [
@@ -1193,6 +1198,9 @@ export default function UncertaintyMarksPanel({
   onAnswerMoveQuestion,
   onSaveToOnshape,
   savingToOnshape = false,
+  onPushAcceptedChanges,
+  pushingAcceptedChanges = false,
+  pushableChangeCount = 0,
 }: UncertaintyMarksPanelProps) {
   const [activeFilter, setActiveFilter] = useState<FilterKey | null>(null);
   const [resolvedOpen, setResolvedOpen] = useState(false);
@@ -1260,6 +1268,20 @@ export default function UncertaintyMarksPanel({
           >
             {savingToOnshape ? "Saving..." : "Save to Onshape"}
           </button>
+
+          {pushableChangeCount > 0 ? (
+            <button
+              type="button"
+              className={styles.syncButton}
+              onClick={onPushAcceptedChanges}
+              disabled={pushingAcceptedChanges}
+              title="Moves/rotates the real Onshape parts to match the accepted marks, then clears those marks."
+            >
+              {pushingAcceptedChanges
+                ? "Pushing..."
+                : `Push ${pushableChangeCount} accepted change${pushableChangeCount === 1 ? "" : "s"} to Onshape`}
+            </button>
+          ) : null}
         </div>
 
         {visibleAnnotations.length === 0 ? (

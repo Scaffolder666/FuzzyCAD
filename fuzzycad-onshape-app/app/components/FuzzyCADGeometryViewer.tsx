@@ -2048,6 +2048,105 @@ function Model({
     invalidate();
   }, [rotatePreviewSession, rotateAngleRad, invalidate]);
 
+  // The optional B-rep-accurate upgrade for the Rotate ghost — same
+  // debounced best-effort pattern as Move's brepMoveGhostRef above.
+  const brepRotateGhostRef = useRef<BrepGhostMesh | null>(null);
+  const brepRotateDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (!rotatePreviewSession) {
+      return;
+    }
+
+    return () => {
+      if (brepRotateDebounceRef.current) {
+        clearTimeout(brepRotateDebounceRef.current);
+        brepRotateDebounceRef.current = null;
+      }
+      brepRotateGhostRef.current = null;
+    };
+  }, [rotatePreviewSession]);
+
+  // Upgrades the Rotate ghost from the instant mesh-clone approximation to
+  // a geometrically exact one, once real B-rep data is loaded — mirrors
+  // the Move upgrade above. Only the plan's primary pathKey is upgraded;
+  // followPathKeys keep the mesh-clone ghost (same v1 limitation as Move).
+  useEffect(() => {
+    if (!rotatePreviewSession || !rotatePlan || !activeRotateResolvedFrame || !brepGhostSource) {
+      return;
+    }
+
+    if (brepGhostSource.status !== "ready") {
+      return;
+    }
+
+    const handle = brepGhostSource.getHandle(rotatePlan.pathKey);
+
+    if (handle === null) {
+      return;
+    }
+
+    const pivotMm: [number, number, number] = [
+      activeRotateResolvedFrame.pivotWorld.x / STEP_MM_TO_THREE_M,
+      activeRotateResolvedFrame.pivotWorld.y / STEP_MM_TO_THREE_M,
+      activeRotateResolvedFrame.pivotWorld.z / STEP_MM_TO_THREE_M,
+    ];
+    const axis: [number, number, number] = [
+      activeRotateResolvedFrame.axisWorld.x,
+      activeRotateResolvedFrame.axisWorld.y,
+      activeRotateResolvedFrame.axisWorld.z,
+    ];
+
+    if (brepRotateDebounceRef.current) {
+      clearTimeout(brepRotateDebounceRef.current);
+    }
+
+    brepRotateDebounceRef.current = setTimeout(() => {
+      getOcctClient()
+        .rotateSolid(handle, pivotMm, axis, rotateAngleRad, false)
+        .then(({ mesh, valid }) => {
+          if (!valid || !rotatePreviewSession) {
+            return;
+          }
+
+          if (!brepRotateGhostRef.current) {
+            const ghost = createBrepGhostMesh(mesh, "FuzzyCAD Rotate Preview (B-rep)");
+            brepRotateGhostRef.current = ghost;
+            rotatePreviewSession.group.add(ghost);
+
+            // The exact ghost replaces the approximate one visually —
+            // hide the primary target's mesh-clone (followPathKeys stay).
+            const primaryClone = rotatePreviewSession.clones.find(
+              (item) => item.pathKey === rotatePlan.pathKey,
+            );
+            if (primaryClone) {
+              primaryClone.clone.visible = false;
+            }
+          } else {
+            updateBrepGhostMesh(brepRotateGhostRef.current, mesh);
+          }
+
+          invalidate();
+        })
+        .catch(() => {
+          // Best-effort upgrade — keep showing the mesh-clone ghost on failure.
+        });
+    }, 200);
+
+    return () => {
+      if (brepRotateDebounceRef.current) {
+        clearTimeout(brepRotateDebounceRef.current);
+      }
+    };
+  }, [
+    rotatePreviewSession,
+    rotatePlan,
+    activeRotateResolvedFrame,
+    rotateAngleRad,
+    brepGhostSource,
+    invalidate,
+  ]);
+
   // Every OTHER saved rotate proposal (not the one currently being dragged)
   // shows as a static ghost at its saved angle.
   const persistentRotatePreviews = useMemo(
