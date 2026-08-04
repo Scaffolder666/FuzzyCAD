@@ -1771,11 +1771,18 @@ async function pushAcceptedChangesToOnshape() {
       updates,
     );
 
-    console.log("Pushed accepted changes to Onshape:", result);
-
     if (!result.ok) {
+      // Onshape's error body is what actually explains a 400 — log it
+      // stringified so it survives a plain-text console copy instead of
+      // collapsing to "{…}", plus the request payload that triggered it.
+      console.error(
+        "Push accepted changes failed:",
+        JSON.stringify({ status: result.status, data: result.data, updates }, null, 2),
+      );
       return;
     }
+
+    console.log("Pushed accepted changes to Onshape:", result);
 
     const pushedAnnotationIds = new Set<string>();
 
