@@ -1194,6 +1194,36 @@ function Model({
     return cloned;
   }, [gltf.scene, placements]);
 
+  // scene.clone(true) shares geometry references with the cached
+  // gltf.scene (only prepareRenderableMeshes' material clones are
+  // independent) — every mesh's geometry here is the SAME object
+  // useGLTF's cache holds, and any future scene recompute (e.g. a
+  // placements refresh) will share it too. Disposing it would corrupt
+  // that shared geometry for every clone, present and future, which is
+  // exactly what react-three-fiber's own auto-dispose-on-unmount would
+  // do if left to fire on this <primitive> (it disposes everything it
+  // finds, geometry included) — hence dispose={null} below, paired with
+  // this effect doing the materials-only dispose that's actually
+  // correct. Same double-dispose-avoidance pattern as
+  // selectionBoxHelpers' <primitive> further down.
+  useEffect(() => {
+    return () => {
+      scene.traverse((object) => {
+        if (!(object instanceof THREE.Mesh)) {
+          return;
+        }
+
+        if (Array.isArray(object.material)) {
+          for (const material of object.material) {
+            material.dispose();
+          }
+        } else {
+          object.material?.dispose();
+        }
+      });
+    };
+  }, [scene]);
+
   const objectSummaries = useMemo(
     () => buildObjectSummaries(scene, selectedPathKeys ?? []),
     [scene, selectedPathKeys],
@@ -3333,11 +3363,20 @@ function Model({
 
   return (
     <>
+      {/* dispose={null}: the useEffect above already disposes this
+          scene's material clones (only) when it changes — without this,
+          react-three-fiber's own auto-dispose-on-unmount would ALSO
+          fire and dispose everything it finds, geometry included, which
+          is shared with useGLTF's cached gltf.scene (see that effect's
+          comment). That corrupts the cache for every future clone of
+          the same URL, present and past — a much larger-blast-radius
+          version of the exact selectionBoxHelpers bug below. */}
       <primitive
         object={scene}
         onPointerDown={handlePointerDown}
         onPointerOver={handlePointerOver}
         onPointerOut={handlePointerOut}
+        dispose={null}
       />
 
       {selectionBoxHelpers.map(({ key, helper }) => (
