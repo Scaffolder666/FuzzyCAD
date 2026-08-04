@@ -27,6 +27,15 @@ export type AxialStretchObjectSummary = {
   negativeEndWorld: Vec3Tuple;
   positiveEndWorld: Vec3Tuple;
 
+  // Oriented bounding box: 3 orthonormal axes ordered by decreasing variance
+  // (axesWorld[0] is the same direction as principalAxisWorld) with the
+  // half-extent of the box along each. Unlike aabbSizeWorld/aabbCenterWorld,
+  // this rotates with the part, so its 6 face normals (±each axis) are a
+  // small, predictable set of directions regardless of mesh orientation.
+  obbCenterWorld: Vec3Tuple;
+  obbAxesWorld: [Vec3Tuple, Vec3Tuple, Vec3Tuple];
+  obbHalfExtentsWorld: [number, number, number];
+
   // Assembly / mate information. We leave this empty in Step 1,
   // then fill it from relationshipGraph.mateEdges in Step 2.
   mateConnections: MateConnectionSummary[];

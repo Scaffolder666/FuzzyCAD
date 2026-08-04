@@ -15,6 +15,7 @@ type ToolItem = {
   label: string;
   title: string;
   icon: ReactNode;
+  hidden?: boolean;
 };
 
 function SelectIcon() {
@@ -34,7 +35,7 @@ function LassoIcon() {
   );
 }
 
-function HeightIcon() {
+function SizeIcon() {
   return (
     <svg viewBox="0 0 32 32" aria-hidden="true">
       <path d="M16 5V27" />
@@ -92,30 +93,27 @@ const tools: ToolItem[] = [
     label: "Lasso",
     title: "Lasso multiple objects",
     icon: <LassoIcon />,
+    hidden: true,
   },
   {
     id: "height",
-    label: "Height",
-    title: "Change tripod height",
-    icon: <HeightIcon />,
+    label: "Size",
+    title: "Add size/height uncertainty mark",
+    icon: <SizeIcon />,
   },
   {
     id: "extend",
     label: "Extend",
-    title: "Extend linkage length",
-    icon: <ExtendIcon />,
+    title: "Stretch assembly height",
+    icon: <SizeIcon />,
+    hidden: true,
   },
   {
     id: "angle",
     label: "Angle",
-    title: "Adjust support arm angle",
+    title:
+      "Adjust an angle — between two parts, or within one part (bend). The tool figures out which from your clicks.",
     icon: <AngleIcon />,
-  },
-  {
-    id: "move",
-    label: "Move",
-    title: "Move attachment on surface",
-    icon: <MoveIcon />,
   },
 ];
 
@@ -127,29 +125,36 @@ export default function OperationToolbar({
   return (
     <div className={styles.operationToolbarWrap}>
       <div className={styles.operationToolbar} aria-label="FuzzyCAD tools">
-        {tools.map((tool) => {
-          const active = activeTool === tool.id;
+        {tools
+          .filter((tool) => !tool.hidden)
+          .map((tool) => {
+            // The single Angle button covers both internal modes (rotate the
+            // gap between two parts, or bend within one part) — the viewer
+            // infers which from the user's clicks.
+            const active =
+              activeTool === tool.id ||
+              (tool.id === "angle" && activeTool === "bend");
 
-          return (
-            <button
-              key={tool.id}
-              type="button"
-              title={tool.title}
-              disabled={disabled}
-              className={
-                active
-                  ? `${styles.operationToolButton} ${styles.operationToolButtonActive}`
-                  : styles.operationToolButton
-              }
-              onClick={() => {
-                onToolChange(tool.id);
-              }}
-            >
-              <span className={styles.operationToolIcon}>{tool.icon}</span>
-              <span className={styles.operationToolLabel}>{tool.label}</span>
-            </button>
-          );
-        })}
+            return (
+              <button
+                key={tool.id}
+                type="button"
+                title={tool.title}
+                disabled={disabled}
+                className={
+                  active
+                    ? `${styles.operationToolButton} ${styles.operationToolButtonActive}`
+                    : styles.operationToolButton
+                }
+                onClick={() => {
+                  onToolChange(tool.id);
+                }}
+              >
+                <span className={styles.operationToolIcon}>{tool.icon}</span>
+                <span className={styles.operationToolLabel}>{tool.label}</span>
+              </button>
+            );
+          })}
       </div>
     </div>
   );

@@ -1,8 +1,9 @@
 "use client";
 
 import { Canvas, type ThreeEvent, useThree } from "@react-three/fiber";
-import { Bounds, OrbitControls, useGLTF } from "@react-three/drei";
-import { Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { Bounds, Html, OrbitControls, useGLTF } from "@react-three/drei";
+import RoleBadge, { type RoleBadgeRole } from "./viewer/RoleBadge";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import styles from "./FuzzyCADGeometryViewer.module.css";
 import { buildMeshGraph, type MeshGraphNode } from "./viewer/meshGraph";
@@ -11,24 +12,78 @@ import { applyPlacements, type PartPlacement } from "./viewer/placement";
 import { applyPathHighlight } from "./viewer/highlight";
 import { prepareRenderableMeshes } from "./viewer/materials";
 import type { OperationTool } from "../lib/operations/types";
+import type {
+  AxisConfidenceMap,
+  AxisDirectionMap,
+  ConfidenceAxis,
+  ConfidenceDirection,
+  ConfidenceLevel,
+} from "../lib/uncertainty/types";
+import {
+  applyFuzzyConfidence,
+  type ConfidenceAxisFrame,
+  type FuzzyConfidenceAnnotation,
+} from "./viewer/fuzzyBlur";
+
 import LassoOverlay from "./viewer/LassoOverlay";
 import {
   selectPathKeysByLasso,
   type ScreenPoint,
 } from "./viewer/lassoObjectSelection";
-import { buildObjectSummaries } from "./viewer/objectSummary";
+import { buildObjectSummaries, snapNormalToObbFace } from "./viewer/objectSummary";
 import type { AxialStretchObjectSummary } from "../lib/operations/axialStretchTypes";
 import {
   findObjectsByPathKeys,
+  findTopLevelObjectsByPathKeys,
+  projectToScreen,
   rotateObjectsAroundWorldAxis,
   translateObjectsWorld,
 } from "./viewer/manipulation";
+import {
+  findMateConnectedParts,
+  findDirectRotationalMate,
+  type MateGraphEdge,
+} from "../lib/fuzzycad/mateGraph";
+import { bendGeometryInPlace } from "../lib/fuzzycad/bendDeform";
 import SizingHandle from "./viewer/SizingHandle";
 import AngleHandle from "./viewer/AngleHandle";
+import {
+  createAxialStretchPreviewSession,
+  disposeAxialStretchPreviewSession,
+  getAxialStretchPreviewHandle,
+  updateAxialStretchPreviewSession,
+  type AxialStretchPreviewSession,
+  type AxialStretchRolePlan,
+} from "./viewer/axialStretchPreview";
 
 export type { MeshGraphNode } from "./viewer/meshGraph";
 export type { PartPlacement, PlacementReport } from "./viewer/placement";
 export type { AxialStretchObjectSummary } from "../lib/operations/axialStretchTypes";
+
+export type RolePreviewPlan = {
+  stretchTargetPathKeys: string[];
+  moveWithEndPathKeys: string[];
+  fixedAnchorPathKeys: string[];
+  excludedPathKeys: string[];
+};
+
+export type FuzzyConfidenceEditor = {
+  pathKey: string;
+  confidence: AxisConfidenceMap;
+  directions: AxisDirectionMap;
+  onConfidenceChange: (
+    axis: ConfidenceAxis,
+    confidence: ConfidenceLevel,
+  ) => void;
+  onDirectionChange: (
+    axis: ConfidenceAxis,
+    direction: ConfidenceDirection,
+  ) => void;
+  canRemove?: boolean;
+  onRemove?: () => void;
+  onApply: () => void;
+  onCancel: () => void;
+};
 
 type FuzzyCADGeometryViewerProps = {
   gltfUrl: string | null;
@@ -36,16 +91,67 @@ type FuzzyCADGeometryViewerProps = {
   highlightedPathKey?: string | null;
   selectedPathKeys?: string[];
   activeTool?: OperationTool;
+  confidenceAnnotations?: FuzzyConfidenceAnnotation[];
+  confidenceEditor?: FuzzyConfidenceEditor | null;
   /** Path keys the active sizing/angle handle should act on. */
   activePathKeys?: string[];
   /** Current value of the active manipulation (world units for height/extend, degrees for angle). */
   manipulationValue?: number;
+  rolePreviewPlan?: RolePreviewPlan | null;
+  enableManipulationHandles?: boolean;
+  confirmedHeightPlan?: AxialStretchRolePlan | null;
   onMeshGraph?: (nodes: MeshGraphNode[]) => void;
   onObjectSummaries?: (summaries: AxialStretchObjectSummary[]) => void;
   onSelectedNode?: (node: MeshGraphNode | null) => void;
   onSelectedPathKey?: (pathKey: string | null) => void;
   onObjectLassoSelection?: (pathKeys: string[]) => void;
   onManipulationChange?: (value: number) => void;
+  /**
+   * Externally-controlled target angle for the angle tool, in degrees.
+   * When the user edits θ in the sidebar panel this flows back into the
+   * viewer so the arc + live rotation preview stay in sync.
+   */
+  angleTargetDeg?: number | null;
+  /** Mate edges used to find the rigid group that rotates with part 2. */
+  angleMateEdges?: MateGraphEdge[];
+  /** Increment to force the angle tool to clear its selection + preview. */
+  angleResetNonce?: number;
+  onAngleSelection?: (data: {
+    part1PathKey: string;
+    part2PathKey: string;
+    /** Target angle (deg) — starts at measuredAngleDeg until edited. */
+    angleDeg: number;
+    /** Angle between the two selected face normals as clicked (deg). */
+    measuredAngleDeg: number;
+    /** Face normals and pivot in Three.js viewer world space (scene.rotation.x = -π/2 applied). */
+    face1Normal?: [number, number, number];
+    face2Normal?: [number, number, number];
+    /** Snapped pivot vertex (viewer world space). */
+    pivot?: [number, number, number];
+  }) => void;
+  /**
+   * Called when the unified angle tool switches internal mode ("angle" =
+   * rotate between parts, "bend" = bend within one part) — either inferred
+   * from the user's clicks or via the mode chip. Parent should set the
+   * active tool accordingly without resetting the viewer.
+   */
+  onAngleModeSwitch?: (mode: "angle" | "bend") => void;
+  /** Externally-controlled bend delta (deg) for the bend tool. */
+  bendDeltaDeg?: number | null;
+  /** Bend profile: sharp crease or smooth radius band. */
+  bendProfile?: "sharp" | "radius";
+  onBendSelection?: (data: {
+    pathKey: string;
+    /** Bend adjustment relative to the current shape, in degrees. */
+    deltaDeg: number;
+    /** Crease + plane in Three.js viewer world space. */
+    creaseStart: [number, number, number];
+    creaseEnd: [number, number, number];
+    planeNormal: [number, number, number];
+    bendSideSign: 1 | -1;
+    /** Auto-computed radius-band width (world units, ~25% of part size). */
+    bandWidth: number;
+  }) => void;
 };
 
 type HandleConfig =
@@ -57,11 +163,855 @@ type HandleConfig =
       objects: THREE.Object3D[];
     }
   | {
+      kind: "heightStretch";
+      baseWorld: THREE.Vector3;
+      axisWorld: THREE.Vector3;
+      length: number;
+      session: AxialStretchPreviewSession;
+    }
+  | {
       kind: "angle";
       pivotWorld: THREE.Vector3;
       objects: THREE.Object3D[];
     }
   | null;
+
+/**
+ * Convert a vector/point from Onshape assembly space into Three.js viewer
+ * world space — the inverse of fuzzycad-home.tsx's viewerToOnshape, undoing
+ * the same scene.rotation.x = -π/2 display rotation: onshape (x, y, z) →
+ * viewer (x, z, -y). A proper rotation, so it's valid for both points and
+ * direction vectors (e.g. a mate connector's axis).
+ */
+function onshapeToViewer(v: number[]): THREE.Vector3 {
+  return new THREE.Vector3(v[0], v[2], -v[1]);
+}
+
+function midpoint(a: [number, number, number], b: [number, number, number]) {
+  return [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2] as [
+    number,
+    number,
+    number,
+  ];
+}
+
+function getLowerEnd(summary: AxialStretchObjectSummary) {
+  return summary.negativeEndWorld[1] <= summary.positiveEndWorld[1]
+    ? summary.negativeEndWorld
+    : summary.positiveEndWorld;
+}
+
+function getUpperEnd(summary: AxialStretchObjectSummary) {
+  return summary.negativeEndWorld[1] >= summary.positiveEndWorld[1]
+    ? summary.negativeEndWorld
+    : summary.positiveEndWorld;
+}
+
+function pathKeyOffsetSign(pathKey: string) {
+  let hash = 0;
+
+  for (let index = 0; index < pathKey.length; index += 1) {
+    hash = (hash * 31 + pathKey.charCodeAt(index)) | 0;
+  }
+
+  return hash % 2 === 0 ? 1 : -1;
+}
+
+function getRoleAnchor(
+  summary: AxialStretchObjectSummary,
+  role: RoleBadgeRole,
+) {
+  if (role === "stretchTarget") {
+    return midpoint(summary.negativeEndWorld, summary.positiveEndWorld);
+  }
+
+  if (role === "moveWithEnd") {
+    return getLowerEnd(summary);
+  }
+
+  return getUpperEnd(summary);
+}
+
+function getBadgePosition(
+  anchor: [number, number, number],
+  summary: AxialStretchObjectSummary,
+  role: RoleBadgeRole,
+): [number, number, number] {
+  const side = pathKeyOffsetSign(summary.pathKey);
+
+  const baseOffset = Math.max(summary.crossSectionSize * 4, 0.045);
+  const verticalOffset = Math.max(summary.crossSectionSize * 2.5, 0.035);
+
+  if (role === "stretchTarget") {
+    return [
+      anchor[0] + side * baseOffset,
+      anchor[1] + verticalOffset,
+      anchor[2],
+    ];
+  }
+
+  if (role === "moveWithEnd") {
+    return [
+      anchor[0] + side * baseOffset,
+      anchor[1] + verticalOffset * 0.6,
+      anchor[2],
+    ];
+  }
+
+  return [anchor[0] + side * baseOffset, anchor[1] + verticalOffset, anchor[2]];
+}
+
+const CONFIDENCE_ORDER: ConfidenceLevel[] = ["high", "medium", "low"];
+
+function getNextConfidenceLevel(level: ConfidenceLevel) {
+  const index = CONFIDENCE_ORDER.indexOf(level);
+
+  return CONFIDENCE_ORDER[(index + 1) % CONFIDENCE_ORDER.length];
+}
+
+function getConfidencePosition(
+  summary: AxialStretchObjectSummary,
+): [number, number, number] {
+  const center = summary.aabbCenterWorld;
+  const offset = Math.max(summary.crossSectionSize * 5, 0.08);
+
+  return [center[0] + offset, center[1] + offset * 0.35, center[2]];
+}
+
+function ConfidenceEditorWidget({
+  summary,
+  editor,
+}: {
+  summary: AxialStretchObjectSummary;
+  editor: FuzzyConfidenceEditor;
+}) {
+  const position = getConfidencePosition(summary);
+  const axes: ConfidenceAxis[] = ["x", "y", "z"];
+
+  return (
+    <Html position={position} center distanceFactor={0.8} occlude={false}>
+      <div
+        onPointerDown={(event) => {
+          event.stopPropagation();
+        }}
+        style={{
+          minWidth: 230,
+          padding: "10px",
+          borderRadius: 14,
+          border: "1px solid rgba(43, 108, 255, 0.45)",
+          background: "rgba(255, 255, 255, 0.9)",
+          boxShadow: "0 12px 34px rgba(15, 23, 42, 0.22)",
+          backdropFilter: "blur(14px)",
+          fontFamily: "Arial, sans-serif",
+          color: "#172033",
+          pointerEvents: "auto",
+          userSelect: "none",
+        }}
+      >
+        <div
+          style={{
+            marginBottom: 8,
+            fontSize: 11,
+            fontWeight: 800,
+            color: "#2b6cff",
+            letterSpacing: "0.04em",
+            textTransform: "uppercase",
+          }}
+        >
+          Dimension confidence
+        </div>
+
+        {axes.map((axis) => {
+          const level = editor.confidence[axis];
+          const direction = editor.directions[axis];
+
+          return (
+            <div
+              key={axis}
+              style={{
+                display: "grid",
+                gridTemplateColumns: "22px 82px 1fr",
+                gap: 6,
+                alignItems: "center",
+                marginBottom: 6,
+              }}
+            >
+              <div
+                style={{
+                  fontSize: 12,
+                  fontWeight: 900,
+                  color: "#334155",
+                }}
+              >
+                {axis.toUpperCase()}
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  editor.onConfidenceChange(
+                    axis,
+                    getNextConfidenceLevel(level),
+                  );
+                }}
+                style={{
+                  height: 28,
+                  border: "1px solid rgba(148, 163, 184, 0.42)",
+                  borderRadius: 9,
+                  background:
+                    level === "low"
+                      ? "rgba(20, 85, 255, 0.18)"
+                      : level === "medium"
+                        ? "rgba(158, 220, 255, 0.3)"
+                        : "rgba(255, 255, 255, 0.72)",
+                  color: "#334155",
+                  cursor: "pointer",
+                  fontSize: 12,
+                  fontWeight: 700,
+                  textTransform: "capitalize",
+                }}
+              >
+                {level}
+              </button>
+
+              <select
+                value={direction}
+                disabled={level === "high"}
+                onChange={(event) => {
+                  editor.onDirectionChange(
+                    axis,
+                    event.target.value as ConfidenceDirection,
+                  );
+                }}
+                style={{
+                  height: 28,
+                  border: "1px solid rgba(148, 163, 184, 0.42)",
+                  borderRadius: 9,
+                  background:
+                    level === "high"
+                      ? "rgba(241, 245, 249, 0.8)"
+                      : "rgba(255,255,255,0.82)",
+                  color: level === "high" ? "#94a3b8" : "#334155",
+                  cursor: level === "high" ? "not-allowed" : "pointer",
+                  fontSize: 12,
+                  fontWeight: 700,
+                }}
+              >
+                <option value="both">both</option>
+                <option value="positive">positive</option>
+                <option value="negative">negative</option>
+              </select>
+            </div>
+          );
+        })}
+
+        <div
+          style={{
+            display: "flex",
+            justifyContent: editor.canRemove ? "space-between" : "flex-end",
+            gap: 6,
+            marginTop: 8,
+          }}
+        >
+          {editor.canRemove && editor.onRemove ? (
+            <button
+              type="button"
+              onClick={editor.onRemove}
+              style={{
+                height: 26,
+                padding: "0 9px",
+                borderRadius: 8,
+                border: "1px solid rgba(239, 68, 68, 0.55)",
+                background: "rgba(254, 242, 242, 0.85)",
+                color: "#dc2626",
+                cursor: "pointer",
+                fontSize: 11,
+                fontWeight: 800,
+              }}
+            >
+              Remove
+            </button>
+          ) : null}
+
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "flex-end",
+              gap: 6,
+            }}
+          >
+            <button
+              type="button"
+              onClick={editor.onCancel}
+              style={{
+                height: 26,
+                padding: "0 9px",
+                borderRadius: 8,
+                border: "1px solid rgba(148, 163, 184, 0.6)",
+                background: "rgba(255,255,255,0.7)",
+                color: "#475569",
+                cursor: "pointer",
+                fontSize: 11,
+                fontWeight: 700,
+              }}
+            >
+              Cancel
+            </button>
+
+            <button
+              type="button"
+              onClick={editor.onApply}
+              style={{
+                height: 26,
+                padding: "0 9px",
+                borderRadius: 8,
+                border: "1px solid #2b6cff",
+                background: "#2b6cff",
+                color: "white",
+                cursor: "pointer",
+                fontSize: 11,
+                fontWeight: 700,
+              }}
+            >
+              Apply
+            </button>
+          </div>
+        </div>
+      </div>
+    </Html>
+  );
+}
+
+function getObjectAxisFrame(
+  summary: AxialStretchObjectSummary,
+): ConfidenceAxisFrame {
+  const yAxis = new THREE.Vector3(...summary.principalAxisWorld);
+
+  if (yAxis.lengthSq() < 1e-10) {
+    yAxis.set(0, 1, 0);
+  } else {
+    yAxis.normalize();
+  }
+
+  const worldUp = new THREE.Vector3(0, 1, 0);
+  const worldX = new THREE.Vector3(1, 0, 0);
+
+  const helper = Math.abs(yAxis.dot(worldUp)) > 0.92 ? worldX : worldUp;
+
+  const xAxis = new THREE.Vector3().crossVectors(helper, yAxis).normalize();
+
+  const zAxis = new THREE.Vector3().crossVectors(yAxis, xAxis).normalize();
+
+  return {
+    x: [xAxis.x, xAxis.y, xAxis.z],
+    y: [yAxis.x, yAxis.y, yAxis.z],
+    z: [zAxis.x, zAxis.y, zAxis.z],
+  };
+}
+
+function getAxisVectorFromFrame(
+  frame: ConfidenceAxisFrame,
+  axis: ConfidenceAxis,
+) {
+  return new THREE.Vector3(...frame[axis]).normalize();
+}
+
+type UncertaintyArrowSpec = {
+  pathKey: string;
+  axis: ConfidenceAxis;
+  level: ConfidenceLevel;
+  direction: "positive" | "negative";
+  start: [number, number, number];
+  end: [number, number, number];
+  color: string;
+  label: string;
+};
+
+function getArrowColor(level: ConfidenceLevel) {
+  return level === "low" ? "#1455ff" : "#9edcff";
+}
+
+function getArrowLength(
+  level: ConfidenceLevel,
+  summary: AxialStretchObjectSummary,
+) {
+  const base = Math.max(summary.crossSectionSize * 2.2, 0.06);
+
+  return level === "low" ? base * 1.45 : base;
+}
+
+function getArrowStart(
+  summary: AxialStretchObjectSummary,
+  frame: ConfidenceAxisFrame,
+  axis: ConfidenceAxis,
+  direction: "positive" | "negative",
+): [number, number, number] {
+  const center = new THREE.Vector3(...summary.aabbCenterWorld);
+  const axisVector = getAxisVectorFromFrame(frame, axis);
+  const sign = direction === "positive" ? 1 : -1;
+
+  const halfLengthAlongAxis =
+    axis === "y"
+      ? summary.axisLength / 2
+      : Math.max(summary.crossSectionSize * 1.2, 0.035);
+
+  const pad = Math.max(summary.crossSectionSize * 0.9, 0.025);
+
+  const start = center
+    .clone()
+    .add(axisVector.clone().multiplyScalar(sign * (halfLengthAlongAxis + pad)));
+
+  return [start.x, start.y, start.z];
+}
+
+function getArrowEnd(
+  start: [number, number, number],
+  frame: ConfidenceAxisFrame,
+  axis: ConfidenceAxis,
+  direction: "positive" | "negative",
+  length: number,
+): [number, number, number] {
+  const startVector = new THREE.Vector3(...start);
+  const axisVector = getAxisVectorFromFrame(frame, axis);
+  const sign = direction === "positive" ? 1 : -1;
+
+  const end = startVector.add(axisVector.multiplyScalar(sign * length));
+
+  return [end.x, end.y, end.z];
+}
+
+function UncertaintyArrow({
+  start,
+  end,
+  color,
+  label,
+}: {
+  start: [number, number, number];
+  end: [number, number, number];
+  color: string;
+  label: string;
+}) {
+  const origin = useMemo(
+    () => new THREE.Vector3(start[0], start[1], start[2]),
+    [start],
+  );
+
+  const direction = useMemo(() => {
+    const dir = new THREE.Vector3(
+      end[0] - start[0],
+      end[1] - start[1],
+      end[2] - start[2],
+    );
+
+    return dir.normalize();
+  }, [start, end]);
+
+  const length = useMemo(() => {
+    return new THREE.Vector3(
+      end[0] - start[0],
+      end[1] - start[1],
+      end[2] - start[2],
+    ).length();
+  }, [start, end]);
+
+  const headLength = Math.min(length * 0.32, 0.08);
+  const headWidth = Math.min(headLength * 0.55, 0.04);
+
+  return (
+    <>
+      <arrowHelper
+        args={[direction, origin, length, color, headLength, headWidth]}
+      />
+      <Html position={end} center distanceFactor={0.8} occlude={false}>
+        <div
+          style={{
+            minWidth: 18,
+            height: 18,
+            borderRadius: 999,
+            background: "rgba(255,255,255,0.92)",
+            border: `1px solid ${color}`,
+            color,
+            fontSize: 11,
+            fontWeight: 800,
+            lineHeight: "16px",
+            textAlign: "center",
+            boxShadow: "0 6px 18px rgba(15,23,42,0.18)",
+            userSelect: "none",
+            pointerEvents: "none",
+          }}
+        >
+          {label}
+        </div>
+      </Html>
+    </>
+  );
+}
+
+function UncertaintyLegendOverlay() {
+  return (
+    <Html fullscreen style={{ pointerEvents: "none" }}>
+      <div
+        style={{
+          position: "absolute",
+          bottom: 90,
+          left: 14,
+          width: 230,
+          padding: "12px 12px 10px",
+          borderRadius: 14,
+          background: "rgba(255,255,255,0.9)",
+          border: "1px solid rgba(148,163,184,0.35)",
+          boxShadow: "0 12px 28px rgba(15,23,42,0.18)",
+          backdropFilter: "blur(10px)",
+          fontFamily: "Arial, sans-serif",
+          color: "#172033",
+        }}
+      >
+        <div
+          style={{
+            fontSize: 12,
+            fontWeight: 800,
+            marginBottom: 8,
+            color: "#1e293b",
+          }}
+        >
+          Confidence legend
+        </div>
+
+        <div
+          style={{
+            display: "grid",
+            rowGap: 8,
+            fontSize: 11,
+            color: "#334155",
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <div
+              style={{
+                width: 18,
+                height: 10,
+                borderRadius: 999,
+                background: "rgba(158, 220, 255, 0.65)",
+                border: "1px solid rgba(158, 220, 255, 0.95)",
+              }}
+            />
+            <span>Medium confidence: narrow light-blue shell</span>
+          </div>
+
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <div
+              style={{
+                width: 28,
+                height: 10,
+                borderRadius: 999,
+                background: "rgba(20, 85, 255, 0.72)",
+                border: "1px solid rgba(20, 85, 255, 0.98)",
+              }}
+            />
+            <span>Low confidence: wider dark-blue shell</span>
+          </div>
+
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <div
+              style={{
+                width: 0,
+                height: 0,
+                borderTop: "5px solid transparent",
+                borderBottom: "5px solid transparent",
+                borderLeft: "12px solid #1455ff",
+                marginLeft: 4,
+              }}
+            />
+            <span>Arrow: uncertainty direction</span>
+          </div>
+
+          <div style={{ fontSize: 10, color: "#64748b", marginTop: 2 }}>
+            No shell = high confidence
+          </div>
+        </div>
+      </div>
+    </Html>
+  );
+}
+
+/**
+ * Renders the two-line + arc angle visualization for the Angle tool.
+ *
+ * - Gray line: fixed reference direction (line 1)
+ * - Blue line: adjustable direction (line 2), rotated by `angleDeg` from line 1
+ * - Blue arc: sweeps from line 1 to line 2, at 35% of `radius`
+ * - θ label: shown at the arc midpoint
+ * - Drag handle: circle at line 2 endpoint; dragging rotates it around the pivot
+ *
+ * Uses imperative BufferGeometry creation to avoid R3F declarative
+ * bufferAttribute quirks.
+ */
+function AngleArcOverlay({
+  pivot,
+  line1Dir,
+  normalAxis,
+  angleDeg,
+  radius,
+  onDrag,
+}: {
+  pivot: THREE.Vector3;
+  line1Dir: THREE.Vector3;
+  normalAxis: THREE.Vector3;
+  angleDeg: number;
+  radius: number;
+  onDrag: (deg: number) => void;
+}) {
+  const { camera, gl } = useThree();
+  const [dragging, setDragging] = useState(false);
+
+  const { line1Geo, line2Geo, arcGeo, line2End } = useMemo(() => {
+    // line2Dir = line1Dir rotated by angleDeg around normalAxis
+    const q = new THREE.Quaternion().setFromAxisAngle(
+      normalAxis,
+      (angleDeg * Math.PI) / 180,
+    );
+    const dir2 = line1Dir.clone().applyQuaternion(q).normalize();
+
+    const end1 = pivot.clone().add(line1Dir.clone().multiplyScalar(radius));
+    const end2 = pivot.clone().add(dir2.clone().multiplyScalar(radius));
+
+    // Arc: 48 steps from line1Dir toward line2Dir at 35% radius
+    const ARC_STEPS = 48;
+    const arcPoints: THREE.Vector3[] = [];
+    for (let i = 0; i <= ARC_STEPS; i++) {
+      const t = i / ARC_STEPS;
+      const qStep = new THREE.Quaternion().setFromAxisAngle(
+        normalAxis,
+        (t * angleDeg * Math.PI) / 180,
+      );
+      arcPoints.push(
+        pivot
+          .clone()
+          .add(
+            line1Dir
+              .clone()
+              .applyQuaternion(qStep)
+              .normalize()
+              .multiplyScalar(radius * 0.35),
+          ),
+      );
+    }
+
+    // θ label at arc midpoint
+    const qMid = new THREE.Quaternion().setFromAxisAngle(
+      normalAxis,
+      ((angleDeg / 2) * Math.PI) / 180,
+    );
+    const thetaPosition = pivot
+      .clone()
+      .add(
+        line1Dir
+          .clone()
+          .applyQuaternion(qMid)
+          .normalize()
+          .multiplyScalar(radius * 0.52),
+      );
+
+    return {
+      line1Geo: new THREE.BufferGeometry().setFromPoints([pivot.clone(), end1]),
+      line2Geo: new THREE.BufferGeometry().setFromPoints([pivot.clone(), end2]),
+      arcGeo: new THREE.BufferGeometry().setFromPoints(arcPoints),
+      line2End: end2,
+      thetaPos: thetaPosition,
+    };
+  }, [pivot, line1Dir, normalAxis, angleDeg, radius]);
+
+  // Dispose geometries when they are no longer needed
+  useEffect(() => {
+    return () => {
+      line1Geo.dispose();
+      line2Geo.dispose();
+      arcGeo.dispose();
+    };
+  }, [line1Geo, line2Geo, arcGeo]);
+
+  function handlePointerDown(event: React.PointerEvent) {
+    event.stopPropagation();
+    event.preventDefault();
+
+    const rect = gl.domElement.getBoundingClientRect();
+    const pivotScreen = projectToScreen(pivot, camera, rect);
+    if (!pivotScreen) return;
+
+    const pivotClientX = rect.left + pivotScreen.x;
+    const pivotClientY = rect.top + pivotScreen.y;
+    const startScreenAngle = Math.atan2(
+      event.clientY - pivotClientY,
+      event.clientX - pivotClientX,
+    );
+    const startDeg = angleDeg;
+
+    const onMove = (me: PointerEvent) => {
+      const a = Math.atan2(
+        me.clientY - pivotClientY,
+        me.clientX - pivotClientX,
+      );
+      const delta = ((a - startScreenAngle) * 180) / Math.PI;
+      onDrag(Math.max(0, Math.min(179, startDeg + delta)));
+    };
+
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      setDragging(false);
+    };
+
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    setDragging(true);
+  }
+
+  return (
+    <>
+      {/* Line 1 — gray reference */}
+      <primitive object={new THREE.Line(line1Geo, new THREE.LineBasicMaterial({ color: "#94a3b8" }))} />
+
+      {/* Line 2 — blue adjustable */}
+      <primitive object={new THREE.Line(line2Geo, new THREE.LineBasicMaterial({ color: "#2b6cff" }))} />
+
+      {/* Arc between the two lines */}
+      <primitive object={new THREE.Line(arcGeo, new THREE.LineBasicMaterial({ color: "#2b6cff" }))} />
+
+      {/* Drag handle at end of line 2 */}
+      <Html
+        position={[line2End.x, line2End.y, line2End.z]}
+        center
+        occlude={false}
+      >
+        <div
+          onPointerDown={handlePointerDown}
+          style={{
+            width: 14,
+            height: 14,
+            borderRadius: "50%",
+            background: dragging ? "#1a52d4" : "#2b6cff",
+            border: "2.5px solid white",
+            cursor: "grab",
+            boxShadow: "0 2px 8px rgba(43,108,255,0.5)",
+            pointerEvents: "auto",
+          }}
+        />
+      </Html>
+
+      {/* θ readout — fixed to the corner of the viewport so it never covers
+          the parts being angled. */}
+      <Html fullscreen style={{ pointerEvents: "none" }}>
+        <div
+          style={{
+            position: "absolute",
+            top: 14,
+            left: 14,
+            fontFamily: "Arial, sans-serif",
+            fontSize: 13,
+            fontWeight: 700,
+            color: "#172033",
+            pointerEvents: "none",
+            userSelect: "none",
+            background: "rgba(255,255,255,0.92)",
+            padding: "4px 10px",
+            borderRadius: 8,
+            border: "1px solid rgba(43,108,255,0.35)",
+            boxShadow: "0 2px 8px rgba(15,23,42,0.12)",
+            whiteSpace: "nowrap",
+          }}
+        >
+          θ = {Math.abs(angleDeg).toFixed(1)}°
+        </div>
+      </Html>
+    </>
+  );
+}
+
+/**
+ * Deduplicated corner positions of a geometry (local space), cached on the
+ * mesh. Triangle meshes repeat each corner once per adjacent triangle; the
+ * dedupe collapses those so screen-space snapping iterates real corners only.
+ * Very large geometries return an empty list (callers fall back to
+ * hit-triangle snapping).
+ */
+function getSnapCandidates(mesh: THREE.Mesh): THREE.Vector3[] {
+  const cached = mesh.userData.fuzzySnapCandidates as
+    | THREE.Vector3[]
+    | undefined;
+  if (cached) return cached;
+
+  const position = mesh.geometry?.attributes?.position;
+  const candidates: THREE.Vector3[] = [];
+
+  if (position && position.count <= 20000) {
+    const seen = new Set<string>();
+    for (let index = 0; index < position.count; index++) {
+      const x = position.getX(index);
+      const y = position.getY(index);
+      const z = position.getZ(index);
+      const key = `${x.toFixed(5)},${y.toFixed(5)},${z.toFixed(5)}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      candidates.push(new THREE.Vector3(x, y, z));
+    }
+  }
+
+  mesh.userData.fuzzySnapCandidates = candidates;
+  return candidates;
+}
+
+/**
+ * Snap a raycast hit to the nearest actual vertex of the clicked mesh,
+ * returned in world space.
+ *
+ * For small geometries every vertex is checked; for large ones only the three
+ * vertices of the intersected triangle are considered (still real mesh
+ * vertices, just a coarser snap).
+ */
+function snapToNearestVertexWorld(
+  event: ThreeEvent<PointerEvent>,
+): THREE.Vector3 {
+  const mesh = event.object as THREE.Mesh;
+  const position = mesh.geometry?.attributes?.position;
+
+  if (!position) {
+    return event.point.clone();
+  }
+
+  mesh.updateWorldMatrix(true, false);
+  const localHit = mesh.worldToLocal(event.point.clone());
+
+  const FULL_SCAN_LIMIT = 60000;
+  const candidate = new THREE.Vector3();
+  let bestIndex = -1;
+  let bestDistanceSq = Infinity;
+
+  const consider = (index: number) => {
+    candidate.fromBufferAttribute(position, index);
+    const distanceSq = candidate.distanceToSquared(localHit);
+    if (distanceSq < bestDistanceSq) {
+      bestDistanceSq = distanceSq;
+      bestIndex = index;
+    }
+  };
+
+  if (position.count > FULL_SCAN_LIMIT && event.face) {
+    consider(event.face.a);
+    consider(event.face.b);
+    consider(event.face.c);
+  } else {
+    for (let index = 0; index < position.count; index++) {
+      consider(index);
+    }
+  }
+
+  if (bestIndex < 0) {
+    return event.point.clone();
+  }
+
+  candidate.fromBufferAttribute(position, bestIndex);
+  return mesh.localToWorld(candidate.clone());
+}
 
 function Model({
   url,
@@ -69,9 +1019,15 @@ function Model({
   highlightedPathKey,
   selectedPathKeys,
   activeTool,
+  confidenceAnnotations,
+  confidenceEditor,
   activePathKeys,
   manipulationValue,
+  rolePreviewPlan,
+  confirmedHeightPlan,
+  enableManipulationHandles = true,
   lassoPolygon,
+
   onMeshGraph,
   onObjectSummaries,
   onSelectedNode,
@@ -79,14 +1035,27 @@ function Model({
   onObjectLassoSelection,
   onManipulationChange,
   onManipulationDragStateChange,
+  angleTargetDeg,
+  angleMateEdges,
+  angleResetNonce,
+  onAngleSelection,
+  onAngleModeSwitch,
+  bendDeltaDeg: bendDeltaDegExternal,
+  bendProfile = "sharp",
+  onBendSelection,
 }: {
   url: string;
   placements?: PartPlacement[];
   highlightedPathKey?: string | null;
   selectedPathKeys?: string[];
   activeTool?: OperationTool;
+  confidenceAnnotations?: FuzzyConfidenceAnnotation[];
+  confidenceEditor?: FuzzyConfidenceEditor | null;
   activePathKeys?: string[];
   manipulationValue?: number;
+  rolePreviewPlan?: RolePreviewPlan | null;
+  confirmedHeightPlan?: AxialStretchRolePlan | null;
+  enableManipulationHandles?: boolean;
   lassoPolygon?: ScreenPoint[] | null;
   onMeshGraph?: (nodes: MeshGraphNode[]) => void;
   onObjectSummaries?: (summaries: AxialStretchObjectSummary[]) => void;
@@ -95,6 +1064,30 @@ function Model({
   onObjectLassoSelection?: (pathKeys: string[]) => void;
   onManipulationChange?: (value: number) => void;
   onManipulationDragStateChange?: (dragging: boolean) => void;
+  angleTargetDeg?: number | null;
+  angleMateEdges?: MateGraphEdge[];
+  angleResetNonce?: number;
+  onAngleSelection?: (data: {
+    part1PathKey: string;
+    part2PathKey: string;
+    angleDeg: number;
+    measuredAngleDeg: number;
+    face1Normal?: [number, number, number];
+    face2Normal?: [number, number, number];
+    pivot?: [number, number, number];
+  }) => void;
+  onAngleModeSwitch?: (mode: "angle" | "bend") => void;
+  bendDeltaDeg?: number | null;
+  bendProfile?: "sharp" | "radius";
+  onBendSelection?: (data: {
+    pathKey: string;
+    deltaDeg: number;
+    creaseStart: [number, number, number];
+    creaseEnd: [number, number, number];
+    planeNormal: [number, number, number];
+    bendSideSign: 1 | -1;
+    bandWidth: number;
+  }) => void;
 }) {
   const gltf = useGLTF(url);
   const graphRef = useRef<MeshGraphNode[]>([]);
@@ -114,6 +1107,59 @@ function Model({
     () => buildObjectSummaries(scene, selectedPathKeys ?? []),
     [scene, selectedPathKeys],
   );
+
+  const axisFramesByPathKey = useMemo(() => {
+    const frames = new Map<string, ConfidenceAxisFrame>();
+
+    for (const summary of objectSummaries) {
+      frames.set(summary.pathKey, getObjectAxisFrame(summary));
+    }
+
+    return frames;
+  }, [objectSummaries]);
+
+  const heightPreviewSession = useMemo(() => {
+    if (!confirmedHeightPlan) {
+      return null;
+    }
+
+    return createAxialStretchPreviewSession(
+      scene,
+      objectSummaries,
+      confirmedHeightPlan,
+    );
+  }, [scene, objectSummaries, confirmedHeightPlan]);
+
+  const visualConfidenceAnnotations = useMemo(() => {
+    const base = confidenceAnnotations ?? [];
+
+    if (!confidenceEditor) {
+      return base;
+    }
+
+    return [
+      ...base.filter((item) => item.pathKey !== confidenceEditor.pathKey),
+      {
+        pathKey: confidenceEditor.pathKey,
+        confidence: confidenceEditor.confidence,
+        directions: confidenceEditor.directions,
+      },
+    ];
+  }, [confidenceAnnotations, confidenceEditor]);
+
+  useEffect(() => {
+    if (!heightPreviewSession) {
+      return;
+    }
+
+    scene.add(heightPreviewSession.group);
+    invalidate();
+
+    return () => {
+      disposeAxialStretchPreviewSession(heightPreviewSession);
+      invalidate();
+    };
+  }, [scene, heightPreviewSession, invalidate]);
 
   useEffect(() => {
     const graph = buildMeshGraph(scene);
@@ -141,18 +1187,105 @@ function Model({
     onObjectLassoSelection?.(pathKeys);
   }, [scene, camera, gl, lassoPolygon, onObjectLassoSelection]);
 
+  // ── Angle tool selection: pivot vertex → face 1 (fixed) → face 2 (rotates) ──
+  // The vertex click is snapped to the nearest actual mesh vertex; each face
+  // click captures the clicked face's world-space normal.
+  // Declared before the highlight useEffect so the effect can reference them.
+  type FaceSelection = {
+    pathKey: string;
+    /** Face normal in Three.js viewer world space (scene has rotation.x = -π/2). */
+    faceNormal: THREE.Vector3;
+    /** World-space click point. */
+    hitPoint: THREE.Vector3;
+  };
+
+  type VertexSelection = {
+    pathKey: string;
+    /** Snapped mesh vertex in viewer world space — the rotation pivot. */
+    point: THREE.Vector3;
+    /**
+     * Face normal at the click (viewer world space). In the unified flow the
+     * pivot click doubles as the fixed-side face pick for rotations, and as
+     * the surface orientation for a bend crease.
+     */
+    faceNormal: THREE.Vector3;
+  };
+
+  const [angleVertex, setAngleVertex] = useState<VertexSelection | null>(null);
+  const [angleFace1, setAngleFace1] = useState<FaceSelection | null>(null);
+  const [angleFace2, setAngleFace2] = useState<FaceSelection | null>(null);
+  /** Hover feedback: part under the cursor + the vertex a click would snap to. */
+  const [angleHoverPathKey, setAngleHoverPathKey] = useState<string | null>(null);
+  const [angleHoverVertex, setAngleHoverVertex] = useState<THREE.Vector3 | null>(null);
+  /** Measured angle between the two face normals at click time (deg). */
+  const [angleMeasuredDeg, setAngleMeasuredDeg] = useState<number | null>(null);
+  /** Target angle the user is editing toward (deg). */
+  const [angleArcDeg, setAngleArcDeg] = useState<number>(45);
+
   useEffect(() => {
+    // When the angle tool is active, highlight whichever parts have been selected
+    // for the angle measurement so it's clear what's being compared.
+    if (activeTool === "angle") {
+      const angleKeys = [
+        angleFace1?.pathKey ?? null,
+        angleFace2?.pathKey ?? null,
+        // Hovered part glows too so users see what a click would target.
+        angleHoverPathKey,
+      ].filter((k): k is string => k !== null);
+      applyPathHighlight(
+        scene,
+        angleKeys.length > 0 ? Array.from(new Set(angleKeys)) : null,
+      );
+      invalidate();
+      return;
+    }
+
     const activeHighlights =
       selectedPathKeys && selectedPathKeys.length > 0
         ? selectedPathKeys
         : highlightedPathKey;
 
     applyPathHighlight(scene, activeHighlights);
-  }, [scene, highlightedPathKey, selectedPathKeys]);
+    invalidate();
+  }, [scene, highlightedPathKey, selectedPathKeys, activeTool, angleFace1, angleFace2, angleHoverPathKey, invalidate]);
+
+  useEffect(() => {
+    applyFuzzyConfidence(
+      scene,
+      visualConfidenceAnnotations,
+      axisFramesByPathKey,
+    );
+    invalidate();
+
+    return () => {
+      applyFuzzyConfidence(scene, []);
+      invalidate();
+    };
+  }, [scene, visualConfidenceAnnotations, axisFramesByPathKey, invalidate]);
 
   // --- Sizing / angle handle setup -------------------------------------
 
   const handleConfig = useMemo<HandleConfig>(() => {
+    if (!enableManipulationHandles) {
+      return null;
+    }
+
+    if (
+      activeTool === "height" &&
+      confirmedHeightPlan &&
+      heightPreviewSession
+    ) {
+      const handle = getAxialStretchPreviewHandle(heightPreviewSession);
+
+      return {
+        kind: "heightStretch",
+        baseWorld: handle.baseWorld,
+        axisWorld: handle.axisWorld,
+        length: handle.length,
+        session: heightPreviewSession,
+      };
+    }
+
     if (
       !activePathKeys ||
       activePathKeys.length === 0 ||
@@ -178,9 +1311,6 @@ function Model({
     }
 
     if (activeTool === "height") {
-      // World-up axis. Anchor the bar at the highest point of the
-      // selection, base at the lowest, so dragging up/down raises or
-      // lowers the selection along the assembly's height direction.
       let baseY = Infinity;
       let tipY = -Infinity;
       let anchorX = 0;
@@ -209,8 +1339,6 @@ function Model({
     }
 
     if (activeTool === "extend") {
-      // Extend along the selected object's own principal axis, from its
-      // negative end toward its positive end.
       const primary = activeSummaries[0];
       const axis = new THREE.Vector3(...primary.principalAxisWorld);
 
@@ -229,7 +1357,6 @@ function Model({
       };
     }
 
-    // activeTool === "angle"
     const primary = activeSummaries[0];
 
     return {
@@ -237,20 +1364,510 @@ function Model({
       pivotWorld: new THREE.Vector3(...primary.negativeEndWorld),
       objects,
     };
-  }, [activePathKeys, activeTool, objectSummaries, scene]);
+  }, [
+    activePathKeys,
+    activeTool,
+    confirmedHeightPlan,
+    enableManipulationHandles,
+    heightPreviewSession,
+    objectSummaries,
+    scene,
+  ]);
+
+  const roleBadges = useMemo(() => {
+    if (!rolePreviewPlan) {
+      return [];
+    }
+
+    const stretchSet = new Set(rolePreviewPlan.stretchTargetPathKeys);
+    const moveSet = new Set(rolePreviewPlan.moveWithEndPathKeys);
+    const fixedSet = new Set(rolePreviewPlan.fixedAnchorPathKeys);
+
+    return objectSummaries
+      .map((summary) => {
+        let role: RoleBadgeRole | null = null;
+
+        if (stretchSet.has(summary.pathKey)) {
+          role = "stretchTarget";
+        } else if (moveSet.has(summary.pathKey)) {
+          role = "moveWithEnd";
+        } else if (fixedSet.has(summary.pathKey)) {
+          role = "fixedAnchor";
+        }
+
+        if (!role) {
+          return null;
+        }
+
+        const anchorPosition = getRoleAnchor(summary, role);
+        const position = getBadgePosition(anchorPosition, summary, role);
+
+        return {
+          pathKey: summary.pathKey,
+          role,
+          anchorPosition,
+          position,
+        };
+      })
+      .filter(
+        (
+          item,
+        ): item is {
+          pathKey: string;
+          role: RoleBadgeRole;
+          anchorPosition: [number, number, number];
+          position: [number, number, number];
+        } => item !== null,
+      );
+  }, [objectSummaries, rolePreviewPlan]);
+
+  const confidenceEditorSummary = useMemo(() => {
+    if (!confidenceEditor) {
+      return null;
+    }
+
+    return (
+      objectSummaries.find(
+        (summary) => summary.pathKey === confidenceEditor.pathKey,
+      ) ?? null
+    );
+  }, [confidenceEditor, objectSummaries]);
+
+  const uncertaintyArrows = useMemo(() => {
+    const summaryByPathKey = new Map(
+      objectSummaries.map((summary) => [summary.pathKey, summary]),
+    );
+
+    const arrows: UncertaintyArrowSpec[] = [];
+
+    for (const annotation of visualConfidenceAnnotations) {
+      const summary = summaryByPathKey.get(annotation.pathKey);
+
+      if (!summary) {
+        continue;
+      }
+
+      const frame =
+        axisFramesByPathKey.get(summary.pathKey) ?? getObjectAxisFrame(summary);
+
+      (["x", "y", "z"] as ConfidenceAxis[]).forEach((axis) => {
+        const level = annotation.confidence[axis];
+
+        if (level === "high") {
+          return;
+        }
+
+        const axisDirection = annotation.directions?.[axis] ?? "both";
+
+        const arrowDirections: ("positive" | "negative")[] =
+          axisDirection === "both" ? ["positive", "negative"] : [axisDirection];
+
+        for (const direction of arrowDirections) {
+          const start = getArrowStart(summary, frame, axis, direction);
+          const length = getArrowLength(level, summary);
+          const end = getArrowEnd(start, frame, axis, direction, length);
+
+          arrows.push({
+            pathKey: annotation.pathKey,
+            axis,
+            level,
+            direction,
+            start,
+            end,
+            color: getArrowColor(level),
+            label: `${axis.toUpperCase()}${
+              direction === "positive" ? "+" : "−"
+            }`,
+          });
+        }
+      });
+    }
+
+    return arrows;
+  }, [objectSummaries, visualConfidenceAnnotations, axisFramesByPathKey]);
 
   const appliedValueRef = useRef(0);
   const angleAxisRef = useRef(new THREE.Vector3(0, 0, 1));
 
-  // Reset the "already applied" tracker whenever the handle target changes
-  // (new selection/tool). Geometry already nudged for a prior selection
-  // stays as-is; the new selection starts from its current pose.
+  // ── Angle tool: vertex + two-face selection, live rotation preview ──────
+
+  /**
+   * Live-preview state: which objects have been rotated, around what axis and
+   * pivot, and by how much. Kept in a ref (not React state) so the reverse
+   * rotation always uses exactly what was applied — no stale-closure risk.
+   */
+  const anglePreviewRef = useRef<{
+    objects: THREE.Object3D[];
+    pivot: THREE.Vector3;
+    axis: THREE.Vector3;
+    appliedRad: number;
+  } | null>(null);
+
+  const resetAnglePreview = useCallback(() => {
+    const preview = anglePreviewRef.current;
+    if (preview && Math.abs(preview.appliedRad) > 1e-12) {
+      rotateObjectsAroundWorldAxis(
+        preview.objects,
+        preview.pivot,
+        preview.axis,
+        -preview.appliedRad,
+      );
+    }
+    anglePreviewRef.current = null;
+    invalidate();
+  }, [invalidate]);
+
+  const resetAngleSelection = useCallback(() => {
+    resetAnglePreview();
+    setAngleVertex(null);
+    setAngleFace1(null);
+    setAngleFace2(null);
+    setAngleMeasuredDeg(null);
+    setAngleArcDeg(45);
+    setAngleHoverPathKey(null);
+    setAngleHoverVertex(null);
+  }, [resetAnglePreview]);
+
+  // Reset selection when leaving angle tool or when the parent forces a reset
+  // (after saving/cancelling a pending mark).
+  useEffect(() => {
+    if (activeTool !== "angle") {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      resetAngleSelection();
+    }
+  }, [activeTool, resetAngleSelection]);
+
+  useEffect(() => {
+    if (angleResetNonce !== undefined && angleResetNonce > 0) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      resetAngleSelection();
+    }
+  }, [angleResetNonce, resetAngleSelection]);
+
+  // If the scene is replaced (reload), any applied preview transform is gone.
+  useEffect(() => {
+    anglePreviewRef.current = null;
+  }, [scene]);
+
+  // Sync target angle from the sidebar panel's numeric input.
+  // (Intentional controlled-prop sync — disable the strict compiler rule.)
+  useEffect(() => {
+    if (angleTargetDeg == null || !angleFace2) return;
+    const clamped = Math.max(0, Math.min(179, angleTargetDeg));
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setAngleArcDeg((current) =>
+      Math.abs(clamped - current) > 1e-4 ? clamped : current,
+    );
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [angleTargetDeg]);
+
+  // Notify parent when the full selection exists and whenever the target changes
+  useEffect(() => {
+    if (!angleVertex || !angleFace1 || !angleFace2 || angleMeasuredDeg == null) return;
+    onAngleSelection?.({
+      part1PathKey: angleFace1.pathKey,
+      part2PathKey: angleFace2.pathKey,
+      angleDeg: angleArcDeg,
+      measuredAngleDeg: angleMeasuredDeg,
+      face1Normal: angleFace1.faceNormal.toArray() as [number, number, number],
+      face2Normal: angleFace2.faceNormal.toArray() as [number, number, number],
+      pivot: angleVertex.point.toArray() as [number, number, number],
+    });
+  }, [angleVertex, angleFace1, angleFace2, angleArcDeg, angleMeasuredDeg, onAngleSelection]);
+
+  // Compute the 3D geometry config for the arc overlay
+  const angleOverlayConfig = useMemo(() => {
+    if (!angleVertex || !angleFace1 || !angleFace2) return null;
+
+    const n1 = angleFace1.faceNormal.clone().normalize();
+    const n2 = angleFace2.faceNormal.clone().normalize();
+
+    // Hinge axis: perpendicular to both face normals
+    let normalAxis = new THREE.Vector3().crossVectors(n1, n2);
+    if (normalAxis.lengthSq() < 0.0001) {
+      // Parallel normals — fall back to a plausible axis
+      normalAxis = Math.abs(n1.y) < 0.9
+        ? new THREE.Vector3().crossVectors(new THREE.Vector3(0, 1, 0), n1)
+        : new THREE.Vector3().crossVectors(new THREE.Vector3(1, 0, 0), n1);
+    }
+    normalAxis.normalize();
+
+    // The snapped vertex is the rotation pivot
+    const pivot = angleVertex.point.clone();
+
+    // Arc radius based on part sizes (look up summaries for scale)
+    const sum1 = objectSummaries.find((s) => s.pathKey === angleFace1.pathKey);
+    const sum2 = objectSummaries.find((s) => s.pathKey === angleFace2.pathKey);
+    const radius = Math.max(
+      (sum1?.axisLength ?? 0.1) * 0.5,
+      (sum2?.axisLength ?? 0.1) * 0.5,
+      0.05,
+    );
+
+    return { pivot, line1Dir: n1, normalAxis, radius };
+  }, [angleVertex, angleFace1, angleFace2, objectSummaries]);
+
+  // Live rotation preview: rotate part 2 (+ its rigid mate group) around the
+  // hinge axis through the pivot vertex by (target − measured). Incremental —
+  // each run applies only the difference from what is already applied.
+  useEffect(() => {
+    if (
+      activeTool !== "angle" ||
+      !angleOverlayConfig ||
+      !angleFace1 ||
+      !angleFace2 ||
+      angleMeasuredDeg == null
+    ) {
+      return;
+    }
+
+    let preview = anglePreviewRef.current;
+
+    if (!preview) {
+      const relatedKeys = findMateConnectedParts(
+        angleFace2.pathKey,
+        angleFace1.pathKey,
+        angleMateEdges ?? [],
+      );
+      const objects = findTopLevelObjectsByPathKeys(scene, [
+        angleFace2.pathKey,
+        ...relatedKeys,
+      ]);
+
+      if (objects.length === 0) return;
+
+      preview = {
+        objects,
+        pivot: angleOverlayConfig.pivot.clone(),
+        axis: angleOverlayConfig.normalAxis.clone(),
+        appliedRad: 0,
+      };
+      anglePreviewRef.current = preview;
+    }
+
+    const targetRad = THREE.MathUtils.degToRad(angleArcDeg - angleMeasuredDeg);
+    const diff = targetRad - preview.appliedRad;
+
+    if (Math.abs(diff) < 1e-9) return;
+
+    rotateObjectsAroundWorldAxis(preview.objects, preview.pivot, preview.axis, diff);
+    anglePreviewRef.current = { ...preview, appliedRad: targetRad };
+    invalidate();
+  }, [
+    activeTool,
+    angleOverlayConfig,
+    angleFace1,
+    angleFace2,
+    angleMeasuredDeg,
+    angleArcDeg,
+    angleMateEdges,
+    scene,
+    invalidate,
+  ]);
+
+  // ── Bend tool: two-click crease + side pick + live mesh deformation ──────
+
+  type BendPointSelection = {
+    pathKey: string;
+    /** Surface point in viewer world space. */
+    point: THREE.Vector3;
+    /** Face normal at the click, viewer world space. */
+    faceNormal: THREE.Vector3;
+  };
+
+  const [bendP1, setBendP1] = useState<BendPointSelection | null>(null);
+  const [bendP2, setBendP2] = useState<BendPointSelection | null>(null);
+  const [bendSidePoint, setBendSidePoint] = useState<THREE.Vector3 | null>(null);
+  const [bendDeltaDeg, setBendDeltaDeg] = useState(0);
+
+  /**
+   * Live-preview state: per-mesh cloned geometry + pristine position arrays,
+   * so any bend delta can be re-applied from scratch and fully reverted.
+   */
+  const bendPreviewRef = useRef<{
+    meshes: { mesh: THREE.Mesh; original: Float32Array }[];
+  } | null>(null);
+
+  const resetBendPreview = useCallback(() => {
+    const preview = bendPreviewRef.current;
+    if (preview) {
+      for (const { mesh, original } of preview.meshes) {
+        const position = mesh.geometry.attributes.position;
+        (position.array as Float32Array).set(original);
+        position.needsUpdate = true;
+        mesh.geometry.computeVertexNormals();
+      }
+    }
+    bendPreviewRef.current = null;
+    invalidate();
+  }, [invalidate]);
+
+  const resetBendSelection = useCallback(() => {
+    resetBendPreview();
+    setBendP1(null);
+    setBendP2(null);
+    setBendSidePoint(null);
+    setBendDeltaDeg(0);
+  }, [resetBendPreview]);
+
+  useEffect(() => {
+    if (activeTool !== "bend") {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      resetBendSelection();
+    }
+  }, [activeTool, resetBendSelection]);
+
+  useEffect(() => {
+    if (angleResetNonce !== undefined && angleResetNonce > 0) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      resetBendSelection();
+    }
+  }, [angleResetNonce, resetBendSelection]);
+
+  useEffect(() => {
+    bendPreviewRef.current = null;
+  }, [scene]);
+
+  // Sync bend delta from the sidebar panel's numeric input.
+  useEffect(() => {
+    if (bendDeltaDegExternal == null || !bendSidePoint) return;
+    const clamped = Math.max(-179, Math.min(179, bendDeltaDegExternal));
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setBendDeltaDeg((current) =>
+      Math.abs(clamped - current) > 1e-4 ? clamped : current,
+    );
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bendDeltaDegExternal]);
+
+  // Crease geometry: cutting plane through the crease line, oriented by the
+  // surface normals at the two clicks.
+  const bendConfig = useMemo(() => {
+    if (!bendP1 || !bendP2) return null;
+
+    const creaseDir = bendP2.point.clone().sub(bendP1.point);
+    if (creaseDir.lengthSq() < 1e-12) return null;
+    creaseDir.normalize();
+
+    let surfaceNormal = bendP1.faceNormal
+      .clone()
+      .add(bendP2.faceNormal)
+      .multiplyScalar(0.5);
+    if (surfaceNormal.lengthSq() < 1e-8) {
+      surfaceNormal = bendP1.faceNormal.clone();
+    }
+
+    let planeNormal = new THREE.Vector3().crossVectors(
+      creaseDir,
+      surfaceNormal,
+    );
+    if (planeNormal.lengthSq() < 1e-8) {
+      // Degenerate (clicks along the normal direction): pick any
+      // perpendicular to the crease.
+      planeNormal =
+        Math.abs(creaseDir.y) < 0.9
+          ? new THREE.Vector3().crossVectors(new THREE.Vector3(0, 1, 0), creaseDir)
+          : new THREE.Vector3().crossVectors(new THREE.Vector3(1, 0, 0), creaseDir);
+    }
+    planeNormal.normalize();
+
+    const bendSideSign: 1 | -1 = bendSidePoint
+      ? bendSidePoint.clone().sub(bendP1.point).dot(planeNormal) >= 0
+        ? 1
+        : -1
+      : 1;
+
+    // Radius-band width: ~25% of the part's principal axis length, so the
+    // smooth bend scales with the part instead of needing manual input.
+    const summary = objectSummaries.find((s) => s.pathKey === bendP1.pathKey);
+    const bandWidth = Math.max((summary?.axisLength ?? 0.1) * 0.25, 0.005);
+
+    return {
+      pathKey: bendP1.pathKey,
+      creaseStart: bendP1.point.clone(),
+      creaseEnd: bendP2.point.clone(),
+      creaseDir,
+      planeNormal,
+      bendSideSign,
+      bandWidth,
+      sideChosen: bendSidePoint !== null,
+    };
+  }, [bendP1, bendP2, bendSidePoint, objectSummaries]);
+
+  // Live bend preview: restore pristine positions, then re-apply the current
+  // delta with the shared bendDeform math (same formula the export uses).
+  useEffect(() => {
+    if (activeTool !== "bend" || !bendConfig || !bendConfig.sideChosen) {
+      return;
+    }
+
+    let preview = bendPreviewRef.current;
+
+    if (!preview) {
+      const objects = findTopLevelObjectsByPathKeys(scene, [bendConfig.pathKey]);
+      const meshes: { mesh: THREE.Mesh; original: Float32Array }[] = [];
+
+      for (const object of objects) {
+        object.traverse((child) => {
+          if (!(child instanceof THREE.Mesh)) return;
+          // Clone geometry so shared instances / the GLTF cache stay pristine.
+          child.geometry = child.geometry.clone();
+          const position = child.geometry.attributes.position;
+          if (!position) return;
+          meshes.push({
+            mesh: child,
+            original: new Float32Array(position.array as Float32Array),
+          });
+        });
+      }
+
+      if (meshes.length === 0) return;
+
+      preview = { meshes };
+      bendPreviewRef.current = preview;
+    }
+
+    const spec = {
+      creaseStart: bendConfig.creaseStart,
+      creaseEnd: bendConfig.creaseEnd,
+      planeNormal: bendConfig.planeNormal,
+      bendSideSign: bendConfig.bendSideSign,
+      deltaRad: THREE.MathUtils.degToRad(bendDeltaDeg),
+      profile: bendProfile,
+      bandWidth: bendConfig.bandWidth,
+    };
+
+    for (const { mesh, original } of preview.meshes) {
+      const position = mesh.geometry.attributes.position;
+      (position.array as Float32Array).set(original);
+      // Imperative Three.js mutation is intentional here — the ref exists to
+      // manage live GPU geometry outside React's render cycle.
+      // eslint-disable-next-line react-hooks/immutability
+      position.needsUpdate = true;
+      mesh.updateWorldMatrix(true, false);
+      bendGeometryInPlace(mesh.geometry, mesh.matrixWorld, spec);
+    }
+
+    invalidate();
+  }, [activeTool, bendConfig, bendDeltaDeg, bendProfile, scene, invalidate]);
+
+  // Notify parent when the bend selection is complete or the delta changes.
+  useEffect(() => {
+    if (!bendConfig || !bendConfig.sideChosen) return;
+    onBendSelection?.({
+      pathKey: bendConfig.pathKey,
+      deltaDeg: bendDeltaDeg,
+      creaseStart: bendConfig.creaseStart.toArray() as [number, number, number],
+      creaseEnd: bendConfig.creaseEnd.toArray() as [number, number, number],
+      planeNormal: bendConfig.planeNormal.toArray() as [number, number, number],
+      bendSideSign: bendConfig.bendSideSign,
+      bandWidth: bendConfig.bandWidth,
+    });
+  }, [bendConfig, bendDeltaDeg, onBendSelection]);
+
   useEffect(() => {
     appliedValueRef.current = 0;
   }, [handleConfig]);
 
-  // Apply the delta between the new manipulation value and what's already
-  // been applied to the matched objects.
   useEffect(() => {
     if (!handleConfig) {
       return;
@@ -260,6 +1877,13 @@ function Model({
     const diff = targetValue - appliedValueRef.current;
 
     if (Math.abs(diff) < 1e-9) {
+      return;
+    }
+
+    if (handleConfig.kind === "heightStretch") {
+      updateAxialStretchPreviewSession(handleConfig.session, targetValue);
+      appliedValueRef.current = targetValue;
+      invalidate();
       return;
     }
 
@@ -279,7 +1903,7 @@ function Model({
 
     appliedValueRef.current = targetValue;
     invalidate();
-  }, [manipulationValue, handleConfig]);
+  }, [manipulationValue, handleConfig, invalidate]);
 
   function handleDragStateChange(dragging: boolean) {
     if (dragging && handleConfig?.kind === "angle") {
@@ -287,6 +1911,136 @@ function Model({
     }
 
     onManipulationDragStateChange?.(dragging);
+  }
+
+  /**
+   * Screen-space vertex snapping: among the hovered mesh's corner vertices
+   * that project within SNAP_SCREEN_RADIUS_PX of the cursor, pick the one
+   * closest in 3D to the raycast hit (the 3D tie-break disambiguates front
+   * corners from back corners that overlap on screen). Falls back to the
+   * hit-triangle snap for very large meshes or when nothing is in range.
+   */
+  const SNAP_SCREEN_RADIUS_PX = 36;
+
+  function pickSnapVertex(event: ThreeEvent<PointerEvent>): THREE.Vector3 {
+    const mesh = event.object as THREE.Mesh;
+    const candidates = getSnapCandidates(mesh);
+
+    if (candidates.length === 0) {
+      return snapToNearestVertexWorld(event);
+    }
+
+    const rect = gl.domElement.getBoundingClientRect();
+    const pointerX = event.clientX - rect.left;
+    const pointerY = event.clientY - rect.top;
+    const radiusSq = SNAP_SCREEN_RADIUS_PX * SNAP_SCREEN_RADIUS_PX;
+
+    mesh.updateWorldMatrix(true, false);
+
+    const world = new THREE.Vector3();
+    let best: THREE.Vector3 | null = null;
+    let bestHitDistance = Infinity;
+
+    for (const local of candidates) {
+      world.copy(local).applyMatrix4(mesh.matrixWorld);
+
+      const screen = projectToScreen(world, camera, rect);
+      if (!screen) continue;
+
+      const dx = screen.x - pointerX;
+      const dy = screen.y - pointerY;
+      if (dx * dx + dy * dy > radiusSq) continue;
+
+      const hitDistance = world.distanceToSquared(event.point);
+      if (hitDistance < bestHitDistance) {
+        bestHitDistance = hitDistance;
+        best = world.clone();
+      }
+    }
+
+    return best ?? snapToNearestVertexWorld(event);
+  }
+
+  /**
+   * Hover feedback for the angle tool.
+   * - Vertex step: show only the snap ghost marker (no part glow — it was
+   *   drowning out the dot).
+   * - Face steps: glow the hovered part so it's clear what a click selects.
+   * Updates are throttled to ~30fps to avoid re-render churn.
+   */
+  const hoverThrottleRef = useRef(0);
+
+  function handlePointerMove(event: ThreeEvent<PointerEvent>) {
+    if (activeTool !== "angle") {
+      return;
+    }
+
+    const now = performance.now();
+    if (now - hoverThrottleRef.current < 33) {
+      return;
+    }
+    hoverThrottleRef.current = now;
+
+    const pathKey = findFuzzyPathKey(event.object);
+
+    if (!angleVertex) {
+      // Vertex step: ghost marker only.
+      setAngleHoverPathKey((previous) => (previous === null ? previous : null));
+
+      if (pathKey) {
+        const snapped = pickSnapVertex(event);
+        setAngleHoverVertex((previous) =>
+          previous && previous.distanceToSquared(snapped) < 1e-12
+            ? previous
+            : snapped,
+        );
+      } else {
+        setAngleHoverVertex((previous) => (previous === null ? previous : null));
+      }
+      return;
+    }
+
+    // Face steps: part glow only.
+    setAngleHoverVertex((previous) => (previous === null ? previous : null));
+    setAngleHoverPathKey((previous) => (previous === pathKey ? previous : pathKey));
+  }
+
+  function handlePointerOut() {
+    setAngleHoverPathKey((previous) => (previous === null ? previous : null));
+    setAngleHoverVertex((previous) => (previous === null ? previous : null));
+  }
+
+  /**
+   * Mode-chip switches. Both keep the user's first click (the pivot /
+   * crease-start point) so switching costs at most one extra click.
+   */
+  function switchToBendMode() {
+    if (!angleVertex) return;
+    resetAnglePreview();
+    setBendP1({
+      pathKey: angleVertex.pathKey,
+      point: angleVertex.point.clone(),
+      faceNormal: angleVertex.faceNormal.clone(),
+    });
+    setBendP2(null);
+    setBendSidePoint(null);
+    setBendDeltaDeg(0);
+    onAngleModeSwitch?.("bend");
+  }
+
+  function switchToRotateMode() {
+    if (!bendP1) return;
+    resetBendPreview();
+    setAngleVertex({
+      pathKey: bendP1.pathKey,
+      point: bendP1.point.clone(),
+      faceNormal: bendP1.faceNormal.clone(),
+    });
+    setAngleFace1(null);
+    setAngleFace2(null);
+    setAngleMeasuredDeg(null);
+    setAngleArcDeg(45);
+    onAngleModeSwitch?.("angle");
   }
 
   function handlePointerDown(event: ThreeEvent<PointerEvent>) {
@@ -300,6 +2054,188 @@ function Model({
 
     const selectedPathKey = findFuzzyPathKey(selectedObject);
 
+    // Unified angle tool: click 1 picks the pivot point; click 2 decides the
+    // mode — another part means "rotate the angle BETWEEN parts", the same
+    // part means "bend the angle WITHIN this part".
+    if (activeTool === "angle" && selectedPathKey) {
+      // World-space face normal of this click (used by every step).
+      let faceNormal = new THREE.Vector3(0, 1, 0); // fallback
+      if (event.face) {
+        const localNormal = event.face.normal.clone();
+        const normalMatrix = new THREE.Matrix3().getNormalMatrix(
+          event.object.matrixWorld,
+        );
+        faceNormal = localNormal.applyMatrix3(normalMatrix).normalize();
+      }
+
+      // Snap the raw triangle normal to the nearest of the part's 6 OBB face
+      // normals. Without this, two clicks a few pixels apart on a faceted or
+      // curved region can land on different triangles and silently change
+      // the measured angle/hinge axis; this collapses that to one of 6
+      // canonical directions per part, so nearby clicks agree.
+      const clickedSummary = objectSummaries.find(
+        (summary) => summary.pathKey === selectedPathKey,
+      );
+      if (clickedSummary) {
+        faceNormal = snapNormalToObbFace(faceNormal, clickedSummary);
+      }
+
+      // Step 1: pivot point — snapped to the nearest mesh vertex; the face
+      // it sits on doubles as the fixed-side reference for rotations.
+      if (!angleVertex) {
+        setAngleVertex({
+          pathKey: selectedPathKey,
+          // Same picker as the hover ghost so the click lands exactly where
+          // the ghost marker showed.
+          point: angleHoverVertex?.clone() ?? pickSnapVertex(event),
+          faceNormal,
+        });
+        setAngleHoverVertex(null);
+        return;
+      }
+
+      // Step 2: mode-deciding click.
+      if (!angleFace2) {
+        if (selectedPathKey !== angleVertex.pathKey) {
+          // Different part → rotate. The pivot click already provided the
+          // fixed-side face, so this single click completes the selection —
+          // unless a real REVOLUTE/CYLINDRICAL mate directly connects the
+          // two parts, in which case that joint's actual axis/origin is
+          // ground truth and replaces the clicked-vertex geometry entirely.
+          const directMate = findDirectRotationalMate(
+            angleVertex.pathKey,
+            selectedPathKey,
+            angleMateEdges ?? [],
+          );
+          const mateAxis = directMate
+            ? onshapeToViewer(directMate.axis)
+            : null;
+
+          let face1FaceNormal = angleVertex.faceNormal.clone();
+          let face2FaceNormal = faceNormal;
+          let pivotPoint = angleVertex.point.clone();
+
+          if (directMate && mateAxis && mateAxis.lengthSq() > 1e-8) {
+            mateAxis.normalize();
+            pivotPoint = onshapeToViewer(directMate.origin);
+
+            // Encode the mate axis as a synthetic perpendicular normal pair
+            // so the existing n1×n2 hinge math (here and in the save
+            // pipeline's buildAngleDeltaMatrix) reconstructs this exact
+            // axis with no schema or save-route changes needed. These are
+            // NOT real clicked face normals in this path — n1·n2 is fixed
+            // at 0 (a 90° reference) purely so "measured" is a stable
+            // baseline for the target-angle delta math.
+            const reference =
+              Math.abs(mateAxis.y) < 0.9
+                ? new THREE.Vector3(0, 1, 0)
+                : new THREE.Vector3(1, 0, 0);
+            face1FaceNormal = reference
+              .clone()
+              .sub(mateAxis.clone().multiplyScalar(reference.dot(mateAxis)))
+              .normalize();
+            face2FaceNormal = mateAxis.clone().cross(face1FaceNormal).normalize();
+
+            // Re-seat the pivot at the joint's real origin (not the clicked
+            // vertex) so the arc overlay, live preview, and saved annotation
+            // all hinge there.
+            setAngleVertex({
+              pathKey: angleVertex.pathKey,
+              point: pivotPoint,
+              faceNormal: face1FaceNormal,
+            });
+          }
+
+          const face1 = {
+            pathKey: angleVertex.pathKey,
+            faceNormal: face1FaceNormal,
+            hitPoint: pivotPoint,
+          };
+          const face2 = {
+            pathKey: selectedPathKey,
+            faceNormal: face2FaceNormal,
+            hitPoint: event.point.clone(),
+          };
+          const cosAngle = Math.max(
+            -1,
+            Math.min(1, face1.faceNormal.dot(face2.faceNormal)),
+          );
+          const measured = (Math.acos(cosAngle) * 180) / Math.PI;
+          setAngleFace1(face1);
+          setAngleFace2(face2);
+          setAngleMeasuredDeg(measured);
+          setAngleArcDeg(measured);
+        } else {
+          // Same part → bend. Seed the crease from the pivot click + this
+          // click and hand the flow to the bend state machine.
+          setBendP1({
+            pathKey: angleVertex.pathKey,
+            point: angleVertex.point.clone(),
+            faceNormal: angleVertex.faceNormal.clone(),
+          });
+          setBendP2({
+            pathKey: selectedPathKey,
+            point: event.point.clone(),
+            faceNormal,
+          });
+          setBendSidePoint(null);
+          setBendDeltaDeg(0);
+          onAngleModeSwitch?.("bend");
+        }
+        return;
+      }
+
+      // Selection already complete: restart with a fresh pivot.
+      resetAnglePreview();
+      setAngleVertex({
+        pathKey: selectedPathKey,
+        point: pickSnapVertex(event),
+        faceNormal,
+      });
+      setAngleFace1(null);
+      setAngleFace2(null);
+      setAngleMeasuredDeg(null);
+      setAngleArcDeg(45);
+      return;
+    }
+
+    // Bend tool: two clicks define the crease, third click picks the side.
+    if (activeTool === "bend" && selectedPathKey) {
+      let faceNormal = new THREE.Vector3(0, 1, 0);
+      if (event.face) {
+        const localNormal = event.face.normal.clone();
+        const normalMatrix = new THREE.Matrix3().getNormalMatrix(
+          event.object.matrixWorld,
+        );
+        faceNormal = localNormal.applyMatrix3(normalMatrix).normalize();
+      }
+
+      const pointSelection = {
+        pathKey: selectedPathKey,
+        point: event.point.clone(),
+        faceNormal,
+      };
+
+      if (!bendP1) {
+        setBendP1(pointSelection);
+      } else if (!bendP2) {
+        if (selectedPathKey !== bendP1.pathKey) return; // crease stays on one part
+        setBendP2(pointSelection);
+      } else if (!bendSidePoint) {
+        if (selectedPathKey !== bendP1.pathKey) return; // side pick on same part
+        setBendSidePoint(event.point.clone());
+        setBendDeltaDeg(0);
+      } else {
+        // Selection complete: restart with a fresh first crease point.
+        resetBendPreview();
+        setBendP1(pointSelection);
+        setBendP2(null);
+        setBendSidePoint(null);
+        setBendDeltaDeg(0);
+      }
+      return;
+    }
+
     onSelectedNode?.(selectedNode);
     onSelectedPathKey?.(selectedPathKey);
   }
@@ -308,8 +2244,45 @@ function Model({
 
   return (
     <>
-      <primitive object={scene} onPointerDown={handlePointerDown} />
-      {handleConfig?.kind === "axial" ? (
+      <primitive
+        object={scene}
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerOut={handlePointerOut}
+      />
+
+      {roleBadges.map((badge) => (
+        <RoleBadge
+          key={`${badge.role}:${badge.pathKey}`}
+          anchorPosition={badge.anchorPosition}
+          position={badge.position}
+          role={badge.role}
+        />
+      ))}
+
+      {confidenceEditor && confidenceEditorSummary ? (
+        <ConfidenceEditorWidget
+          summary={confidenceEditorSummary}
+          editor={confidenceEditor}
+        />
+      ) : null}
+
+      {uncertaintyArrows.map((arrow) => (
+        <UncertaintyArrow
+          key={`${arrow.pathKey}:${arrow.axis}:${arrow.direction}`}
+          start={arrow.start}
+          end={arrow.end}
+          color={arrow.color}
+          label={arrow.label}
+        />
+      ))}
+
+      {visualConfidenceAnnotations.length > 0 || confidenceEditor ? (
+        <UncertaintyLegendOverlay />
+      ) : null}
+
+      {handleConfig?.kind === "axial" ||
+      handleConfig?.kind === "heightStretch" ? (
         <SizingHandle
           baseWorld={handleConfig.baseWorld}
           axisWorld={handleConfig.axisWorld}
@@ -322,6 +2295,7 @@ function Model({
           onDragStateChange={handleDragStateChange}
         />
       ) : null}
+
       {handleConfig?.kind === "angle" ? (
         <AngleHandle
           pivotWorld={handleConfig.pivotWorld}
@@ -333,6 +2307,293 @@ function Model({
           onDragStateChange={handleDragStateChange}
         />
       ) : null}
+
+      {/* Angle tool: arc + θ label + drag handle between two selected parts */}
+      {activeTool === "angle" && angleOverlayConfig ? (
+        <AngleArcOverlay
+          pivot={angleOverlayConfig.pivot}
+          line1Dir={angleOverlayConfig.line1Dir}
+          normalAxis={angleOverlayConfig.normalAxis}
+          angleDeg={angleArcDeg}
+          radius={angleOverlayConfig.radius}
+          onDrag={setAngleArcDeg}
+        />
+      ) : null}
+
+      {/* Angle tool: hover ghost marker — where a click would snap */}
+      {activeTool === "angle" && !angleVertex && angleHoverVertex ? (
+        <Html
+          position={[
+            angleHoverVertex.x,
+            angleHoverVertex.y,
+            angleHoverVertex.z,
+          ]}
+          center
+          occlude={false}
+        >
+          <div
+            style={{
+              width: 16,
+              height: 16,
+              borderRadius: "50%",
+              background: "rgba(245,158,11,0.25)",
+              border: "2px dashed #f59e0b",
+              pointerEvents: "none",
+              userSelect: "none",
+            }}
+          />
+        </Html>
+      ) : null}
+
+      {/* Angle tool: pivot vertex marker */}
+      {activeTool === "angle" && angleVertex ? (
+        <Html
+          position={[
+            angleVertex.point.x,
+            angleVertex.point.y,
+            angleVertex.point.z,
+          ]}
+          center
+          occlude={false}
+        >
+          <div
+            style={{
+              width: 14,
+              height: 14,
+              borderRadius: "50%",
+              background: "#f59e0b",
+              border: "2.5px solid white",
+              boxShadow: "0 2px 8px rgba(245,158,11,0.6)",
+              pointerEvents: "none",
+              userSelect: "none",
+            }}
+          />
+        </Html>
+      ) : null}
+
+      {/* Angle tool: selection markers showing which parts are chosen */}
+      {activeTool === "angle" &&
+        [
+          { pathKey: angleFace1?.pathKey ?? null, label: "1", color: "#64748b" },
+          { pathKey: angleFace2?.pathKey ?? null, label: "2", color: "#2b6cff" },
+        ].map(({ pathKey, label, color }) => {
+          if (!pathKey) return null;
+          const summary = objectSummaries.find((s) => s.pathKey === pathKey);
+          if (!summary) return null;
+          const c = summary.aabbCenterWorld;
+          const halfY = summary.aabbSizeWorld[1] / 2;
+          const pos: [number, number, number] = [c[0], c[1] + halfY + 0.03, c[2]];
+          return (
+            <Html
+              key={pathKey}
+              position={pos}
+              center
+              occlude={false}
+            >
+              <div
+                style={{
+                  width: 20,
+                  height: 20,
+                  borderRadius: "50%",
+                  background: color,
+                  border: "2px solid white",
+                  boxShadow: `0 2px 8px ${color}88`,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  fontFamily: "Arial, sans-serif",
+                  fontSize: 11,
+                  fontWeight: 800,
+                  color: "white",
+                  pointerEvents: "none",
+                  userSelect: "none",
+                }}
+              >
+                {label}
+              </div>
+            </Html>
+          );
+        })}
+
+      {/* Bend tool: crease line + endpoint/side markers + Δ dial */}
+      {activeTool === "bend" && bendP1 ? (
+        <>
+          {[bendP1.point, bendP2?.point ?? null, bendSidePoint].map(
+            (point, index) => {
+              if (!point) return null;
+              const colors = ["#f59e0b", "#f59e0b", "#16a34a"];
+              return (
+                <Html
+                  key={`bend-marker-${index}`}
+                  position={[point.x, point.y, point.z]}
+                  center
+                  occlude={false}
+                >
+                  <div
+                    style={{
+                      width: 12,
+                      height: 12,
+                      borderRadius: "50%",
+                      background: colors[index],
+                      border: "2px solid white",
+                      boxShadow: `0 2px 8px ${colors[index]}99`,
+                      pointerEvents: "none",
+                      userSelect: "none",
+                    }}
+                  />
+                </Html>
+              );
+            },
+          )}
+
+          {bendP2 ? (
+            <primitive
+              object={
+                new THREE.Line(
+                  new THREE.BufferGeometry().setFromPoints([
+                    bendP1.point,
+                    bendP2.point,
+                  ]),
+                  new THREE.LineBasicMaterial({ color: "#f59e0b" }),
+                )
+              }
+            />
+          ) : null}
+
+          {bendConfig?.sideChosen && bendP2 ? (
+            <AngleHandle
+              pivotWorld={bendP1.point
+                .clone()
+                .add(bendP2.point)
+                .multiplyScalar(0.5)}
+              value={bendDeltaDeg}
+              label={`Δ ${bendDeltaDeg >= 0 ? "+" : ""}${bendDeltaDeg.toFixed(1)}°`}
+              onChange={(value) =>
+                setBendDeltaDeg(Math.max(-179, Math.min(179, value)))
+              }
+              onDragStateChange={handleDragStateChange}
+            />
+          ) : null}
+        </>
+      ) : null}
+
+      {/* Bend tool: step-by-step prompt */}
+      {activeTool === "bend" ? (
+        <Html fullscreen style={{ pointerEvents: "none" }}>
+          <div
+            style={{
+              position: "absolute",
+              top: 14,
+              left: "50%",
+              transform: "translateX(-50%)",
+              background: "rgba(255,255,255,0.93)",
+              padding: "5px 14px",
+              borderRadius: 8,
+              fontSize: 12,
+              fontFamily: "Arial, sans-serif",
+              color: "#172033",
+              fontWeight: 500,
+              border: "1px solid rgba(245,158,11,0.45)",
+              boxShadow: "0 4px 14px rgba(15,23,42,0.12)",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {!bendP1
+              ? "Step 1/3 — Click the part where the crease line starts"
+              : !bendP2
+                ? "Step 2/3 — Click the same part where the crease line ends"
+                : !bendSidePoint
+                  ? "Step 3/3 — Click the side of the part that should bend"
+                  : "Drag the dial or edit Δ in the panel, then Save mark"}
+          </div>
+        </Html>
+      ) : null}
+
+      {/* Angle tool: step-by-step prompt */}
+      {activeTool === "angle" ? (
+        <Html fullscreen style={{ pointerEvents: "none" }}>
+          <div
+            style={{
+              position: "absolute",
+              top: 14,
+              left: "50%",
+              transform: "translateX(-50%)",
+              background: "rgba(255,255,255,0.93)",
+              padding: "5px 14px",
+              borderRadius: 8,
+              fontSize: 12,
+              fontFamily: "Arial, sans-serif",
+              color: "#172033",
+              fontWeight: 500,
+              border: "1px solid rgba(43,108,255,0.3)",
+              boxShadow: "0 4px 14px rgba(15,23,42,0.12)",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {!angleVertex
+              ? "Step 1 — Click a corner where the angle changes (on any part)"
+              : !angleFace2
+                ? "Step 2 — Click another part to rotate it, or the same part again to bend it"
+                : "Drag the blue handle or edit θ in the panel, then Save mark"}
+          </div>
+        </Html>
+      ) : null}
+
+      {/* Mode chip: states the current interpretation in plain language and
+          offers a one-click switch that keeps the first click. */}
+      {(activeTool === "angle" && angleVertex) ||
+      (activeTool === "bend" && bendP1) ? (
+        <Html fullscreen style={{ pointerEvents: "none" }}>
+          <div
+            style={{
+              position: "absolute",
+              top: 48,
+              left: "50%",
+              transform: "translateX(-50%)",
+              display: "flex",
+              gap: 10,
+              alignItems: "center",
+              background: "rgba(23,32,51,0.88)",
+              color: "white",
+              padding: "4px 12px",
+              borderRadius: 8,
+              fontSize: 11,
+              fontFamily: "Arial, sans-serif",
+              whiteSpace: "nowrap",
+              pointerEvents: "auto",
+              boxShadow: "0 4px 14px rgba(15,23,42,0.25)",
+            }}
+          >
+            <span>
+              {activeTool === "angle"
+                ? angleFace2
+                  ? "Adjusting the angle between two parts"
+                  : "Pivot set — pick what moves"
+                : "Bending within one part"}
+            </span>
+            <button
+              type="button"
+              onClick={
+                activeTool === "angle" ? switchToBendMode : switchToRotateMode
+              }
+              style={{
+                background: "none",
+                border: "none",
+                padding: 0,
+                color: "#8ab4ff",
+                fontSize: 11,
+                fontWeight: 700,
+                textDecoration: "underline",
+                cursor: "pointer",
+              }}
+            >
+              {activeTool === "angle"
+                ? "Bend one part instead"
+                : "Rotate against another part instead"}
+            </button>
+          </div>
+        </Html>
+      ) : null}
     </>
   );
 }
@@ -343,17 +2604,37 @@ export default function FuzzyCADGeometryViewer({
   highlightedPathKey,
   selectedPathKeys,
   activeTool = "select",
+  confidenceAnnotations,
+  confidenceEditor,
   activePathKeys,
   manipulationValue,
+  rolePreviewPlan,
+  confirmedHeightPlan,
+  enableManipulationHandles = true,
   onMeshGraph,
   onObjectSummaries,
   onSelectedNode,
   onSelectedPathKey,
   onObjectLassoSelection,
   onManipulationChange,
+  angleTargetDeg,
+  angleMateEdges,
+  angleResetNonce,
+  onAngleSelection,
+  onAngleModeSwitch,
+  bendDeltaDeg,
+  bendProfile,
+  onBendSelection,
 }: FuzzyCADGeometryViewerProps) {
   const [lassoPolygon, setLassoPolygon] = useState<ScreenPoint[] | null>(null);
   const [manipulationDragging, setManipulationDragging] = useState(false);
+
+  function clearSelection() {
+    onSelectedNode?.(null);
+    onSelectedPathKey?.(null);
+    onObjectLassoSelection?.([]);
+    setLassoPolygon(null);
+  }
 
   return (
     <div className={styles.root}>
@@ -365,24 +2646,39 @@ export default function FuzzyCADGeometryViewer({
         <>
           <Canvas
             camera={{ position: [2.5, 2.5, 2.5], fov: 45 }}
-            shadows
             gl={{ antialias: true }}
+            onPointerMissed={(event) => {
+              if (activeTool !== "select") {
+                return;
+              }
+
+              if (event.button !== 0) {
+                return;
+              }
+
+              clearSelection();
+            }}
           >
             <ambientLight intensity={0.8} />
-            <directionalLight position={[5, 6, 5]} intensity={1.2} castShadow />
+            <directionalLight position={[5, 6, 5]} intensity={1.2} />
             <gridHelper args={[2, 20]} />
             <axesHelper args={[0.25]} />
 
             <Suspense fallback={null}>
-              <Bounds fit clip observe margin={1.2}>
+              <Bounds fit clip margin={1.2}>
                 <Model
                   url={gltfUrl}
                   placements={placements}
                   highlightedPathKey={highlightedPathKey}
                   selectedPathKeys={selectedPathKeys}
                   activeTool={activeTool}
+                  confidenceAnnotations={confidenceAnnotations}
+                  confidenceEditor={confidenceEditor}
                   activePathKeys={activePathKeys}
                   manipulationValue={manipulationValue}
+                  rolePreviewPlan={rolePreviewPlan}
+                  confirmedHeightPlan={confirmedHeightPlan}
+                  enableManipulationHandles={enableManipulationHandles}
                   lassoPolygon={lassoPolygon}
                   onMeshGraph={onMeshGraph}
                   onObjectSummaries={onObjectSummaries}
@@ -391,6 +2687,14 @@ export default function FuzzyCADGeometryViewer({
                   onObjectLassoSelection={onObjectLassoSelection}
                   onManipulationChange={onManipulationChange}
                   onManipulationDragStateChange={setManipulationDragging}
+                  angleTargetDeg={angleTargetDeg}
+                  angleMateEdges={angleMateEdges}
+                  angleResetNonce={angleResetNonce}
+                  onAngleSelection={onAngleSelection}
+                  onAngleModeSwitch={onAngleModeSwitch}
+                  bendDeltaDeg={bendDeltaDeg}
+                  bendProfile={bendProfile}
+                  onBendSelection={onBendSelection}
                 />
               </Bounds>
             </Suspense>

@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getCachedAssembly } from "../../../lib/server/onshapeAssemblyCache";
+import { shouldForceRefresh } from "../../../lib/server/onshapeApi";
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -170,7 +172,10 @@ function getStringField(record: UnknownRecord, keys: string[]): string | null {
   return null;
 }
 
-function getBooleanField(record: UnknownRecord, keys: string[]): boolean | null {
+function getBooleanField(
+  record: UnknownRecord,
+  keys: string[],
+): boolean | null {
   for (const key of keys) {
     const value = record[key];
     if (typeof value === "boolean") {
@@ -223,7 +228,9 @@ function looksAssemblyLike(record: UnknownRecord): boolean {
   );
 }
 
-function findAssemblyBlocks(root: unknown): { path: string; record: UnknownRecord }[] {
+function findAssemblyBlocks(
+  root: unknown,
+): { path: string; record: UnknownRecord }[] {
   const results: { path: string; record: UnknownRecord }[] = [];
   const visited = new Set<unknown>();
 
@@ -259,7 +266,9 @@ function findAssemblyBlocks(root: unknown): { path: string; record: UnknownRecor
   return results;
 }
 
-function buildAssemblyBlocks(blocks: { path: string; record: UnknownRecord }[]): AssemblyBlock[] {
+function buildAssemblyBlocks(
+  blocks: { path: string; record: UnknownRecord }[],
+): AssemblyBlock[] {
   return blocks.map((block) => ({
     contextPath: block.path,
     keys: Object.keys(block.record),
@@ -272,13 +281,15 @@ function buildAssemblyBlocks(blocks: { path: string; record: UnknownRecord }[]):
   }));
 }
 
-function buildOccurrences(blocks: { path: string; record: UnknownRecord }[]): OccurrenceNode[] {
+function buildOccurrences(
+  blocks: { path: string; record: UnknownRecord }[],
+): OccurrenceNode[] {
   const occurrences: OccurrenceNode[] = [];
 
   for (const block of blocks) {
     const blockOccurrences = asArray(block.record.occurrences);
 
-    blockOccurrences.forEach((item, index) => {
+    blockOccurrences.forEach((item) => {
       const record = isRecord(item) ? item : {};
       const path = normalizeOccurrencePath(record.path);
       const transform = asNumberArray(record.transform);
@@ -301,7 +312,9 @@ function buildOccurrences(blocks: { path: string; record: UnknownRecord }[]): Oc
   return occurrences;
 }
 
-function buildInstances(blocks: { path: string; record: UnknownRecord }[]): InstanceNode[] {
+function buildInstances(
+  blocks: { path: string; record: UnknownRecord }[],
+): InstanceNode[] {
   const instances: InstanceNode[] = [];
 
   for (const block of blocks) {
@@ -433,7 +446,9 @@ function looksLikeMateOrRelation(feature: UnknownRecord): boolean {
   );
 }
 
-function buildFeatures(blocks: { path: string; record: UnknownRecord }[]): FeatureNode[] {
+function buildFeatures(
+  blocks: { path: string; record: UnknownRecord }[],
+): FeatureNode[] {
   const features: FeatureNode[] = [];
 
   for (const block of blocks) {
@@ -467,6 +482,12 @@ type MateMember = {
   occurrencePath: string[];
   occurrencePathKey: string;
   connectorOrigin: number[] | null;
+  /**
+   * Mate connector rotation axis (Onshape's z-axis convention: REVOLUTE and
+   * CYLINDRICAL mates rotate about this axis), in Onshape assembly space.
+   * Null for mate types where this doesn't apply / wasn't present.
+   */
+  connectorAxis: number[] | null;
 };
 type MateFeatureNode = {
   featureId: string | null;
@@ -481,6 +502,9 @@ type MateEdge = {
   featureId: string | null;
   connectorA: number[] | null;
   connectorB: number[] | null;
+  /** Rotation axis at each side's mate connector (see MateMember.connectorAxis). */
+  connectorAxisA: number[] | null;
+  connectorAxisB: number[] | null;
 };
 
 function asStringArray(value: unknown): string[] {
@@ -489,12 +513,15 @@ function asStringArray(value: unknown): string[] {
     : [];
 }
 
-function getOrigin(cs: unknown): number[] | null {
+function getVec3Field(cs: unknown, keys: string[]): number[] | null {
   if (!isRecord(cs)) return null;
-  const origin = cs.origin;
-  return Array.isArray(origin) && origin.every((n) => typeof n === "number")
-    ? (origin as number[])
-    : null;
+  for (const key of keys) {
+    const value = cs[key];
+    if (Array.isArray(value) && value.every((n) => typeof n === "number")) {
+      return value as number[];
+    }
+  }
+  return null;
 }
 
 function extractMateMembers(featureData: UnknownRecord): MateMember[] {
@@ -502,21 +529,26 @@ function extractMateMembers(featureData: UnknownRecord): MateMember[] {
     .map((entity) => {
       if (!isRecord(entity)) return null;
       const path = asStringArray(
-        entity.matedOccurrence ?? entity.occurrence ?? entity.matedOccurrencePath
+        entity.matedOccurrence ??
+          entity.occurrence ??
+          entity.matedOccurrencePath,
       );
       if (path.length === 0) return null;
-      const cs = entity.matedCS ?? entity.coordSystem ?? entity.matedCoordinateSystem;
+      const cs =
+        entity.matedCS ?? entity.coordSystem ?? entity.matedCoordinateSystem;
       return {
         occurrencePath: path,
         occurrencePathKey: path.join("/"),
-        connectorOrigin: getOrigin(cs),
+        connectorOrigin: getVec3Field(cs, ["origin"]),
+        // Onshape mate connectors rotate about their local z-axis.
+        connectorAxis: getVec3Field(cs, ["zAxis"]),
       };
     })
     .filter((m): m is MateMember => m !== null);
 }
 
 function buildMateFeatures(
-  blocks: { path: string; record: UnknownRecord }[]
+  blocks: { path: string; record: UnknownRecord }[],
 ): MateFeatureNode[] {
   const result: MateFeatureNode[] = [];
   for (const block of blocks) {
@@ -555,6 +587,8 @@ function buildMateEdges(mates: MateFeatureNode[]): MateEdge[] {
           featureId: mate.featureId,
           connectorA: a.connectorOrigin,
           connectorB: b.connectorOrigin,
+          connectorAxisA: a.connectorAxis,
+          connectorAxisB: b.connectorAxis,
         });
       }
     }
@@ -564,7 +598,7 @@ function buildMateEdges(mates: MateFeatureNode[]): MateEdge[] {
 
 function buildPathMatches(
   occurrences: OccurrenceNode[],
-  instances: InstanceNode[]
+  instances: InstanceNode[],
 ): PathMatch[] {
   const instanceById = new Map<string, InstanceNode>();
 
@@ -574,7 +608,9 @@ function buildPathMatches(
 
   return occurrences.map((occurrence) => {
     const likelyInstanceId = occurrence.likelyInstanceId;
-    const matched = likelyInstanceId ? instanceById.get(likelyInstanceId) : null;
+    const matched = likelyInstanceId
+      ? instanceById.get(likelyInstanceId)
+      : null;
 
     return {
       occurrencePathKey: occurrence.pathKey,
@@ -593,7 +629,7 @@ function buildPathMatches(
 }
 
 function buildCandidateOperations(
-  sameSourceGroups: SameSourceGroup[]
+  sameSourceGroups: SameSourceGroup[],
 ): FuzzyCADRelationshipGraph["candidateOperations"] {
   return sameSourceGroups.slice(0, 10).map((group, index) => ({
     id: `candidate-shared-range-${index}`,
@@ -623,7 +659,7 @@ function buildWarnings(
   instances: InstanceNode[],
   pathMatches: PathMatch[],
   sameSourceGroups: SameSourceGroup[],
-  features: FeatureNode[]
+  features: FeatureNode[],
 ) {
   const warnings: string[] = [];
 
@@ -633,44 +669,46 @@ function buildWarnings(
 
   if (instances.length === 0) {
     warnings.push(
-      "No instances found anywhere in the assembly JSON. The parser may need to inspect additional Onshape fields."
+      "No instances found anywhere in the assembly JSON. The parser may need to inspect additional Onshape fields.",
     );
   }
 
   const unmatchedOccurrences = pathMatches.filter(
-    (match) => !match.matchedInstance
+    (match) => !match.matchedInstance,
   ).length;
 
   if (unmatchedOccurrences > 0) {
     warnings.push(
-      `${unmatchedOccurrences} occurrences could not be matched to parsed instance IDs. This is expected for nested assemblies until we fully decode occurrence paths.`
+      `${unmatchedOccurrences} occurrences could not be matched to parsed instance IDs. This is expected for nested assemblies until we fully decode occurrence paths.`,
     );
   }
 
   const unknownSourceCount = instances.filter(
-    (instance) => sourceKeyForInstance(instance) === "unknownDocument:unknownElement:unknownPart"
+    (instance) =>
+      sourceKeyForInstance(instance) ===
+      "unknownDocument:unknownElement:unknownPart",
   ).length;
 
   if (unknownSourceCount > 0) {
     warnings.push(
-      `${unknownSourceCount} instances do not expose source document / element / part IDs in the expected fields. Inspect their rawKeys/raw fields.`
+      `${unknownSourceCount} instances do not expose source document / element / part IDs in the expected fields. Inspect their rawKeys/raw fields.`,
     );
   }
 
   if (sameSourceGroups.length === 0) {
     warnings.push(
-      "No same-source repeated groups were detected yet. This may mean source fields are named differently or repeated parts are inside nested occurrence paths."
+      "No same-source repeated groups were detected yet. This may mean source fields are named differently or repeated parts are inside nested occurrence paths.",
     );
   }
 
   if (features.length === 0) {
     warnings.push(
-      "No assembly features were found in parsed assembly blocks. Mates may be encoded elsewhere or require a separate API endpoint."
+      "No assembly features were found in parsed assembly blocks. Mates may be encoded elsewhere or require a separate API endpoint.",
     );
   }
 
   warnings.push(
-    "This is still a read-only FuzzyCAD graph. It does not modify Onshape geometry."
+    "This is still a read-only FuzzyCAD graph. It does not modify Onshape geometry.",
   );
 
   return warnings;
@@ -683,6 +721,7 @@ export async function GET(req: NextRequest) {
   const documentId = searchParams.get("documentId");
   const workspaceId = searchParams.get("workspaceId");
   const assemblyElementId = searchParams.get("assemblyElementId");
+  const force = shouldForceRefresh(searchParams);
 
   const accessToken = req.cookies.get("onshape_access_token")?.value;
 
@@ -691,7 +730,7 @@ export async function GET(req: NextRequest) {
       {
         error: "Missing documentId, workspaceId, or assemblyElementId",
       },
-      { status: 400 }
+      { status: 400 },
     );
   }
 
@@ -701,38 +740,33 @@ export async function GET(req: NextRequest) {
         error: "Not connected to Onshape yet",
         action: "Click Connect Onshape first",
       },
-      { status: 401 }
+      { status: 401 },
     );
   }
 
-  const endpoint = `${server}/api/assemblies/d/${documentId}/w/${workspaceId}/e/${assemblyElementId}`;
-
-  const onshapeRes = await fetch(endpoint, {
-    method: "GET",
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      Accept: "application/json",
-    },
+  const assemblyResult = await getCachedAssembly({
+    server,
+    documentId,
+    workspaceId,
+    assemblyElementId,
+    accessToken,
+    route: "/api/fuzzycad/relationship-graph",
+    force,
   });
 
-  const text = await onshapeRes.text();
+  const endpoint = assemblyResult.endpoint;
+  const data = assemblyResult.data;
 
-  let data: unknown;
-  try {
-    data = JSON.parse(text);
-  } catch {
-    data = text;
-  }
-
-  if (!onshapeRes.ok) {
+  if (!assemblyResult.ok) {
     return NextResponse.json(
       {
         endpoint,
-        status: onshapeRes.status,
+        status: assemblyResult.status,
         ok: false,
+        cache: assemblyResult.cache,
         data,
       },
-      { status: onshapeRes.status }
+      { status: assemblyResult.status },
     );
   }
 
@@ -785,7 +819,7 @@ export async function GET(req: NextRequest) {
       instances,
       pathMatches,
       sameSourceGroups,
-      features
+      features,
     ),
   };
 
@@ -793,6 +827,7 @@ export async function GET(req: NextRequest) {
     endpoint,
     status: 200,
     ok: true,
+    cache: assemblyResult.cache,
     graph,
   });
 }
