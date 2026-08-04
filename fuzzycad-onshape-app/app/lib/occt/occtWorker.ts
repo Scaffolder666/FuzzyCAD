@@ -10,28 +10,93 @@
 
 type OcctWorkerRequest =
   | { id: number; type: "init" }
-  | { id: number; type: "selfTest" };
+  | { id: number; type: "selfTest" }
+  | { id: number; type: "stepRoundTripTest" }
+  | { id: number; type: "makeTestStepBytes" }
+  | { id: number; type: "loadStep"; buffer: ArrayBuffer };
+
+type TessellatedShape = {
+  positions: Float32Array;
+  indices: Uint32Array;
+};
 
 type OcctWorkerResponse =
   | { id: number; type: "ready" }
   | { id: number; type: "selfTestResult"; faceCount: number }
+  | {
+      id: number;
+      type: "stepRoundTripTestResult";
+      stepByteLength: number;
+      vertexCount: number;
+      triangleCount: number;
+    }
+  | { id: number; type: "loadStepResult"; mesh: TessellatedShape }
+  | { id: number; type: "testStepBytesResult"; buffer: ArrayBuffer }
   | { id: number; type: "error"; message: string };
 
+// Minimal structural typing for the parts of the embind API this file
+// actually calls. opencascade.js ships no .d.ts; overload suffixes (_1,
+// _2, ...) were confirmed against the installed package by grepping
+// exported symbol strings out of opencascade.wasm.wasm.
+type TopoDS_Shape = { IsNull: () => boolean };
 type OpenCascadeInstance = {
+  FS: {
+    writeFile: (path: string, data: Uint8Array) => void;
+    readFile: (path: string) => Uint8Array;
+    readdir: (path: string) => string[];
+  };
   BRepPrimAPI_MakeBox_1: new (dx: number, dy: number, dz: number) => {
-    Shape: () => unknown;
+    Shape: () => TopoDS_Shape;
     delete: () => void;
   };
   TopExp_Explorer_2: new (
-    shape: unknown,
+    shape: TopoDS_Shape,
     toFind: number,
     toAvoid: number,
   ) => {
     More: () => boolean;
     Next: () => void;
+    Current: () => TopoDS_Shape;
     delete: () => void;
   };
   TopAbs_ShapeEnum: { TopAbs_FACE: number; TopAbs_SHAPE: number };
+  TopAbs_Orientation: { TopAbs_FORWARD: number };
+  BRepMesh_IncrementalMesh_2: new (
+    shape: TopoDS_Shape,
+    linearDeflection: number,
+    isRelative: boolean,
+    angularDeflection: number,
+    isParallel: boolean,
+  ) => { delete: () => void };
+  TopLoc_Location_1: new () => { Transformation: () => unknown; delete: () => void };
+  BRep_Tool: {
+    Triangulation: (
+      face: TopoDS_Shape,
+      location: { Transformation: () => unknown },
+    ) => {
+      IsNull: () => boolean;
+      get: () => {
+        NbNodes: () => number;
+        NbTriangles: () => number;
+        Node: (index: number) => { Transformed: (t: unknown) => { X: () => number; Y: () => number; Z: () => number } };
+        Triangle: (index: number) => { Value: (n: number) => number };
+      };
+    } | null;
+  };
+  STEPControl_Reader_1: new () => {
+    ReadFile: (path: string) => number;
+    TransferRoots: () => number;
+    OneShape: () => TopoDS_Shape;
+    delete: () => void;
+  };
+  STEPControl_Writer_1: new () => {
+    Transfer: (shape: TopoDS_Shape, mode: number, compgraph: boolean) => number;
+    Write: (path: string) => number;
+    delete: () => void;
+  };
+  IFSelect_ReturnStatus: { IFSelect_RetDone: number };
+  STEPControl_StepModelType: { STEPControl_AsIs: number };
+  TopoDS: { Face_1: (shape: TopoDS_Shape) => TopoDS_Shape };
 };
 
 let occtPromise: Promise<OpenCascadeInstance> | null = null;
@@ -77,6 +142,107 @@ function runSelfTest(oc: OpenCascadeInstance): number {
   return faceCount;
 }
 
+/**
+ * Walks every face of a shape, tessellates it (BRepMesh_IncrementalMesh
+ * mutates the shape in place, attaching a Poly_Triangulation per face),
+ * and merges all faces' triangles into one position/index buffer. Vertex
+ * normals are left for three.js's computeVertexNormals() rather than
+ * pulled from OCCT — good enough for display, and avoids depending on
+ * StdPrs_ToolTriangulatedShape (uncertain API surface in this OCCT
+ * version).
+ */
+function tessellateShape(oc: OpenCascadeInstance, shape: TopoDS_Shape): TessellatedShape {
+  const mesh = new oc.BRepMesh_IncrementalMesh_2(shape, 0.1, false, 0.5, false);
+
+  const positions: number[] = [];
+  const indices: number[] = [];
+
+  const explorer = new oc.TopExp_Explorer_2(
+    shape,
+    oc.TopAbs_ShapeEnum.TopAbs_FACE,
+    oc.TopAbs_ShapeEnum.TopAbs_SHAPE,
+  );
+
+  while (explorer.More()) {
+    const face = oc.TopoDS.Face_1(explorer.Current());
+    const location = new oc.TopLoc_Location_1();
+    const triangulationHandle = oc.BRep_Tool.Triangulation(face, location);
+    const triangulation = triangulationHandle?.get?.() ?? null;
+
+    if (triangulation) {
+      const transform = location.Transformation();
+      const nbNodes = triangulation.NbNodes();
+      const vertexOffset = positions.length / 3;
+
+      for (let i = 1; i <= nbNodes; i++) {
+        const p = triangulation.Node(i).Transformed(transform);
+        positions.push(p.X(), p.Y(), p.Z());
+      }
+
+      const nbTriangles = triangulation.NbTriangles();
+      for (let i = 1; i <= nbTriangles; i++) {
+        const triangle = triangulation.Triangle(i);
+        const n1 = triangle.Value(1) - 1 + vertexOffset;
+        const n2 = triangle.Value(2) - 1 + vertexOffset;
+        const n3 = triangle.Value(3) - 1 + vertexOffset;
+        indices.push(n1, n2, n3);
+      }
+    }
+
+    location.delete();
+    explorer.Next();
+  }
+
+  explorer.delete();
+  mesh.delete();
+
+  return {
+    positions: Float32Array.from(positions),
+    indices: Uint32Array.from(indices),
+  };
+}
+
+function shapeToStepBytes(oc: OpenCascadeInstance, shape: TopoDS_Shape): Uint8Array {
+  const writer = new oc.STEPControl_Writer_1();
+  writer.Transfer(shape, oc.STEPControl_StepModelType.STEPControl_AsIs, true);
+  const path = "test.step";
+  const writeStatus = writer.Write(path);
+  writer.delete();
+  try {
+    return oc.FS.readFile(path);
+  } catch (error) {
+    const dirListing = oc.FS.readdir("/");
+    throw new Error(
+      `readFile(${path}) failed after Write() returned ${writeStatus}. Root dir: [${dirListing.join(", ")}]. Original: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+}
+
+function stepBytesToShape(oc: OpenCascadeInstance, buffer: ArrayBuffer): TopoDS_Shape {
+  const path = "input.step";
+  oc.FS.writeFile(path, new Uint8Array(buffer));
+
+  const reader = new oc.STEPControl_Reader_1();
+  const readStatus = reader.ReadFile(path);
+
+  if (readStatus !== oc.IFSelect_ReturnStatus.IFSelect_RetDone) {
+    reader.delete();
+    throw new Error(
+      `STEPControl_Reader.ReadFile failed. status=${JSON.stringify(readStatus)} (typeof ${typeof readStatus}), expected IFSelect_RetDone=${JSON.stringify(oc.IFSelect_ReturnStatus.IFSelect_RetDone)}`,
+    );
+  }
+
+  reader.TransferRoots();
+  const shape = reader.OneShape();
+  reader.delete();
+
+  if (shape.IsNull()) {
+    throw new Error("STEP transfer produced a null shape");
+  }
+
+  return shape;
+}
+
 self.onmessage = async (event: MessageEvent<OcctWorkerRequest>) => {
   const { id, type } = event.data;
 
@@ -95,6 +261,47 @@ self.onmessage = async (event: MessageEvent<OcctWorkerRequest>) => {
       self.postMessage(response);
       return;
     }
+
+    if (type === "stepRoundTripTest") {
+      const oc = await loadOcct();
+      const box = new oc.BRepPrimAPI_MakeBox_1(10, 10, 10);
+      const boxShape = box.Shape();
+      const stepBytes = shapeToStepBytes(oc, boxShape);
+      box.delete();
+
+      const roundTripShape = stepBytesToShape(oc, stepBytes.buffer as ArrayBuffer);
+      const { positions, indices } = tessellateShape(oc, roundTripShape);
+
+      const response: OcctWorkerResponse = {
+        id,
+        type: "stepRoundTripTestResult",
+        stepByteLength: stepBytes.byteLength,
+        vertexCount: positions.length / 3,
+        triangleCount: indices.length / 3,
+      };
+      self.postMessage(response);
+      return;
+    }
+
+    if (type === "makeTestStepBytes") {
+      const oc = await loadOcct();
+      const box = new oc.BRepPrimAPI_MakeBox_1(10, 10, 10);
+      const stepBytes = shapeToStepBytes(oc, box.Shape());
+      box.delete();
+      const buffer = stepBytes.buffer.slice(stepBytes.byteOffset, stepBytes.byteOffset + stepBytes.byteLength) as ArrayBuffer;
+      const response: OcctWorkerResponse = { id, type: "testStepBytesResult", buffer };
+      self.postMessage(response, [buffer]);
+      return;
+    }
+
+    if (type === "loadStep") {
+      const oc = await loadOcct();
+      const shape = stepBytesToShape(oc, event.data.buffer);
+      const mesh = tessellateShape(oc, shape);
+      const response: OcctWorkerResponse = { id, type: "loadStepResult", mesh };
+      self.postMessage(response, [mesh.positions.buffer, mesh.indices.buffer]);
+      return;
+    }
   } catch (error) {
     const response: OcctWorkerResponse = {
       id,
@@ -105,4 +312,4 @@ self.onmessage = async (event: MessageEvent<OcctWorkerRequest>) => {
   }
 };
 
-export type { OcctWorkerRequest, OcctWorkerResponse };
+export type { OcctWorkerRequest, OcctWorkerResponse, TessellatedShape };

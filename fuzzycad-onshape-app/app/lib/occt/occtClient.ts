@@ -54,6 +54,43 @@ class OcctClient {
     return response.faceCount;
   }
 
+  async stepRoundTripTest(): Promise<{
+    stepByteLength: number;
+    vertexCount: number;
+    triangleCount: number;
+  }> {
+    await this.ready();
+    const response = await this.send({ type: "stepRoundTripTest" });
+    if (response.type !== "stepRoundTripTestResult") {
+      throw new Error(`Unexpected response type: ${response.type}`);
+    }
+    const { stepByteLength, vertexCount, triangleCount } = response;
+    return { stepByteLength, vertexCount, triangleCount };
+  }
+
+  /** Dev-only helper: makes a test box and returns it as STEP bytes, for exercising loadStep() without a real Onshape document. */
+  async makeTestStepBytes(): Promise<ArrayBuffer> {
+    await this.ready();
+    const response = await this.send({ type: "makeTestStepBytes" });
+    if (response.type !== "testStepBytesResult") {
+      throw new Error(`Unexpected response type: ${response.type}`);
+    }
+    return response.buffer;
+  }
+
+  async loadStep(buffer: ArrayBuffer): Promise<{ positions: Float32Array; indices: Uint32Array }> {
+    await this.ready();
+    const id = this.nextId++;
+    const response = await new Promise<OcctWorkerResponse>((resolve, reject) => {
+      this.pending.set(id, { resolve, reject });
+      this.worker.postMessage({ id, type: "loadStep", buffer } as OcctWorkerRequest, [buffer]);
+    });
+    if (response.type !== "loadStepResult") {
+      throw new Error(`Unexpected response type: ${response.type}`);
+    }
+    return response.mesh;
+  }
+
   dispose(): void {
     this.worker.terminate();
   }
