@@ -37,6 +37,7 @@ import {
   saveFuzzycadProject,
 } from "./lib/onshapeClient";
 import { computeRigidOccurrenceUpdates } from "./lib/operations/computeRigidOccurrenceUpdates";
+import { computeExternalGeometryDeltas } from "./lib/operations/resolveExternalGeometryDeltas";
 import type { OperationTool } from "./lib/operations/types";
 import OperationToolbar from "./components/OperationToolbar";
 import UncertaintyMarksPanel from "./components/UncertaintyMarksPanel";
@@ -61,6 +62,7 @@ import {
   computeAllFinalOccurrenceDeltas,
   findSizeAnnotationForPathKey,
   makeSizeAnnotationId,
+  mergeRigidDeltaMaps,
   BEND_CONTROL_POINT_COUNT,
   type BendAxisDirection,
   type DistanceMoveMode,
@@ -421,13 +423,17 @@ export default function FuzzyCADHome() {
     answerMoveQuestionMark,
   } = useUncertaintyDocument(currentUncertaintySource);
 
-  // Resolved Move/MoveQuestion(answered)/Rotate(custom-axis) marks — the
-  // ones computeAllFinalOccurrenceDeltas can turn into a real Onshape
-  // occurrence transform. Counted (not just checked non-empty) so the
-  // "Push N accepted changes" button can tell the reviewer what a click
-  // is about to do before it does it.
+  // Every resolved mark computeAllFinalOccurrenceDeltas (self-contained:
+  // Move/MoveQuestion/Rotate-custom) and computeExternalGeometryDeltas
+  // (needs live objectSummaries: Rotate-object/Distance) can turn into a
+  // real Onshape occurrence transform. Counted (not just checked
+  // non-empty) so the "Push N accepted changes" button can tell the
+  // reviewer what a click is about to do before it does it.
   const pushableChangeCount = useMemo(() => {
-    const deltas = computeAllFinalOccurrenceDeltas(uncertaintyDocumentWithCurrentSource);
+    const deltas = mergeRigidDeltaMaps([
+      computeAllFinalOccurrenceDeltas(uncertaintyDocumentWithCurrentSource),
+      computeExternalGeometryDeltas(uncertaintyDocumentWithCurrentSource, objectSummaries),
+    ]);
     const ids = new Set<string>();
 
     for (const delta of deltas.values()) {
@@ -437,7 +443,7 @@ export default function FuzzyCADHome() {
     }
 
     return ids.size;
-  }, [uncertaintyDocumentWithCurrentSource]);
+  }, [uncertaintyDocumentWithCurrentSource, objectSummaries]);
 
   const assemblyElements = useMemo(() => {
     const data = elementsResult?.data;
@@ -1739,7 +1745,10 @@ async function pushAcceptedChangesToOnshape() {
   setPushingAcceptedChanges(true);
 
   try {
-    const deltas = computeAllFinalOccurrenceDeltas(uncertaintyDocumentWithCurrentSource);
+    const deltas = mergeRigidDeltaMaps([
+      computeAllFinalOccurrenceDeltas(uncertaintyDocumentWithCurrentSource),
+      computeExternalGeometryDeltas(uncertaintyDocumentWithCurrentSource, objectSummaries),
+    ]);
 
     if (deltas.size === 0) {
       return;

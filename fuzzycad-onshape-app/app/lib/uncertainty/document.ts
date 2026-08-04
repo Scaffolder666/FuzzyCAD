@@ -1647,3 +1647,49 @@ export function computeAllFinalOccurrenceDeltas(
 
   return deltas;
 }
+
+/**
+ * Combines several ResolvedRigidDelta maps (e.g. computeAllFinalOccurrenceDeltas'
+ * self-contained pass and computeExternalGeometryDeltas' external-geometry
+ * pass in resolveExternalGeometryDeltas.ts) into one, keyed by pathKey —
+ * translations sum, rotations concatenate in map-array order, and source
+ * annotation ids union. Lets the two passes stay independent (one pure,
+ * one needing live objectSummaries) while still producing a single
+ * consistent transform per part.
+ */
+export function mergeRigidDeltaMaps(
+  maps: Map<string, ResolvedRigidDelta>[],
+): Map<string, ResolvedRigidDelta> {
+  const merged = new Map<string, ResolvedRigidDelta>();
+
+  for (const map of maps) {
+    for (const [pathKey, delta] of map) {
+      const existing = merged.get(pathKey);
+
+      if (!existing) {
+        merged.set(pathKey, {
+          pathKey,
+          translationWorld: [...delta.translationWorld],
+          rotations: [...delta.rotations],
+          sourceAnnotationIds: [...delta.sourceAnnotationIds],
+        });
+        continue;
+      }
+
+      existing.translationWorld = [
+        existing.translationWorld[0] + delta.translationWorld[0],
+        existing.translationWorld[1] + delta.translationWorld[1],
+        existing.translationWorld[2] + delta.translationWorld[2],
+      ];
+      existing.rotations.push(...delta.rotations);
+
+      for (const id of delta.sourceAnnotationIds) {
+        if (!existing.sourceAnnotationIds.includes(id)) {
+          existing.sourceAnnotationIds.push(id);
+        }
+      }
+    }
+  }
+
+  return merged;
+}
