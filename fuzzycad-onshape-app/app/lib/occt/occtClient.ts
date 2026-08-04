@@ -2,6 +2,8 @@
 
 import type { OcctWorkerRequest, OcctWorkerResponse } from "./occtWorker";
 
+type WithoutId<T> = T extends unknown ? Omit<T, "id"> : never;
+
 /**
  * Main-thread handle to the OCCT worker. One worker per browser tab is
  * shared across the app (see getOcctClient()) since spinning up the ~66MB
@@ -30,11 +32,14 @@ class OcctClient {
     };
   }
 
-  private send(request: Omit<OcctWorkerRequest, "id">): Promise<OcctWorkerResponse> {
+  private send(
+    request: WithoutId<OcctWorkerRequest>,
+    transfer: Transferable[] = [],
+  ): Promise<OcctWorkerResponse> {
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
-      this.worker.postMessage({ ...request, id } as OcctWorkerRequest);
+      this.worker.postMessage({ ...request, id } as OcctWorkerRequest, transfer);
     });
   }
 
@@ -80,15 +85,31 @@ class OcctClient {
 
   async loadStep(buffer: ArrayBuffer): Promise<{ positions: Float32Array; indices: Uint32Array }> {
     await this.ready();
-    const id = this.nextId++;
-    const response = await new Promise<OcctWorkerResponse>((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
-      this.worker.postMessage({ id, type: "loadStep", buffer } as OcctWorkerRequest, [buffer]);
-    });
+    const response = await this.send({ type: "loadStep", buffer }, [buffer]);
     if (response.type !== "loadStepResult") {
       throw new Error(`Unexpected response type: ${response.type}`);
     }
     return response.mesh;
+  }
+
+  /** One mesh per top-level solid in the STEP file, in encounter order — the order pathKey binding zips against Onshape's occurrence list. */
+  async loadStepSolids(buffer: ArrayBuffer): Promise<{ positions: Float32Array; indices: Uint32Array }[]> {
+    await this.ready();
+    const response = await this.send({ type: "loadStepSolids", buffer }, [buffer]);
+    if (response.type !== "loadStepSolidsResult") {
+      throw new Error(`Unexpected response type: ${response.type}`);
+    }
+    return response.meshes;
+  }
+
+  /** Dev-only helper: two boxes at different positions as one multi-solid STEP file, for exercising loadStepSolids() without a real Onshape document. */
+  async makeTestMultiSolidStepBytes(): Promise<ArrayBuffer> {
+    await this.ready();
+    const response = await this.send({ type: "makeTestMultiSolidStepBytes" });
+    if (response.type !== "testStepBytesResult") {
+      throw new Error(`Unexpected response type: ${response.type}`);
+    }
+    return response.buffer;
   }
 
   dispose(): void {

@@ -13,7 +13,9 @@ type OcctWorkerRequest =
   | { id: number; type: "selfTest" }
   | { id: number; type: "stepRoundTripTest" }
   | { id: number; type: "makeTestStepBytes" }
-  | { id: number; type: "loadStep"; buffer: ArrayBuffer };
+  | { id: number; type: "makeTestMultiSolidStepBytes" }
+  | { id: number; type: "loadStep"; buffer: ArrayBuffer }
+  | { id: number; type: "loadStepSolids"; buffer: ArrayBuffer };
 
 type TessellatedShape = {
   positions: Float32Array;
@@ -31,6 +33,7 @@ type OcctWorkerResponse =
       triangleCount: number;
     }
   | { id: number; type: "loadStepResult"; mesh: TessellatedShape }
+  | { id: number; type: "loadStepSolidsResult"; meshes: TessellatedShape[] }
   | { id: number; type: "testStepBytesResult"; buffer: ArrayBuffer }
   | { id: number; type: "error"; message: string };
 
@@ -49,6 +52,17 @@ type OpenCascadeInstance = {
     Shape: () => TopoDS_Shape;
     delete: () => void;
   };
+  BRepPrimAPI_MakeBox_2: new (corner: unknown, dx: number, dy: number, dz: number) => {
+    Shape: () => TopoDS_Shape;
+    delete: () => void;
+  };
+  gp_Pnt_3: new (x: number, y: number, z: number) => unknown;
+  BRep_Builder: new () => {
+    MakeCompound: (compound: TopoDS_Shape) => void;
+    Add: (compound: TopoDS_Shape, shape: TopoDS_Shape) => void;
+    delete: () => void;
+  };
+  TopoDS_Compound: new () => TopoDS_Shape;
   TopExp_Explorer_2: new (
     shape: TopoDS_Shape,
     toFind: number,
@@ -59,7 +73,7 @@ type OpenCascadeInstance = {
     Current: () => TopoDS_Shape;
     delete: () => void;
   };
-  TopAbs_ShapeEnum: { TopAbs_FACE: number; TopAbs_SHAPE: number };
+  TopAbs_ShapeEnum: { TopAbs_FACE: number; TopAbs_SHAPE: number; TopAbs_SOLID: number };
   TopAbs_Orientation: { TopAbs_FORWARD: number };
   BRepMesh_IncrementalMesh_2: new (
     shape: TopoDS_Shape,
@@ -202,6 +216,33 @@ function tessellateShape(oc: OpenCascadeInstance, shape: TopoDS_Shape): Tessella
   };
 }
 
+/**
+ * Splits a shape (typically the compound an assembly's STEP export
+ * produces) into its independent top-level solids, in encounter order.
+ * That order is later zipped against Onshape's occurrence list to bind
+ * each solid to a pathKey — the B-rep equivalent of placement.ts's
+ * positional fallback, used here as the primary mechanism rather than a
+ * fallback, since this OCCT build's XDE/XCAF bindings (the path to
+ * reading STEP PRODUCT names back out) are incomplete — see the
+ * "Establish pathKey binding" task notes.
+ */
+function explodeIntoSolids(oc: OpenCascadeInstance, shape: TopoDS_Shape): TopoDS_Shape[] {
+  const solids: TopoDS_Shape[] = [];
+  const explorer = new oc.TopExp_Explorer_2(
+    shape,
+    oc.TopAbs_ShapeEnum.TopAbs_SOLID,
+    oc.TopAbs_ShapeEnum.TopAbs_SHAPE,
+  );
+
+  while (explorer.More()) {
+    solids.push(explorer.Current());
+    explorer.Next();
+  }
+
+  explorer.delete();
+  return solids;
+}
+
 function shapeToStepBytes(oc: OpenCascadeInstance, shape: TopoDS_Shape): Uint8Array {
   const writer = new oc.STEPControl_Writer_1();
   writer.Transfer(shape, oc.STEPControl_StepModelType.STEPControl_AsIs, true);
@@ -300,6 +341,45 @@ self.onmessage = async (event: MessageEvent<OcctWorkerRequest>) => {
       const mesh = tessellateShape(oc, shape);
       const response: OcctWorkerResponse = { id, type: "loadStepResult", mesh };
       self.postMessage(response, [mesh.positions.buffer, mesh.indices.buffer]);
+      return;
+    }
+
+    if (type === "loadStepSolids") {
+      const oc = await loadOcct();
+      const shape = stepBytesToShape(oc, event.data.buffer);
+      const meshes = explodeIntoSolids(oc, shape).map((solid) => tessellateShape(oc, solid));
+      const response: OcctWorkerResponse = { id, type: "loadStepSolidsResult", meshes };
+      self.postMessage(
+        response,
+        meshes.flatMap((m) => [m.positions.buffer, m.indices.buffer]),
+      );
+      return;
+    }
+
+    if (type === "makeTestMultiSolidStepBytes") {
+      const oc = await loadOcct();
+
+      const boxA = new oc.BRepPrimAPI_MakeBox_1(10, 10, 10);
+      const boxB = new oc.BRepPrimAPI_MakeBox_2(new oc.gp_Pnt_3(30, 0, 0), 5, 5, 20);
+
+      const compound = new oc.TopoDS_Compound();
+      const builder = new oc.BRep_Builder();
+      builder.MakeCompound(compound);
+      builder.Add(compound, boxA.Shape());
+      builder.Add(compound, boxB.Shape());
+
+      const stepBytes = shapeToStepBytes(oc, compound);
+
+      builder.delete();
+      boxA.delete();
+      boxB.delete();
+
+      const buffer = stepBytes.buffer.slice(
+        stepBytes.byteOffset,
+        stepBytes.byteOffset + stepBytes.byteLength,
+      ) as ArrayBuffer;
+      const response: OcctWorkerResponse = { id, type: "testStepBytesResult", buffer };
+      self.postMessage(response, [buffer]);
       return;
     }
   } catch (error) {
