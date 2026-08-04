@@ -101,6 +101,70 @@ export default function OcctDebugPage() {
     }
   }
 
+  async function runMoveTest() {
+    setStatus("loading OCCT...");
+    setGeometry(null);
+    try {
+      const client = getOcctClient();
+      await client.ready();
+
+      setStatus("making test multi-solid STEP bytes (two boxes)...");
+      const stepBytes = await client.makeTestMultiSolidStepBytes();
+
+      setStatus("loading as persistent assembly state...");
+      const solids = await client.loadAssemblySolids(stepBytes);
+      if (solids.length !== 2) {
+        setStatus(`ERROR: expected 2 solids, got ${solids.length}`);
+        return;
+      }
+
+      const avgY = (mesh: { positions: Float32Array }) => {
+        let sum = 0;
+        for (let i = 1; i < mesh.positions.length; i += 3) sum += mesh.positions[i];
+        return sum / (mesh.positions.length / 3);
+      };
+
+      const [boxA, boxB] = solids;
+      const before = avgY(boxA.mesh);
+
+      const preview1 = await client.translateSolid(boxA.handle, [0, 20, 0], false);
+      const afterPreview1 = avgY(preview1);
+
+      const preview2 = await client.translateSolid(boxA.handle, [0, 5, 0], false);
+      const afterPreview2 = avgY(preview2);
+
+      const committed = await client.translateSolid(boxA.handle, [0, 20, 0], true);
+      const afterCommit = avgY(committed);
+
+      const preview3 = await client.translateSolid(boxA.handle, [0, 5, 0], false);
+      const afterPreview3 = avgY(preview3);
+
+      const geoms = [committed, boxB.mesh].map((mesh) => {
+        const geom = new THREE.BufferGeometry();
+        geom.setAttribute("position", new THREE.BufferAttribute(mesh.positions, 3));
+        geom.setIndex(new THREE.BufferAttribute(mesh.indices, 1));
+        geom.computeVertexNormals();
+        return geom;
+      });
+      setSolidGeometries(geoms);
+
+      const checks = [
+        { label: "preview +20 from baseline", got: afterPreview1 - before, want: 20 },
+        { label: "preview +5 NOT stacked on prior preview", got: afterPreview2 - before, want: 5 },
+        { label: "commit +20", got: afterCommit - before, want: 20 },
+        { label: "preview +5 stacked on commit", got: afterPreview3 - before, want: 25 },
+      ];
+      const allOk = checks.every((c) => Math.abs(c.got - c.want) < 1e-6);
+
+      setStatus(
+        `${allOk ? "OK" : "MISMATCH"}: ` +
+          checks.map((c) => `${c.label}: got ${c.got.toFixed(3)}, want ${c.want}`).join(" | "),
+      );
+    } catch (error) {
+      setStatus(`ERROR: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
   return (
     <div style={{ padding: 24, fontFamily: "monospace" }}>
       <button onClick={runTest}>Run OCCT self-test</button>
@@ -112,6 +176,9 @@ export default function OcctDebugPage() {
       </button>
       <button onClick={runLoadStepSolidsAndRender} style={{ marginLeft: 8 }}>
         Load multi-solid STEP and render
+      </button>
+      <button onClick={runMoveTest} style={{ marginLeft: 8 }}>
+        Run Move (translate) test
       </button>
       <pre data-testid="occt-status" style={{ marginTop: 16 }}>
         {status}

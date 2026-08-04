@@ -112,6 +112,36 @@ class OcctClient {
     return response.buffer;
   }
 
+  /**
+   * Loads an assembly's STEP export as persistent worker-side state (each
+   * solid keeps its own handle, kept alive across calls) rather than the
+   * one-shot loadStepSolids(). Needed for Move/Scale/Rotate, which must
+   * transform a specific solid and keep the result around for the next
+   * preview/commit — replaces whatever assembly was previously loaded.
+   */
+  async loadAssemblySolids(buffer: ArrayBuffer): Promise<{ handle: number; mesh: { positions: Float32Array; indices: Uint32Array } }[]> {
+    await this.ready();
+    const response = await this.send({ type: "loadAssemblySolids", buffer }, [buffer]);
+    if (response.type !== "loadAssemblySolidsResult") {
+      throw new Error(`Unexpected response type: ${response.type}`);
+    }
+    return response.solids;
+  }
+
+  /** commit=false: preview only, always from the last committed state. commit=true: replaces the stored solid. */
+  async translateSolid(
+    handle: number,
+    deltaWorld: [number, number, number],
+    commit: boolean,
+  ): Promise<{ positions: Float32Array; indices: Uint32Array }> {
+    await this.ready();
+    const response = await this.send({ type: "translateSolid", handle, deltaWorld, commit });
+    if (response.type !== "translateSolidResult") {
+      throw new Error(`Unexpected response type: ${response.type}`);
+    }
+    return response.mesh;
+  }
+
   dispose(): void {
     this.worker.terminate();
   }

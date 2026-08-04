@@ -15,7 +15,15 @@ type OcctWorkerRequest =
   | { id: number; type: "makeTestStepBytes" }
   | { id: number; type: "makeTestMultiSolidStepBytes" }
   | { id: number; type: "loadStep"; buffer: ArrayBuffer }
-  | { id: number; type: "loadStepSolids"; buffer: ArrayBuffer };
+  | { id: number; type: "loadStepSolids"; buffer: ArrayBuffer }
+  | { id: number; type: "loadAssemblySolids"; buffer: ArrayBuffer }
+  | {
+      id: number;
+      type: "translateSolid";
+      handle: number;
+      deltaWorld: [number, number, number];
+      commit: boolean;
+    };
 
 type TessellatedShape = {
   positions: Float32Array;
@@ -34,6 +42,8 @@ type OcctWorkerResponse =
     }
   | { id: number; type: "loadStepResult"; mesh: TessellatedShape }
   | { id: number; type: "loadStepSolidsResult"; meshes: TessellatedShape[] }
+  | { id: number; type: "loadAssemblySolidsResult"; solids: { handle: number; mesh: TessellatedShape }[] }
+  | { id: number; type: "translateSolidResult"; handle: number; mesh: TessellatedShape }
   | { id: number; type: "testStepBytesResult"; buffer: ArrayBuffer }
   | { id: number; type: "error"; message: string };
 
@@ -111,9 +121,34 @@ type OpenCascadeInstance = {
   IFSelect_ReturnStatus: { IFSelect_RetDone: number };
   STEPControl_StepModelType: { STEPControl_AsIs: number };
   TopoDS: { Face_1: (shape: TopoDS_Shape) => TopoDS_Shape };
+  gp_Vec_4: new (dx: number, dy: number, dz: number) => unknown;
+  gp_Trsf_1: new () => {
+    SetTranslation_1: (v: unknown) => void;
+    delete: () => void;
+  };
+  BRepBuilderAPI_Transform_2: new (
+    shape: TopoDS_Shape,
+    trsf: unknown,
+    copy: boolean,
+  ) => {
+    Shape: () => TopoDS_Shape;
+    delete: () => void;
+  };
 };
 
 let occtPromise: Promise<OpenCascadeInstance> | null = null;
+
+/**
+ * Persistent per-solid state for the current loaded assembly, keyed by an
+ * opaque handle the client pairs with a pathKey (see
+ * stepPathKeyBinding.ts). A commit replaces the stored shape; a preview
+ * always transforms from whatever is currently stored — never from a
+ * previous preview — matching the codebase's established "reset and
+ * reapply the full delta from scratch" ghost-preview convention rather
+ * than accumulating incremental transforms.
+ */
+const shapeStore = new Map<number, TopoDS_Shape>();
+let nextShapeHandle = 1;
 
 async function loadOcct(): Promise<OpenCascadeInstance> {
   if (!occtPromise) {
@@ -243,6 +278,28 @@ function explodeIntoSolids(oc: OpenCascadeInstance, shape: TopoDS_Shape): TopoDS
   return solids;
 }
 
+/**
+ * Rigid translate — the B-rep equivalent of moveTranslatePreview.ts's
+ * translateObjectsWorld: a real gp_Trsf applied via
+ * BRepBuilderAPI_Transform, not a mesh/object transform. Units are
+ * whatever the loaded STEP file's are natively (not yet converted
+ * to/from three.js's meters — see loadAssembly's TODO).
+ */
+function translateShape(
+  oc: OpenCascadeInstance,
+  shape: TopoDS_Shape,
+  deltaWorld: [number, number, number],
+): TopoDS_Shape {
+  const vec = new oc.gp_Vec_4(deltaWorld[0], deltaWorld[1], deltaWorld[2]);
+  const trsf = new oc.gp_Trsf_1();
+  trsf.SetTranslation_1(vec);
+  const transform = new oc.BRepBuilderAPI_Transform_2(shape, trsf, true);
+  const result = transform.Shape();
+  trsf.delete();
+  transform.delete();
+  return result;
+}
+
 function shapeToStepBytes(oc: OpenCascadeInstance, shape: TopoDS_Shape): Uint8Array {
   const writer = new oc.STEPControl_Writer_1();
   writer.Transfer(shape, oc.STEPControl_StepModelType.STEPControl_AsIs, true);
@@ -353,6 +410,47 @@ self.onmessage = async (event: MessageEvent<OcctWorkerRequest>) => {
         response,
         meshes.flatMap((m) => [m.positions.buffer, m.indices.buffer]),
       );
+      return;
+    }
+
+    if (type === "loadAssemblySolids") {
+      const oc = await loadOcct();
+      const shape = stepBytesToShape(oc, event.data.buffer);
+      const solidShapes = explodeIntoSolids(oc, shape);
+
+      shapeStore.clear();
+      const solids = solidShapes.map((solidShape) => {
+        const handle = nextShapeHandle++;
+        shapeStore.set(handle, solidShape);
+        return { handle, mesh: tessellateShape(oc, solidShape) };
+      });
+
+      const response: OcctWorkerResponse = { id, type: "loadAssemblySolidsResult", solids };
+      self.postMessage(
+        response,
+        solids.flatMap((s) => [s.mesh.positions.buffer, s.mesh.indices.buffer]),
+      );
+      return;
+    }
+
+    if (type === "translateSolid") {
+      const oc = await loadOcct();
+      const { handle, deltaWorld, commit } = event.data;
+      const shape = shapeStore.get(handle);
+
+      if (!shape) {
+        throw new Error(`translateSolid: unknown handle ${handle}`);
+      }
+
+      const transformed = translateShape(oc, shape, deltaWorld);
+
+      if (commit) {
+        shapeStore.set(handle, transformed);
+      }
+
+      const mesh = tessellateShape(oc, transformed);
+      const response: OcctWorkerResponse = { id, type: "translateSolidResult", handle, mesh };
+      self.postMessage(response, [mesh.positions.buffer, mesh.indices.buffer]);
       return;
     }
 
