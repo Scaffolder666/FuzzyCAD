@@ -237,6 +237,12 @@ export async function fetchOnshapePartStudioGltf(query: PartStudioQuery) {
   return fetch(`/api/onshape/partstudio-gltf?${params.toString()}`);
 }
 
+export async function fetchOnshapePartStudioStep(query: PartStudioQuery) {
+  const params = makePartStudioParams(query);
+
+  return fetch(`/api/onshape/partstudio-step?${params.toString()}`);
+}
+
 export async function fetchOnshapePartStudioParts(
   query: PartStudioQuery,
 ): Promise<ApiResult> {

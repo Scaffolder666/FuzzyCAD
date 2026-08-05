@@ -1,5 +1,6 @@
 "use client";
 
+import * as THREE from "three";
 import dynamic from "next/dynamic";
 import {
   buildSizeCandidatePathKeys,
@@ -30,12 +31,16 @@ import {
   fetchOnshapeAssemblyZipManifest,
   fetchOnshapeElements,
   fetchOnshapePartStudioGltf,
+  fetchOnshapePartStudioStep,
+  uploadOnshapeImportStep,
   type ApiResult,
   type OnshapeElement,
   loadFuzzycadProjectState,
   saveFuzzycadProject,
 } from "./lib/onshapeClient";
-import { computeExternalGeometryDeltas } from "./lib/operations/resolveExternalGeometryDeltas";
+import { getOcctClient } from "./lib/occt/occtClient";
+import { bindSolidsToPartIdsByBoundingBox, threeWorldDirectionToStep, threeWorldPointToStep, threeWorldVectorToStep } from "./lib/occt/stepSolidBinding";
+import { getRotateAxisUnitVector } from "./components/viewer/rotatePreview";
 import type { OperationTool } from "./lib/operations/types";
 import OperationToolbar from "./components/OperationToolbar";
 import UncertaintyMarksPanel from "./components/UncertaintyMarksPanel";
@@ -57,10 +62,8 @@ import {
   type ConfidenceLevel,
 } from "./lib/uncertainty/types";
 import {
-  computeAllFinalOccurrenceDeltas,
   findSizeAnnotationForPathKey,
   makeSizeAnnotationId,
-  mergeRigidDeltaMaps,
   BEND_CONTROL_POINT_COUNT,
   type BendAxisDirection,
   type DistanceMoveMode,
@@ -452,27 +455,18 @@ export default function FuzzyCADHome() {
     appearanceMarkingQuery,
   );
 
-  // Every resolved mark computeAllFinalOccurrenceDeltas (self-contained:
-  // Move/MoveQuestion/Rotate-custom) and computeExternalGeometryDeltas
-  // (needs live objectSummaries: Rotate-object/Distance) can turn into a
-  // real Onshape occurrence transform. Counted (not just checked
-  // non-empty) so the "Push N accepted changes" button can tell the
-  // reviewer what a click is about to do before it does it.
+  // Every resolved Move/Scale/Rotate mark is something
+  // pushAcceptedChangesToOnshape can turn into a real STEP-based edit
+  // (Bend has no B-rep equivalent and stays visualization-only). Counted
+  // (not just checked non-empty) so the "Push N accepted changes" button
+  // can tell the reviewer what a click is about to do before it does it.
   const pushableChangeCount = useMemo(() => {
-    const deltas = mergeRigidDeltaMaps([
-      computeAllFinalOccurrenceDeltas(uncertaintyDocumentWithCurrentSource),
-      computeExternalGeometryDeltas(uncertaintyDocumentWithCurrentSource, objectSummaries),
-    ]);
-    const ids = new Set<string>();
-
-    for (const delta of deltas.values()) {
-      for (const id of delta.sourceAnnotationIds) {
-        ids.add(id);
-      }
-    }
-
-    return ids.size;
-  }, [uncertaintyDocumentWithCurrentSource, objectSummaries]);
+    return (
+      movePreviews.filter((preview) => preview.status === "resolved").length +
+      scalePreviews.filter((preview) => preview.status === "resolved").length +
+      rotatePreviews.filter((preview) => preview.status === "resolved").length
+    );
+  }, [movePreviews, scalePreviews, rotatePreviews]);
 
   const partStudioElements = useMemo(() => {
     const data = elementsResult?.data;
@@ -1780,17 +1774,213 @@ async function saveProjectStateToOnshape() {
 }
 
 /**
- * Track 1 of the B-rep write-back plan (occurrence transforms) only made
- * sense for an Assembly's occurrence layer, which a Part Studio doesn't
- * have — every part's exported geometry is already in its final position,
- * there's nothing to "transform." Disconnected pending Phase 6/7's
- * STEP-based replacement (translateSolid/rotateSolid -> export STEP ->
- * uploadOnshapeImportStep), see /root/.claude/plans/memoized-purring-koala.md.
+ * Phase 6/7 of the write-back plan: exports the current Part Studio to
+ * STEP, binds each STEP solid to a real partId by nearest bounding-box
+ * match (stepSolidBinding.ts — cross-checked against the same
+ * objectSummaries the viewer itself trusts for selection/highlighting),
+ * runs every resolved Move/Scale/Rotate mark as a real OCCT gp_Trsf
+ * (translateSolid/scaleSolid/rotateSolid — the same operations already
+ * used for the B-rep ghost preview) against its bound solid, then uploads
+ * the edited compound back to Onshape as a new sibling element (true
+ * in-place feature-history editing is a distinct, out-of-scope future
+ * phase — see the migration plan). Bend has no B-rep equivalent (OCCT
+ * exposes no "bend a solid" primitive here) and stays visualization-only,
+ * same as Distance/MoveQuestion.
  */
 async function pushAcceptedChangesToOnshape() {
-  console.warn(
-    "pushAcceptedChangesToOnshape: disabled during the Part Studio migration — STEP-based write-back (Phase 7) isn't wired up yet.",
-  );
+  if (!documentId || !workspaceId || !selectedPartStudioId) {
+    console.warn(
+      "pushAcceptedChangesToOnshape: missing documentId, workspaceId, or selectedPartStudioId",
+    );
+    return;
+  }
+
+  if (pushingAcceptedChanges) {
+    return;
+  }
+
+  const resolvedMoves = movePreviews.filter((preview) => preview.status === "resolved");
+  const resolvedScales = scalePreviews.filter((preview) => preview.status === "resolved");
+  const resolvedRotates = rotatePreviews.filter((preview) => preview.status === "resolved");
+
+  if (resolvedMoves.length === 0 && resolvedScales.length === 0 && resolvedRotates.length === 0) {
+    setPushBlockedSummary(null);
+    return;
+  }
+
+  setPushingAcceptedChanges(true);
+  setPushBlockedSummary(null);
+
+  try {
+    const query = {
+      documentId,
+      workspaceId,
+      partStudioElementId: selectedPartStudioId,
+      server,
+    };
+
+    const stepRes = await fetchOnshapePartStudioStep(query);
+
+    if (!stepRes.ok) {
+      const details = await stepRes.text();
+      console.error("pushAcceptedChangesToOnshape: STEP export failed", stepRes.status, details);
+      setPushBlockedSummary([`Part Studio STEP export failed (${stepRes.status})`]);
+      return;
+    }
+
+    const stepBuffer = await stepRes.arrayBuffer();
+
+    const client = getOcctClient();
+    await client.ready();
+    const solids = await client.loadAssemblySolids(stepBuffer);
+
+    const { bound, unmatchedPartIds } = bindSolidsToPartIdsByBoundingBox(solids, objectSummaries);
+    const handleByPartId = new Map(bound.map((entry) => [entry.partId, entry.handle]));
+
+    const blocked: string[] = [];
+    const pushedPartIds = new Set<string>();
+
+    const applyToTargets = (
+      partIds: string[],
+      apply: (handle: number) => Promise<void>,
+    ) =>
+      Promise.all(
+        partIds.map(async (partId) => {
+          const handle = handleByPartId.get(partId);
+
+          if (handle === undefined) {
+            blocked.push(`${partId}: no matching STEP solid found`);
+            return;
+          }
+
+          await apply(handle);
+          pushedPartIds.add(partId);
+        }),
+      );
+
+    for (const preview of resolvedRotates) {
+      let frame: { pivotWorld: THREE.Vector3; axisWorld: THREE.Vector3 } | null = null;
+
+      if (preview.axisMode === "custom") {
+        if (preview.pivotWorld && preview.axisVectorWorld) {
+          frame = {
+            pivotWorld: new THREE.Vector3(...preview.pivotWorld),
+            axisWorld: new THREE.Vector3(...preview.axisVectorWorld).normalize(),
+          };
+        }
+      } else if (preview.axisPathKey && preview.axisDirection) {
+        const axisSummary = objectSummaries.find(
+          (item) => item.pathKey === preview.axisPathKey,
+        );
+
+        if (axisSummary) {
+          frame = {
+            pivotWorld: new THREE.Vector3(...axisSummary.aabbCenterWorld),
+            axisWorld: getRotateAxisUnitVector(preview.axisDirection),
+          };
+        }
+      }
+
+      if (!frame) {
+        blocked.push(`${preview.pathKey}: couldn't resolve rotate pivot/axis`);
+        continue;
+      }
+
+      const pivotStep = threeWorldPointToStep(frame.pivotWorld);
+      const axisStep = threeWorldDirectionToStep(frame.axisWorld);
+
+      await applyToTargets([preview.pathKey, ...preview.followPathKeys], async (handle) => {
+        const result = await client.rotateSolid(handle, pivotStep, axisStep, preview.angleRad, true);
+        if (!result.valid) {
+          blocked.push(`${preview.pathKey}: rotated solid failed OCCT's validity check`);
+        }
+      });
+    }
+
+    for (const preview of resolvedScales) {
+      const allPartIds = [preview.pathKey, ...preview.followPathKeys];
+      const summaries = allPartIds
+        .map((partId) => objectSummaries.find((item) => item.pathKey === partId))
+        .filter((item): item is AxialStretchObjectSummary => Boolean(item));
+
+      if (summaries.length === 0) {
+        blocked.push(`${preview.pathKey}: couldn't resolve scale pivot`);
+        continue;
+      }
+
+      const box = new THREE.Box3();
+
+      for (const summary of summaries) {
+        const center = new THREE.Vector3(...summary.aabbCenterWorld);
+        const halfSize = new THREE.Vector3(...summary.aabbSizeWorld).multiplyScalar(0.5);
+
+        box.union(
+          new THREE.Box3(center.clone().sub(halfSize), center.clone().add(halfSize)),
+        );
+      }
+
+      const pivotStep = threeWorldPointToStep(box.getCenter(new THREE.Vector3()));
+
+      await applyToTargets(allPartIds, async (handle) => {
+        const result = await client.scaleSolid(handle, pivotStep, preview.factor, true);
+        if (!result.valid) {
+          blocked.push(`${preview.pathKey}: scaled solid failed OCCT's validity check`);
+        }
+      });
+    }
+
+    for (const preview of resolvedMoves) {
+      const deltaStep = threeWorldVectorToStep(new THREE.Vector3(...preview.deltaWorld));
+
+      await applyToTargets([preview.pathKey, ...preview.followPathKeys], async (handle) => {
+        const result = await client.translateSolid(handle, deltaStep, true);
+        if (!result.valid) {
+          blocked.push(`${preview.pathKey}: moved solid failed OCCT's validity check`);
+        }
+      });
+    }
+
+    // unmatchedPartIds only matters for partIds an accepted mark actually
+    // targeted — a part nobody touched having no STEP solid isn't worth
+    // surfacing as a problem.
+    const targetedUnmatched = unmatchedPartIds.filter((partId) => {
+      const targeted = (preview: { pathKey: string; followPathKeys: string[] }) =>
+        preview.pathKey === partId || preview.followPathKeys.includes(partId);
+
+      return (
+        resolvedMoves.some(targeted) ||
+        resolvedScales.some(targeted) ||
+        resolvedRotates.some(targeted)
+      );
+    });
+
+    for (const partId of targetedUnmatched) {
+      if (!pushedPartIds.has(partId)) {
+        blocked.push(`${partId}: no matching STEP solid found`);
+      }
+    }
+
+    if (pushedPartIds.size === 0) {
+      setPushBlockedSummary(
+        blocked.length > 0 ? blocked : ["No accepted change could be matched to a real part."],
+      );
+      return;
+    }
+
+    const editedStepBuffer = await client.exportAssemblyStep();
+
+    const uploadRes = await uploadOnshapeImportStep({ documentId, workspaceId, server }, editedStepBuffer);
+    const uploadResult = (await uploadRes.json()) as ApiResult;
+
+    console.log("pushAcceptedChangesToOnshape: uploaded edited Part Studio", uploadResult);
+
+    setPushBlockedSummary(blocked.length > 0 ? blocked : null);
+  } catch (err) {
+    console.error("pushAcceptedChangesToOnshape failed:", err);
+    setPushBlockedSummary([err instanceof Error ? err.message : String(err)]);
+  } finally {
+    setPushingAcceptedChanges(false);
+  }
 }
 
 // Fills in fields that were added to the schema after some annotations were
