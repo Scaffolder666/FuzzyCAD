@@ -154,6 +154,10 @@ type AssemblyQuery = DocumentQuery & {
   assemblyElementId: string;
 };
 
+type PartStudioQuery = DocumentQuery & {
+  partStudioElementId: string;
+};
+
 function appendOptionalParams(
   params: URLSearchParams,
   query: { force?: boolean },
@@ -180,6 +184,17 @@ function makeAssemblyParams(query: AssemblyQuery) {
     documentId: query.documentId,
     workspaceId: query.workspaceId,
     assemblyElementId: query.assemblyElementId,
+    server: query.server,
+  });
+
+  return appendOptionalParams(params, query);
+}
+
+function makePartStudioParams(query: PartStudioQuery) {
+  const params = new URLSearchParams({
+    documentId: query.documentId,
+    workspaceId: query.workspaceId,
+    partStudioElementId: query.partStudioElementId,
     server: query.server,
   });
 
@@ -214,6 +229,21 @@ export async function fetchOnshapeAssemblyStep(query: AssemblyQuery) {
   const params = makeAssemblyParams(query);
 
   return fetch(`/api/onshape/assembly-step?${params.toString()}`);
+}
+
+export async function fetchOnshapePartStudioGltf(query: PartStudioQuery) {
+  const params = makePartStudioParams(query);
+
+  return fetch(`/api/onshape/partstudio-gltf?${params.toString()}`);
+}
+
+export async function fetchOnshapePartStudioParts(
+  query: PartStudioQuery,
+): Promise<ApiResult> {
+  const params = makePartStudioParams(query);
+  const res = await fetch(`/api/onshape/partstudio-parts?${params.toString()}`);
+
+  return res.json() as Promise<ApiResult>;
 }
 
 export async function uploadOnshapeImportStep(

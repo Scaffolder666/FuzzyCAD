@@ -3,7 +3,7 @@
 import styles from "../fuzzycad-home.module.css";
 import PartTree, { type TreeGroup } from "./PartTree";
 
-type AssemblyElement = {
+type PartStudioElement = {
   id: string;
   name: string;
   type?: string;
@@ -14,8 +14,8 @@ type AssemblyElement = {
 type FuzzyCADSidebarProps = {
   connected: boolean;
   connectHref: string;
-  assemblyElements: AssemblyElement[];
-  selectedAssemblyId: string;
+  partStudioElements: PartStudioElement[];
+  selectedPartStudioId: string;
   busy: boolean;
   partTree: TreeGroup[];
   highlightedPathKey: string | null;
@@ -24,8 +24,8 @@ type FuzzyCADSidebarProps = {
   applyStatus?: "idle" | "applying" | "success" | "error";
   applyError?: string | null;
   hasInferredPlan?: boolean;
-  onAssemblyChange: (assemblyId: string) => void;
-  onLoadAssembly: () => void;
+  onPartStudioChange: (partStudioId: string) => void;
+  onLoadPartStudio: () => void;
   onSelectPathKey: (pathKey: string | null) => void;
   onToggleDev: () => void;
   onApply?: () => void;
@@ -36,8 +36,8 @@ type FuzzyCADSidebarProps = {
 export default function FuzzyCADSidebar({
   connected,
   connectHref,
-  assemblyElements,
-  selectedAssemblyId,
+  partStudioElements,
+  selectedPartStudioId,
   busy,
   partTree,
   highlightedPathKey,
@@ -46,8 +46,8 @@ export default function FuzzyCADSidebar({
   applyStatus = "idle",
   applyError,
   hasInferredPlan,
-  onAssemblyChange,
-  onLoadAssembly,
+  onPartStudioChange,
+  onLoadPartStudio,
   onSelectPathKey,
   onToggleDev,
   onApply,
@@ -109,35 +109,35 @@ export default function FuzzyCADSidebar({
         </div>
       ) : null}
 
-      {assemblyElements.length > 0 ? (
+      {partStudioElements.length > 0 ? (
         <>
-          <label className={styles.assemblyLabel}>Assembly</label>
+          <label className={styles.assemblyLabel}>Part Studio</label>
 
           <select
-            value={selectedAssemblyId}
+            value={selectedPartStudioId}
             onChange={(event) => {
-              onAssemblyChange(event.target.value);
+              onPartStudioChange(event.target.value);
             }}
             className={styles.assemblySelect}
           >
-            {assemblyElements.map((assembly) => (
-              <option key={assembly.id} value={assembly.id}>
-                {assembly.name}
+            {partStudioElements.map((partStudio) => (
+              <option key={partStudio.id} value={partStudio.id}>
+                {partStudio.name}
               </option>
             ))}
           </select>
 
           <button
-            onClick={onLoadAssembly}
-            disabled={!selectedAssemblyId || busy}
+            onClick={onLoadPartStudio}
+            disabled={!selectedPartStudioId || busy}
             className={styles.primaryButton}
           >
-            {busy ? "Loading..." : "Loading assembly"}
+            {busy ? "Loading..." : "Loading Part Studio"}
           </button>
         </>
       ) : (
         <p className={styles.emptyMessage}>
-          {connected ? "Assembly not found." : "Please connect Onshape first."}
+          {connected ? "Part Studio not found." : "Please connect Onshape first."}
         </p>
       )}
 
