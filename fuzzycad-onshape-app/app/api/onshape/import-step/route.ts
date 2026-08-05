@@ -63,8 +63,8 @@ async function getTranslationStatus(href: string, accessToken: string): Promise<
   return data;
 }
 
-const IMPORTED_STEP_FILENAME = "fuzzycad-edited-assembly.step";
-const IMPORTED_ELEMENT_NAME = "FuzzyCAD_Edited_Assembly";
+const IMPORTED_STEP_FILENAME = "fuzzycad-edited-partstudio.step";
+const IMPORTED_ELEMENT_NAME = "FuzzyCAD_Edited_PartStudio";
 
 /**
  * Uploads a STEP file (the B-rep pipeline's exportAssemblyStep() output —
