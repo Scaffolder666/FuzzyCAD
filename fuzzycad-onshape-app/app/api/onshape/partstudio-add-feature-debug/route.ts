@@ -61,45 +61,67 @@ export async function POST(req: NextRequest) {
 
   const endpoint = `${server}/api/partstudios/d/${documentId}/w/${workspaceId}/e/${partStudioElementId}/features`;
 
+  // Real Onshape features use the {type, typeName, message} envelope on
+  // EVERY nested object (confirmed against a live GET .../features
+  // response) -- not the flat "btType": "Foo-123" shorthand seen in some
+  // docs/SDKs. Sending the flat shape got a 400 "Error processing json"
+  // (Jackson's polymorphic deserializer keys off the numeric "type" field
+  // inside a "message" wrapper, not a merged "btType" string).
   const quantityParam = (parameterId: string, mm: number) => ({
-    btType: "BTMParameterQuantity-147",
-    parameterId,
-    expression: `${mm}*mm`,
+    type: 147,
+    typeName: "BTMParameterQuantity",
+    message: {
+      parameterId,
+      expression: `${mm}*mm`,
+    },
   });
 
   const feature = {
-    btType: "BTMFeature-134",
-    featureType: "transform",
-    name: "FuzzyCAD Move (debug)",
-    suppressed: false,
-    parameters: [
-      {
-        btType: "BTMParameterQueryList-148",
-        parameterId: "entities",
-        queries: [
-          {
-            btType: "BTMIndividualQuery-138",
-            deterministicIds: [],
-            geometryIds: [partId],
+    type: 134,
+    typeName: "BTMFeature",
+    message: {
+      featureType: "transform",
+      name: "FuzzyCAD Move (debug)",
+      suppressed: false,
+      parameters: [
+        {
+          type: 148,
+          typeName: "BTMParameterQueryList",
+          message: {
+            parameterId: "entities",
+            queries: [
+              {
+                type: 138,
+                typeName: "BTMIndividualQuery",
+                message: {
+                  geometryIds: [partId],
+                },
+              },
+            ],
           },
-        ],
-      },
-      {
-        btType: "BTMParameterEnum-145",
-        parameterId: "transformType",
-        namespace: "",
-        enumName: "TransformType",
-        value: "TRANSLATION_3D",
-      },
-      quantityParam("dx", dx),
-      quantityParam("dy", dy),
-      quantityParam("dz", dz),
-      {
-        btType: "BTMParameterBoolean-144",
-        parameterId: "makeCopy",
-        value: false,
-      },
-    ],
+        },
+        {
+          type: 145,
+          typeName: "BTMParameterEnum",
+          message: {
+            parameterId: "transformType",
+            enumName: "TransformType",
+            value: "TRANSLATION_3D",
+          },
+        },
+        quantityParam("dx", dx),
+        quantityParam("dy", dy),
+        quantityParam("dz", dz),
+        {
+          type: 144,
+          typeName: "BTMParameterBoolean",
+          message: {
+            parameterId: "makeCopy",
+            value: false,
+          },
+        },
+      ],
+    },
   };
 
   const onshapeRes = await onshapeFetch(
