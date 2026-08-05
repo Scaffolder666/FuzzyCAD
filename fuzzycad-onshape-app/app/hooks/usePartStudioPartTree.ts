@@ -77,11 +77,19 @@ export function usePartStudioPartTree(identity: PartStudioIdentity | null) {
         !identity?.workspaceId ||
         !identity?.partStudioElementId
       ) {
+        console.log(
+          "[FuzzyCAD] partStudioPartTree: skipping fetch, identity incomplete:",
+          { documentId: identity?.documentId, workspaceId: identity?.workspaceId, partStudioElementId: identity?.partStudioElementId },
+        );
         if (!cancelled) {
           resetPartTree();
         }
         return;
       }
+
+      console.log(
+        `[FuzzyCAD] partStudioPartTree: fetching parts for partStudioElementId=${identity.partStudioElementId}`,
+      );
 
       try {
         const json = await fetchOnshapePartStudioParts({
@@ -91,9 +99,17 @@ export function usePartStudioPartTree(identity: PartStudioIdentity | null) {
           server: identity.server,
         });
 
+        console.log(
+          `[FuzzyCAD] partStudioPartTree: fetch result for partStudioElementId=${identity.partStudioElementId}, ok=${json.ok}:`,
+          json,
+        );
+
         const parts = parsePartList(json?.data ?? json);
 
         if (cancelled) {
+          console.log(
+            `[FuzzyCAD] partStudioPartTree: result for partStudioElementId=${identity.partStudioElementId} discarded (superseded).`,
+          );
           return;
         }
 
@@ -112,7 +128,11 @@ export function usePartStudioPartTree(identity: PartStudioIdentity | null) {
               ]
             : [],
         );
-      } catch {
+      } catch (err) {
+        console.log(
+          `[FuzzyCAD] partStudioPartTree: fetch threw for partStudioElementId=${identity.partStudioElementId}:`,
+          err,
+        );
         if (!cancelled) {
           resetPartTree();
         }
