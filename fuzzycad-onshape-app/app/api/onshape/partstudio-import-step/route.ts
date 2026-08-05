@@ -1,4 +1,5 @@
 import { gunzipSync } from "node:zlib";
+import { del } from "@vercel/blob";
 import { NextRequest, NextResponse } from "next/server";
 import { onshapeFetch } from "../../../lib/server/onshapeApi";
 
@@ -98,6 +99,14 @@ const IMPORTED_STEP_FILENAME = "fuzzycad-edited-partstudio-insert.step";
  * result actually lands inside the ORIGINAL Part Studio, or whether
  * Onshape still spins up a new element even when the endpoint itself is
  * element-scoped.
+ *
+ * The STEP bytes themselves never touch this request's body: an edited
+ * STEP export can exceed Vercel's ~4.5MB serverless body limit even
+ * gzipped (confirmed live against a real Part Studio), so the client
+ * uploads straight to Vercel Blob storage first (see
+ * onshapeClient.ts's uploadStepBufferToBlob) and this route just fetches
+ * the bytes back server-side via the blobUrl query param — a
+ * server-to-server fetch, not subject to that request-body ceiling.
  */
 export async function POST(req: NextRequest) {
   const searchParams = req.nextUrl.searchParams;
@@ -105,12 +114,13 @@ export async function POST(req: NextRequest) {
   const documentId = searchParams.get("documentId");
   const workspaceId = searchParams.get("workspaceId");
   const partStudioElementId = searchParams.get("partStudioElementId");
+  const blobUrl = searchParams.get("blobUrl");
 
   const accessToken = req.cookies.get("onshape_access_token")?.value;
 
-  if (!documentId || !workspaceId || !partStudioElementId) {
+  if (!documentId || !workspaceId || !partStudioElementId || !blobUrl) {
     return NextResponse.json(
-      { error: "Missing documentId, workspaceId, or partStudioElementId" },
+      { error: "Missing documentId, workspaceId, partStudioElementId, or blobUrl" },
       { status: 400 },
     );
   }
@@ -122,8 +132,22 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const rawBody = await req.arrayBuffer();
+  const blobRes = await fetch(blobUrl);
+
+  if (!blobRes.ok) {
+    return NextResponse.json(
+      { error: `Failed to fetch staged STEP file from blob storage: ${blobRes.status}` },
+      { status: 502 },
+    );
+  }
+
+  const rawBody = await blobRes.arrayBuffer();
   const stepBuffer = decompressIfGzipped(rawBody, searchParams.get("stepEncoding"));
+
+  // The bytes are in memory now — the staged blob has done its job, so
+  // clean it up rather than leaving it around (best-effort: a failed
+  // delete shouldn't fail the actual push).
+  del(blobUrl).catch(() => {});
 
   if (stepBuffer.byteLength === 0) {
     return NextResponse.json({ error: "Empty STEP body" }, { status: 400 });

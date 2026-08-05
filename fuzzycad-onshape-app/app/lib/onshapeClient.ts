@@ -237,6 +237,31 @@ export async function fetchOnshapePartStudioGltf(query: PartStudioQuery) {
   return fetch(`/api/onshape/partstudio-gltf?${params.toString()}`);
 }
 
+/**
+ * Uploads a (possibly gzipped) STEP buffer straight to Vercel Blob
+ * storage from the browser — bypassing our own serverless functions'
+ * ~4.5MB request body limit entirely, since this PUT never passes
+ * through one of our route handlers (only the tiny upload-token request
+ * to step-blob-upload/route.ts does). Confirmed necessary live: an
+ * edited spur gear's re-exported STEP still exceeded that limit even
+ * after gzip.
+ */
+async function uploadStepBufferToBlob(body: BodyInit, gzip: boolean): Promise<string> {
+  const { upload } = await import("@vercel/blob/client");
+  const contentType = gzip ? "application/gzip" : "application/octet-stream";
+  const rawBytes =
+    body instanceof Blob ? await body.arrayBuffer() : (body as ArrayBuffer);
+  const blob = new Blob([rawBytes], { type: contentType });
+  const filename = `fuzzycad-step-${Date.now()}${gzip ? ".step.gz" : ".step"}`;
+
+  const result = await upload(filename, blob, {
+    access: "public",
+    handleUploadUrl: "/api/onshape/step-blob-upload",
+  });
+
+  return result.url;
+}
+
 export async function fetchOnshapePartStudioStep(query: PartStudioQuery) {
   const params = makePartStudioParams(query);
 
@@ -273,6 +298,9 @@ export async function uploadOnshapeImportStep(
 ) {
   const params = makeDocumentParams(query);
   const { body, gzip } = await gzipStepBuffer(stepBuffer);
+  const blobUrl = await uploadStepBufferToBlob(body, gzip);
+
+  params.set("blobUrl", blobUrl);
 
   if (gzip) {
     params.set("stepEncoding", "gzip");
@@ -280,7 +308,6 @@ export async function uploadOnshapeImportStep(
 
   return fetch(`/api/onshape/import-step?${params.toString()}`, {
     method: "POST",
-    body,
   });
 }
 
@@ -291,6 +318,9 @@ export async function uploadOnshapePartStudioImportStep(
 ) {
   const params = makePartStudioParams(query);
   const { body, gzip } = await gzipStepBuffer(stepBuffer);
+  const blobUrl = await uploadStepBufferToBlob(body, gzip);
+
+  params.set("blobUrl", blobUrl);
 
   if (gzip) {
     params.set("stepEncoding", "gzip");
@@ -298,7 +328,6 @@ export async function uploadOnshapePartStudioImportStep(
 
   return fetch(`/api/onshape/partstudio-import-step?${params.toString()}`, {
     method: "POST",
-    body,
   });
 }
 

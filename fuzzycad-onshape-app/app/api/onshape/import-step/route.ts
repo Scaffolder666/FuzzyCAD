@@ -1,4 +1,5 @@
 import { gunzipSync } from "node:zlib";
+import { del } from "@vercel/blob";
 import { NextRequest, NextResponse } from "next/server";
 import { onshapeFetch } from "../../../lib/server/onshapeApi";
 
@@ -95,17 +96,24 @@ const IMPORTED_ELEMENT_NAME = "FuzzyCAD_Edited_PartStudio";
  * STL path's "import-default" variant) and reports back plainly if it
  * doesn't produce an insertable element — first thing to adjust once
  * this runs against a live document.
+ *
+ * The STEP bytes never touch this request's body: an edited STEP export
+ * can exceed Vercel's ~4.5MB serverless body limit even gzipped
+ * (confirmed live), so the client uploads straight to Vercel Blob
+ * storage first (see onshapeClient.ts's uploadStepBufferToBlob) and this
+ * route fetches the bytes back server-side via the blobUrl query param.
  */
 export async function POST(req: NextRequest) {
   const searchParams = req.nextUrl.searchParams;
   const server = searchParams.get("server") || "https://cad.onshape.com";
   const documentId = searchParams.get("documentId");
   const workspaceId = searchParams.get("workspaceId");
+  const blobUrl = searchParams.get("blobUrl");
 
   const accessToken = req.cookies.get("onshape_access_token")?.value;
 
-  if (!documentId || !workspaceId) {
-    return NextResponse.json({ error: "Missing documentId or workspaceId" }, { status: 400 });
+  if (!documentId || !workspaceId || !blobUrl) {
+    return NextResponse.json({ error: "Missing documentId, workspaceId, or blobUrl" }, { status: 400 });
   }
 
   if (!accessToken) {
@@ -115,8 +123,19 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const rawBody = await req.arrayBuffer();
+  const blobRes = await fetch(blobUrl);
+
+  if (!blobRes.ok) {
+    return NextResponse.json(
+      { error: `Failed to fetch staged STEP file from blob storage: ${blobRes.status}` },
+      { status: 502 },
+    );
+  }
+
+  const rawBody = await blobRes.arrayBuffer();
   const stepBuffer = decompressIfGzipped(rawBody, searchParams.get("stepEncoding"));
+
+  del(blobUrl).catch(() => {});
 
   if (stepBuffer.byteLength === 0) {
     return NextResponse.json({ error: "Empty STEP body" }, { status: 400 });
