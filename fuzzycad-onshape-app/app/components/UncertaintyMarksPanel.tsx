@@ -56,6 +56,13 @@ type UncertaintyMarksPanelProps = {
   pushingAcceptedChanges?: boolean;
   /** Count of resolved annotations eligible for a real write-back — shown so the reviewer knows what a click will do before doing it. */
   pushableChangeCount?: number;
+  /**
+   * Parts skipped on the last push because they're mate-constrained —
+   * Onshape's mate solver owns their position, so an absolute occurrence
+   * transform isn't valid for them. One pre-formatted line per part,
+   * naming which mate(s) it's connected through.
+   */
+  mateBlockedSummary?: string[] | null;
 };
 
 const FILTERS: { key: FilterKey; label: string }[] = [
@@ -1201,6 +1208,7 @@ export default function UncertaintyMarksPanel({
   onPushAcceptedChanges,
   pushingAcceptedChanges = false,
   pushableChangeCount = 0,
+  mateBlockedSummary,
 }: UncertaintyMarksPanelProps) {
   const [activeFilter, setActiveFilter] = useState<FilterKey | null>(null);
   const [resolvedOpen, setResolvedOpen] = useState(false);
@@ -1283,6 +1291,19 @@ export default function UncertaintyMarksPanel({
             </button>
           ) : null}
         </div>
+
+        {mateBlockedSummary && mateBlockedSummary.length > 0 ? (
+          <div className={styles.mateBlockedNote}>
+            <strong>Skipped by the last push — mate-constrained:</strong> Onshape&apos;s
+            mate solver owns these parts&apos; position, so a direct transform isn&apos;t
+            valid for them.
+            <ul>
+              {mateBlockedSummary.map((line) => (
+                <li key={line}>{line}</li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
 
         {visibleAnnotations.length === 0 ? (
           <div className={styles.emptyState}>

@@ -99,6 +99,26 @@
   opacity: 0.55;
 }
 
+.mateBlockedNote {
+  padding: 10px 10px;
+  border-radius: 12px;
+  border: 1px solid rgba(217, 119, 6, 0.4);
+  background: rgba(254, 243, 199, 0.65);
+  color: #92400e;
+  font-size: 10.5px;
+  line-height: 1.5;
+  margin-bottom: 10px;
+}
+
+.mateBlockedNote strong {
+  font-weight: 900;
+}
+
+.mateBlockedNote ul {
+  margin: 4px 0 0;
+  padding-left: 16px;
+}
+
 .emptyState {
   padding: 14px 10px;
   border-radius: 14px;

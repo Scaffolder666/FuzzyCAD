@@ -374,6 +374,10 @@ export default function FuzzyCADHome() {
   // second /occurrencetransforms POST while the first is still in flight.
   const [pushingAcceptedChanges, setPushingAcceptedChanges] = useState(false);
 
+  // One line per part skipped on the last push because it's mate-constrained
+  // (Onshape's mate solver owns its position — see pushAcceptedChangesToOnshape).
+  const [mateBlockedSummary, setMateBlockedSummary] = useState<string[] | null>(null);
+
   const documentId = params.get("documentId");
   const workspaceId = params.get("workspaceId");
   const elementId = params.get("elementId");
@@ -1760,6 +1764,7 @@ async function pushAcceptedChangesToOnshape() {
   }
 
   setPushingAcceptedChanges(true);
+  setMateBlockedSummary(null);
 
   try {
     const deltas = mergeRigidDeltaMaps([
@@ -1805,10 +1810,24 @@ async function pushAcceptedChangesToOnshape() {
     }
 
     if (mateConstrainedPathKeys.size > 0) {
+      const summary = Array.from(mateConstrainedPathKeys).map((pathKey) => {
+        const node = partGraph?.byPathKey.get(pathKey);
+        const partName = node?.instance?.name ?? pathKey;
+        const mateDescriptions = (node?.mateEdges ?? []).map((edge) => {
+          const otherName = partGraph?.byPathKey.get(edge.to)?.instance?.name ?? edge.to;
+          return edge.mateType ? `${edge.mateType} with ${otherName}` : `mated to ${otherName}`;
+        });
+
+        return mateDescriptions.length > 0
+          ? `${partName} — ${mateDescriptions.join(", ")}`
+          : partName;
+      });
+
       console.warn(
         "Skipping push for mate-constrained parts — Onshape's mate solver owns their position, so an arbitrary absolute transform isn't valid for them:",
-        Array.from(mateConstrainedPathKeys),
+        summary,
       );
+      setMateBlockedSummary(summary);
     }
 
     if (pushableDeltas.size === 0) {
@@ -2551,6 +2570,7 @@ if (result.ok && result.state) {
           onPushAcceptedChanges={() => void pushAcceptedChangesToOnshape()}
           pushingAcceptedChanges={pushingAcceptedChanges}
           pushableChangeCount={pushableChangeCount}
+          mateBlockedSummary={mateBlockedSummary}
         />
 
         {heightCandidateOpen ? (
