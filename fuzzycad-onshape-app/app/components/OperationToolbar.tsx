@@ -17,6 +17,17 @@ type ToolItem = {
   icon: ReactNode;
   hidden?: boolean;
   /**
+   * Set for tools whose accepted marks don't currently turn into a real
+   * Onshape edit — only Move/Scale/Rotate (and their Along-face/Custom-axis
+   * variants) run through the STEP-based B-rep write-back
+   * (pushAcceptedChangesToOnshape in fuzzycad-home.tsx); Extend/Angle/Bend
+   * stay local visualization-only marks (no OCCT operation backs them).
+   * Grays the button out and swaps its tooltip for this explanation
+   * instead of disabling the tool's underlying functionality — the
+   * annotation itself still works, it just won't get pushed.
+   */
+  disabledReason?: string;
+  /**
    * Photoshop-style flyout: when present, this slot shows whichever variant
    * was last picked (defaulting to the first) as the main button, plus a
    * small corner triangle that opens a panel listing every variant.
@@ -208,12 +219,14 @@ const toolGroups: ToolGroup[] = [
         label: "Extend",
         title: "Drag to a specific length and save it as a proposed change",
         icon: <ExtendIcon />,
+        disabledReason: "Local preview only — doesn't push to Onshape yet",
       },
       {
         id: "angle",
         label: "Angle",
         title: "Drag to a specific angle",
         icon: <AngleIcon />,
+        disabledReason: "Local preview only — doesn't push to Onshape yet",
       },
       {
         id: "move",
@@ -266,6 +279,7 @@ const toolGroups: ToolGroup[] = [
         label: "Bend",
         title: "Curve this part along one axis — one side lifts, the other dips",
         icon: <BendIcon />,
+        disabledReason: "Local preview only — doesn't push to Onshape yet",
       },
     ],
   },
@@ -329,6 +343,7 @@ export default function OperationToolbar({
       : tool;
     const active = activeTool === displayed.id;
     const flyoutOpen = openFlyoutKey === tool.id;
+    const toolDisabled = disabled || Boolean(tool.disabledReason);
 
     return (
       <div
@@ -341,7 +356,7 @@ export default function OperationToolbar({
       >
         <button
           type="button"
-          disabled={disabled}
+          disabled={toolDisabled}
           className={
             active
               ? `${styles.operationToolButton} ${styles.operationToolButtonActive}`
@@ -359,7 +374,7 @@ export default function OperationToolbar({
         {hasVariants ? (
           <button
             type="button"
-            disabled={disabled}
+            disabled={toolDisabled}
             aria-label={`More ${tool.label} tools`}
             className={styles.variantTriangle}
             onClick={(event) => {
@@ -371,7 +386,7 @@ export default function OperationToolbar({
           />
         ) : null}
 
-        {renderTooltip(tool.id, displayed.title)}
+        {renderTooltip(tool.id, tool.disabledReason ?? displayed.title)}
 
         {hasVariants && flyoutOpen ? (
           <div className={styles.variantFlyout}>
