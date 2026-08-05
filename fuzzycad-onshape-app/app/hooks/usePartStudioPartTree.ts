@@ -100,11 +100,16 @@ export function usePartStudioPartTree(identity: PartStudioIdentity | null) {
         });
 
         console.log(
-          `[FuzzyCAD] partStudioPartTree: fetch result for partStudioElementId=${identity.partStudioElementId}, ok=${json.ok}:`,
-          json,
+          `[FuzzyCAD] partStudioPartTree: fetch result for partStudioElementId=${identity.partStudioElementId}, ok=${json.ok}, raw data=`,
+          JSON.stringify(json?.data ?? json),
         );
 
         const parts = parsePartList(json?.data ?? json);
+
+        console.log(
+          `[FuzzyCAD] partStudioPartTree: parsed ${parts.length} part(s) —`,
+          JSON.stringify(parts),
+        );
 
         if (cancelled) {
           console.log(
@@ -112,6 +117,10 @@ export function usePartStudioPartTree(identity: PartStudioIdentity | null) {
           );
           return;
         }
+
+        console.log(
+          `[FuzzyCAD] partStudioPartTree: committing ${parts.length} part(s) to state now.`,
+        );
 
         setPartList(parts);
         setPartTree(
