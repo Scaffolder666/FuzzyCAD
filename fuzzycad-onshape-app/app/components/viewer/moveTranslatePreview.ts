@@ -1,7 +1,12 @@
 import * as THREE from "three";
 import { LineSegments2 } from "three/addons/lines/LineSegments2.js";
 import { findObjectsByPathKeys, translateObjectsWorld } from "./manipulation";
-import { cloneObjectForPreview, disposeMaterial } from "./axialStretchPreview";
+import {
+  cloneObjectForPreview,
+  disposeMaterial,
+  PREVIEW_LINE_COLOR,
+  RESOLVED_PREVIEW_LINE_COLOR,
+} from "./axialStretchPreview";
 
 type MoveClone = {
   pathKey: string;
@@ -23,11 +28,13 @@ export type MoveTranslatePreviewSession = {
 export function createMoveTranslatePreviewSession(
   scene: THREE.Object3D,
   pathKeys: string[],
+  status: "open" | "resolved" = "open",
 ): MoveTranslatePreviewSession | null {
   const group = new THREE.Group();
   group.name = "FuzzyCAD Move Preview";
   group.userData.fuzzycadPreview = true;
 
+  const color = status === "resolved" ? RESOLVED_PREVIEW_LINE_COLOR : PREVIEW_LINE_COLOR;
   const clones: MoveClone[] = [];
 
   for (const pathKey of pathKeys) {
@@ -37,7 +44,7 @@ export function createMoveTranslatePreviewSession(
       continue;
     }
 
-    const clone = cloneObjectForPreview(scene, original, "move");
+    const clone = cloneObjectForPreview(scene, original, "move", color);
 
     group.add(clone);
 

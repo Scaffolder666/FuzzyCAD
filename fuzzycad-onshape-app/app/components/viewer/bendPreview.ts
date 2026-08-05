@@ -5,6 +5,8 @@ import {
   cloneObjectForPreview,
   disposeMaterial,
   refreshWideDashedOverlay,
+  PREVIEW_LINE_COLOR,
+  RESOLVED_PREVIEW_LINE_COLOR,
 } from "./axialStretchPreview";
 import { findObjectsByPathKeys } from "./manipulation";
 
@@ -101,6 +103,7 @@ export function createBendPreviewSession(
   objectSummaries: AxialStretchObjectSummary[],
   pathKey: string,
   axisDirection: BendAxisDirection,
+  status: "open" | "resolved" = "open",
 ): BendPreviewSession | null {
   const summary = objectSummaries.find((item) => item.pathKey === pathKey);
   const original = findObjectsByPathKeys(scene, [pathKey])[0];
@@ -116,7 +119,8 @@ export function createBendPreviewSession(
   group.name = "FuzzyCAD Bend Preview";
   group.userData.fuzzycadPreview = true;
 
-  const clone = cloneObjectForPreview(scene, original, "scale");
+  const color = status === "resolved" ? RESOLVED_PREVIEW_LINE_COLOR : PREVIEW_LINE_COLOR;
+  const clone = cloneObjectForPreview(scene, original, "scale", color);
 
   group.add(clone);
 

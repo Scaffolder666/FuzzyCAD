@@ -1,6 +1,11 @@
 import * as THREE from "three";
 import { LineSegments2 } from "three/addons/lines/LineSegments2.js";
-import { cloneObjectForPreview, disposeMaterial } from "./axialStretchPreview";
+import {
+  cloneObjectForPreview,
+  disposeMaterial,
+  PREVIEW_LINE_COLOR,
+  RESOLVED_PREVIEW_LINE_COLOR,
+} from "./axialStretchPreview";
 import { findObjectsByPathKeys, rotateObjectsAroundWorldAxis } from "./manipulation";
 
 /** Structurally the same shape as document.ts's RotateAxisDirection. */
@@ -47,11 +52,13 @@ export function createRotatePreviewSession(
   pivotWorld: THREE.Vector3,
   axisWorld: THREE.Vector3,
   followPathKeys: string[] = [],
+  status: "open" | "resolved" = "open",
 ): RotatePreviewSession | null {
   const group = new THREE.Group();
   group.name = "FuzzyCAD Rotate Preview";
   group.userData.fuzzycadPreview = true;
 
+  const color = status === "resolved" ? RESOLVED_PREVIEW_LINE_COLOR : PREVIEW_LINE_COLOR;
   const clones: RotateClone[] = [];
 
   for (const key of [pathKey, ...followPathKeys]) {
@@ -61,7 +68,7 @@ export function createRotatePreviewSession(
       continue;
     }
 
-    const clone = cloneObjectForPreview(scene, original, "rotate");
+    const clone = cloneObjectForPreview(scene, original, "rotate", color);
 
     group.add(clone);
 

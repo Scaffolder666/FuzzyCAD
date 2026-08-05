@@ -178,6 +178,7 @@ export function cloneObjectForPreview(
   scene: THREE.Object3D,
   original: THREE.Object3D,
   role: PreviewRole,
+  color: number = PREVIEW_LINE_COLOR,
 ) {
   scene.updateMatrixWorld(true);
   original.updateMatrixWorld(true);
@@ -190,7 +191,7 @@ export function cloneObjectForPreview(
 
   localMatrix.decompose(clone.position, clone.quaternion, clone.scale);
 
-  const previewColor = PREVIEW_LINE_COLOR;
+  const previewColor = color;
 
   clone.traverse((object) => {
     object.userData = {
@@ -223,7 +224,7 @@ export function cloneObjectForPreview(
   // Add them after traversal, otherwise the newly added LineSegments2 children
   // can be traversed again and create an infinite recursion.
   for (const mesh of collectMeshes(clone)) {
-    addWideDashedOverlay(mesh);
+    addWideDashedOverlay(mesh, previewColor);
   }
 
   clone.matrixWorldNeedsUpdate = true;
@@ -233,9 +234,19 @@ export function cloneObjectForPreview(
 
 export const PREVIEW_LINE_COLOR = 0x64748b;
 
-function createWideDashedMaterial() {
+/**
+ * Resolved (accepted, not yet pushed) marks use this instead of
+ * PREVIEW_LINE_COLOR — same blue as the sidebar's "current value" accent
+ * — so a ghost that's been accepted visually reads as "locked in" rather
+ * than "still just proposed," and stays visible instead of disappearing
+ * once accepted (toMovePreviews/toScalePreviews/etc. now render both
+ * open and resolved marks; this is the only thing that tells them apart).
+ */
+export const RESOLVED_PREVIEW_LINE_COLOR = 0x2b6cff;
+
+function createWideDashedMaterial(color: number) {
   return new LineMaterial({
-    color: PREVIEW_LINE_COLOR,
+    color,
     linewidth: 1.6,
     dashed: true,
     dashSize: 7,
@@ -271,9 +282,12 @@ function createWideDashedGeometry(mesh: THREE.Mesh) {
   return geometry;
 }
 
-export function addWideDashedOverlay(mesh: THREE.Mesh) {
+export function addWideDashedOverlay(
+  mesh: THREE.Mesh,
+  color: number = PREVIEW_LINE_COLOR,
+) {
   const geometry = createWideDashedGeometry(mesh);
-  const material = createWideDashedMaterial();
+  const material = createWideDashedMaterial(color);
   const line = new LineSegments2(geometry, material);
 
   line.name = "FuzzyCAD Wide Dashed Preview Edges";

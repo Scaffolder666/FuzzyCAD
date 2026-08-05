@@ -1,7 +1,12 @@
 import * as THREE from "three";
 import { LineSegments2 } from "three/addons/lines/LineSegments2.js";
 import type { AxialStretchObjectSummary } from "../../lib/operations/axialStretchTypes";
-import { cloneObjectForPreview, disposeMaterial } from "./axialStretchPreview";
+import {
+  cloneObjectForPreview,
+  disposeMaterial,
+  PREVIEW_LINE_COLOR,
+  RESOLVED_PREVIEW_LINE_COLOR,
+} from "./axialStretchPreview";
 import { findObjectsByPathKeys, scaleObjectsAroundWorldPivot } from "./manipulation";
 
 type ScaleClone = {
@@ -33,6 +38,7 @@ export function createScalePreviewSession(
   objectSummaries: AxialStretchObjectSummary[],
   pathKey: string,
   followPathKeys: string[] = [],
+  status: "open" | "resolved" = "open",
 ): ScalePreviewSession | null {
   const allPathKeys = [pathKey, ...followPathKeys];
   const summaries = allPathKeys
@@ -62,6 +68,7 @@ export function createScalePreviewSession(
   group.name = "FuzzyCAD Scale Preview";
   group.userData.fuzzycadPreview = true;
 
+  const color = status === "resolved" ? RESOLVED_PREVIEW_LINE_COLOR : PREVIEW_LINE_COLOR;
   const clones: ScaleClone[] = [];
 
   for (const key of allPathKeys) {
@@ -71,7 +78,7 @@ export function createScalePreviewSession(
       continue;
     }
 
-    const clone = cloneObjectForPreview(scene, original, "scale");
+    const clone = cloneObjectForPreview(scene, original, "scale", color);
 
     group.add(clone);
 

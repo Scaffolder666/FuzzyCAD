@@ -773,21 +773,30 @@ export type MovePreview = {
   pathKey: string;
   followPathKeys: string[];
   deltaWorld: [number, number, number];
+  status: "open" | "resolved";
 };
 
-/** Open moves, for the 3D viewer to render as a persistent ghost. */
+/**
+ * Open AND resolved moves, for the 3D viewer to render as a persistent
+ * ghost. Resolved marks stay visible (in a different color, see
+ * RESOLVED_PREVIEW_LINE_COLOR) until actually pushed — previously only
+ * "open" rendered, so accepting a mark made its ghost vanish and the
+ * object appear to snap back to its original size/position instead of
+ * staying changed.
+ */
 export function toMovePreviews(
   document: FuzzyCADUncertaintyDocument,
 ): MovePreview[] {
   return document.annotations
     .filter(
       (annotation): annotation is MoveUncertaintyAnnotation =>
-        annotation.type === "move" && annotation.status === "open",
+        annotation.type === "move",
     )
     .map((annotation) => ({
       pathKey: annotation.target.referencePathKey,
       followPathKeys: annotation.followPathKeys,
       deltaWorld: annotation.deltaWorld,
+      status: annotation.status,
     }));
 }
 
@@ -883,21 +892,23 @@ export type ScalePreview = {
   pathKey: string;
   followPathKeys: string[];
   factor: number;
+  status: "open" | "resolved";
 };
 
-/** Open scale proposals, for the 3D viewer to render as a persistent ghost. */
+/** Open AND resolved scale proposals, for the 3D viewer to render as a persistent ghost (see toMovePreviews' comment for why resolved is included). */
 export function toScalePreviews(
   document: FuzzyCADUncertaintyDocument,
 ): ScalePreview[] {
   return document.annotations
     .filter(
       (annotation): annotation is ScaleUncertaintyAnnotation =>
-        annotation.type === "scale" && annotation.status === "open",
+        annotation.type === "scale",
     )
     .map((annotation) => ({
       pathKey: annotation.target.referencePathKey,
       followPathKeys: annotation.followPathKeys,
       factor: annotation.factor,
+      status: annotation.status,
     }));
 }
 
@@ -1235,16 +1246,17 @@ export type RotatePreview = {
   pivotWorld: [number, number, number] | null;
   axisVectorWorld: [number, number, number] | null;
   angleRad: number;
+  status: "open" | "resolved";
 };
 
-/** Open rotate proposals, for the 3D viewer to render as a persistent ghost. */
+/** Open AND resolved rotate proposals, for the 3D viewer to render as a persistent ghost (see toMovePreviews' comment for why resolved is included). */
 export function toRotatePreviews(
   document: FuzzyCADUncertaintyDocument,
 ): RotatePreview[] {
   return document.annotations
     .filter(
       (annotation): annotation is RotateUncertaintyAnnotation =>
-        annotation.type === "rotate" && annotation.status === "open",
+        annotation.type === "rotate",
     )
     .map((annotation) => ({
       pathKey: annotation.target.referencePathKey,
@@ -1255,6 +1267,7 @@ export function toRotatePreviews(
       pivotWorld: annotation.pivotWorld,
       axisVectorWorld: annotation.axisVectorWorld,
       angleRad: annotation.angleRad,
+      status: annotation.status,
     }));
 }
 
@@ -1347,21 +1360,23 @@ export type BendPreview = {
   pathKey: string;
   axisDirection: BendAxisDirection;
   controlPointOffsetsMeters: number[];
+  status: "open" | "resolved";
 };
 
-/** Open bend proposals, for the 3D viewer to render as a persistent ghost. */
+/** Open AND resolved bend proposals, for the 3D viewer to render as a persistent ghost (see toMovePreviews' comment for why resolved is included). */
 export function toBendPreviews(
   document: FuzzyCADUncertaintyDocument,
 ): BendPreview[] {
   return document.annotations
     .filter(
       (annotation): annotation is BendUncertaintyAnnotation =>
-        annotation.type === "bend" && annotation.status === "open",
+        annotation.type === "bend",
     )
     .map((annotation) => ({
       pathKey: annotation.target.referencePathKey,
       axisDirection: annotation.axisDirection,
       controlPointOffsetsMeters: annotation.controlPointOffsetsMeters,
+      status: annotation.status,
     }));
 }
 

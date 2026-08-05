@@ -155,6 +155,7 @@ export type MovePreview = {
   pathKey: string;
   followPathKeys: string[];
   deltaWorld: [number, number, number];
+  status: "open" | "resolved";
 };
 
 /** A single-object-plus-followers plan for the "Scale" tool's active drag session. */
@@ -168,6 +169,7 @@ export type ScalePreview = {
   pathKey: string;
   followPathKeys: string[];
   factor: number;
+  status: "open" | "resolved";
 };
 
 /** Which of the object's or a custom point's coordinate frame the Rotate axis comes from — structurally the same as document.ts's RotateAxisMode. */
@@ -199,6 +201,7 @@ export type RotatePreview = {
   pivotWorld: [number, number, number] | null;
   axisVectorWorld: [number, number, number] | null;
   angleRad: number;
+  status: "open" | "resolved";
 };
 
 /** A plan for the "Bend" tool's active drag session — single object, no followers. */
@@ -212,6 +215,7 @@ export type BendPreview = {
   pathKey: string;
   axisDirection: BendAxisDirection;
   controlPointOffsetsMeters: number[];
+  status: "open" | "resolved";
 };
 
 /** Structurally the same shape as document.ts's MoveQuestionAxisDirection — reuses RotateAxisDirection's runtime unit-vector helper since both are just world x/y/z. */
@@ -1612,10 +1616,11 @@ function Model({
   useEffect(() => {
     const entries = persistentMovePreviews
       .map((preview) => {
-        const session = createMoveTranslatePreviewSession(scene, [
-          preview.pathKey,
-          ...preview.followPathKeys,
-        ]);
+        const session = createMoveTranslatePreviewSession(
+          scene,
+          [preview.pathKey, ...preview.followPathKeys],
+          preview.status,
+        );
 
         if (!session) {
           return null;
@@ -1845,6 +1850,7 @@ function Model({
           objectSummaries,
           preview.pathKey,
           preview.followPathKeys,
+          preview.status,
         );
 
         if (!session) {
@@ -2201,6 +2207,7 @@ function Model({
           frame.pivotWorld,
           frame.axisWorld,
           preview.followPathKeys,
+          preview.status,
         );
 
         if (!session) {
@@ -2483,6 +2490,7 @@ function Model({
           objectSummaries,
           preview.pathKey,
           preview.axisDirection,
+          preview.status,
         );
 
         if (!session) {
