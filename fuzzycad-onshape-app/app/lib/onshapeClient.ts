@@ -289,6 +289,19 @@ export async function uploadOnshapeImportStep(
   });
 }
 
+export async function deleteOnshapeElement(
+  query: DocumentQuery & { elementId: string },
+): Promise<ApiResult> {
+  const params = makeDocumentParams(query);
+  params.set("elementId", query.elementId);
+
+  const res = await fetch(`/api/onshape/element?${params.toString()}`, {
+    method: "DELETE",
+  });
+
+  return res.json() as Promise<ApiResult>;
+}
+
 export async function fetchOnshapeAssemblyZipManifest(
   query: AssemblyQuery,
 ): Promise<ApiResult> {

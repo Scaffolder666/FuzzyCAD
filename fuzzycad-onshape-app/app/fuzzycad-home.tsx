@@ -35,6 +35,7 @@ import {
   loadFuzzycadProjectState,
   saveFuzzycadProject,
   uploadOnshapeImportStep,
+  deleteOnshapeElement,
 } from "./lib/onshapeClient";
 import { computeExternalGeometryDeltas } from "./lib/operations/resolveExternalGeometryDeltas";
 import type { OperationTool } from "./lib/operations/types";
@@ -1948,6 +1949,33 @@ async function pushAcceptedChangesToOnshape() {
     }
 
     console.log("Pushed accepted changes to Onshape as a new element:", importData);
+
+    // "Replace" (not just "add") — delete the original Part Studio now
+    // that its edited replacement has landed. Only attempted AFTER the
+    // import above is confirmed to have succeeded, never before: losing
+    // the original before its replacement exists would be unrecoverable
+    // if the import had failed instead.
+    const deleteResult = await deleteOnshapeElement({
+      documentId,
+      workspaceId,
+      server,
+      elementId: selectedPartStudioId,
+    });
+
+    if (!deleteResult.ok) {
+      console.error("Failed to delete the original Part Studio after pushing:", deleteResult);
+      setPushBlockedSummary((prev) => [
+        ...(prev ?? []),
+        `The edited version imported fine, but the original Part Studio couldn't be deleted automatically — remove it by hand in Onshape. (${JSON.stringify(deleteResult)})`,
+      ]);
+    } else {
+      // The selected Part Studio no longer exists — drop it and refresh
+      // the element list so the sidebar reflects reality (old gone, new
+      // sibling present) instead of pointing at a dead elementId.
+      setSelectedPartStudioId("");
+      resetGeometryState();
+      await loadElements({ force: true });
+    }
 
     // Only delete an annotation once EVERY pathKey it touches actually
     // succeeded — a partially-applied group edit should stay visible as
