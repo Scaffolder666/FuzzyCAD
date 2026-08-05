@@ -34,6 +34,7 @@ import {
   type OnshapeElement,
   loadFuzzycadProjectState,
   saveFuzzycadProject,
+  uploadOnshapeImportStep,
 } from "./lib/onshapeClient";
 import { computeExternalGeometryDeltas } from "./lib/operations/resolveExternalGeometryDeltas";
 import type { OperationTool } from "./lib/operations/types";
@@ -76,6 +77,7 @@ import { useUncertaintyDocument } from "./hooks/useUncertaintyDocument";
 import { buildFuzzyCADProjectState } from "./lib/fuzzycad/projectState";
 import { exportAnnotatedSelectionStl } from "./lib/fuzzycad/exportAnnotatedSelectionStl";
 import { useBrepGhostSource } from "./lib/occt/useBrepGhostSource";
+import { getOcctClient } from "./lib/occt/occtClient";
 import { useFuzzyMarkAppearance } from "./hooks/useFuzzyMarkAppearance";
 
 const FuzzyCADGeometryViewer = dynamic(
@@ -1086,6 +1088,9 @@ export default function FuzzyCADHome() {
         workspaceId,
         partStudioElementId: selectedPartStudioId,
         server,
+      }).catch(() => {
+        // Best-effort background upgrade — brepGhostSource.error already
+        // surfaces the failure reactively; nothing else to do here.
       });
     }
 
@@ -1384,6 +1389,9 @@ export default function FuzzyCADHome() {
         workspaceId,
         partStudioElementId: selectedPartStudioId,
         server,
+      }).catch(() => {
+        // Best-effort background upgrade — brepGhostSource.error already
+        // surfaces the failure reactively; nothing else to do here.
       });
     }
   }
@@ -1430,6 +1438,9 @@ export default function FuzzyCADHome() {
         workspaceId,
         partStudioElementId: selectedPartStudioId,
         server,
+      }).catch(() => {
+        // Best-effort background upgrade — brepGhostSource.error already
+        // surfaces the failure reactively; nothing else to do here.
       });
     }
   }
@@ -1760,17 +1771,197 @@ async function saveProjectStateToOnshape() {
 }
 
 /**
- * Track 1 of the B-rep write-back plan (occurrence transforms) only made
- * sense for an Assembly's occurrence layer, which a Part Studio doesn't
- * have — every part's exported geometry is already in its final position,
- * there's nothing to "transform." Disconnected pending Phase 6/7's
- * STEP-based replacement (translateSolid/rotateSolid -> export STEP ->
- * uploadOnshapeImportStep), see /root/.claude/plans/memoized-purring-koala.md.
+ * Phase 7 of the Part Studio migration: turns every resolved (accepted)
+ * Move / answered MoveQuestion / custom-axis Rotate mark into a real edit
+ * of the actual B-rep, via the same OCCT worker the ghost previews
+ * already use — translateSolid/rotateSolid/scaleSolid with commit=true
+ * instead of the preview path's commit=false — then exports the whole
+ * Part Studio's solids (edited + untouched) as one STEP file and imports
+ * it back into Onshape as a new sibling element
+ * (uploadOnshapeImportStep). Replaces Track 1's /occurrencetransforms
+ * approach, which has no equivalent in a Part Studio.
+ *
+ * Each operation is tried once with commit=false first to read OCCT's
+ * own validity verdict — occtWorker.ts's commit path persists the
+ * transformed shape into shapeStore even when invalid, so committing
+ * blind on the first try risks corrupting that handle's state for every
+ * op after it (and for the final export). Only a valid preview gets a
+ * second, committing call.
  */
 async function pushAcceptedChangesToOnshape() {
-  console.warn(
-    "pushAcceptedChangesToOnshape: disabled during the Part Studio migration — STEP-based write-back (Phase 7) isn't wired up yet.",
-  );
+  if (!documentId || !workspaceId || !selectedPartStudioId) {
+    console.warn("Missing documentId, workspaceId, or selectedPartStudioId");
+    return;
+  }
+
+  if (pushingAcceptedChanges) {
+    return;
+  }
+
+  setPushingAcceptedChanges(true);
+  setPushBlockedSummary(null);
+
+  try {
+    const deltas = mergeRigidDeltaMaps([
+      computeAllFinalOccurrenceDeltas(uncertaintyDocumentWithCurrentSource),
+      computeExternalGeometryDeltas(uncertaintyDocumentWithCurrentSource, objectSummaries),
+    ]);
+
+    if (deltas.size === 0) {
+      return;
+    }
+
+    // Which annotation touches which pathKeys (== partIds here), across
+    // ALL deltas — needed below to only delete an annotation once EVERY
+    // part it affects actually landed in the exported STEP, not just some.
+    const annotationPathKeys = new Map<string, Set<string>>();
+    for (const [pathKey, delta] of deltas) {
+      for (const id of delta.sourceAnnotationIds) {
+        if (!annotationPathKeys.has(id)) {
+          annotationPathKeys.set(id, new Set());
+        }
+        annotationPathKeys.get(id)!.add(pathKey);
+      }
+    }
+
+    const describePart = (pathKey: string) =>
+      partList.find((part) => part.partId === pathKey)?.name ?? pathKey;
+
+    try {
+      await brepGhostSource.ensureLoaded({
+        documentId,
+        workspaceId,
+        partStudioElementId: selectedPartStudioId,
+        server,
+      });
+    } catch (err) {
+      setPushBlockedSummary([
+        `Couldn't load B-rep data for this Part Studio: ${err instanceof Error ? err.message : String(err)}`,
+      ]);
+      return;
+    }
+
+    const client = getOcctClient();
+    const blockedLines: string[] = [];
+    const succeededPathKeys = new Set<string>();
+
+    for (const [pathKey, delta] of deltas) {
+      const handle = brepGhostSource.getHandle(pathKey);
+
+      if (handle === null) {
+        blockedLines.push(`${describePart(pathKey)} — no matching B-rep solid found`);
+        continue;
+      }
+
+      let failed = false;
+
+      for (const rotation of delta.rotations) {
+        const pivotMm: [number, number, number] = [
+          rotation.pivotWorld[0] * 1000,
+          rotation.pivotWorld[1] * 1000,
+          rotation.pivotWorld[2] * 1000,
+        ];
+
+        const preview = await client.rotateSolid(
+          handle,
+          pivotMm,
+          rotation.axisWorld,
+          rotation.angleRad,
+          false,
+        );
+
+        if (!preview.valid) {
+          failed = true;
+          break;
+        }
+
+        await client.rotateSolid(handle, pivotMm, rotation.axisWorld, rotation.angleRad, true);
+      }
+
+      if (!failed) {
+        for (const scale of delta.scales) {
+          const pivotMm: [number, number, number] = [
+            scale.pivotWorld[0] * 1000,
+            scale.pivotWorld[1] * 1000,
+            scale.pivotWorld[2] * 1000,
+          ];
+
+          const preview = await client.scaleSolid(handle, pivotMm, scale.factor, false);
+
+          if (!preview.valid) {
+            failed = true;
+            break;
+          }
+
+          await client.scaleSolid(handle, pivotMm, scale.factor, true);
+        }
+      }
+
+      const hasTranslation = delta.translationWorld.some((component) => component !== 0);
+
+      if (!failed && hasTranslation) {
+        const deltaMm: [number, number, number] = [
+          delta.translationWorld[0] * 1000,
+          delta.translationWorld[1] * 1000,
+          delta.translationWorld[2] * 1000,
+        ];
+
+        const preview = await client.translateSolid(handle, deltaMm, false);
+
+        if (!preview.valid) {
+          failed = true;
+        } else {
+          await client.translateSolid(handle, deltaMm, true);
+        }
+      }
+
+      if (failed) {
+        blockedLines.push(
+          `${describePart(pathKey)} — resulting geometry failed OCCT's validity check`,
+        );
+        continue;
+      }
+
+      succeededPathKeys.add(pathKey);
+    }
+
+    if (blockedLines.length > 0) {
+      console.warn("Skipped by the last push:", blockedLines);
+      setPushBlockedSummary(blockedLines);
+    }
+
+    if (succeededPathKeys.size === 0) {
+      return;
+    }
+
+    const stepBuffer = await client.exportAssemblyStep();
+    const importRes = await uploadOnshapeImportStep({ documentId, workspaceId, server }, stepBuffer);
+    const importData = (await importRes.json()) as { ok?: boolean; [key: string]: unknown };
+
+    if (!importRes.ok || !importData.ok) {
+      console.error("Push accepted changes failed to import back into Onshape:", importData);
+      setPushBlockedSummary((prev) => [
+        ...(prev ?? []),
+        `Edited geometry didn't import back into Onshape: ${JSON.stringify(importData)}`,
+      ]);
+      return;
+    }
+
+    console.log("Pushed accepted changes to Onshape as a new element:", importData);
+
+    // Only delete an annotation once EVERY pathKey it touches actually
+    // succeeded — a partially-applied group edit should stay visible as
+    // open work, not silently disappear.
+    for (const [id, pathKeys] of annotationPathKeys) {
+      const allSucceeded = Array.from(pathKeys).every((pathKey) => succeededPathKeys.has(pathKey));
+
+      if (allSucceeded) {
+        deleteAnnotation(id);
+      }
+    }
+  } finally {
+    setPushingAcceptedChanges(false);
+  }
 }
 
 // Fills in fields that were added to the schema after some annotations were

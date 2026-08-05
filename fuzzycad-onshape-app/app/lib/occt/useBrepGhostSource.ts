@@ -124,6 +124,12 @@ export function useBrepGhostSource() {
         statusRef.current = "error";
         setError(err instanceof Error ? err.message : String(err));
         setStatus("error");
+        // Rethrow (not swallowed) so a caller that awaits ensureLoaded()
+        // directly — e.g. the STEP write-back push, which needs to know
+        // synchronously within its own call whether B-rep data is usable —
+        // gets a rejection instead of having to poll the `status` state,
+        // which reflects a stale value inside that caller's own closure.
+        throw err instanceof Error ? err : new Error(String(err));
       } finally {
         loadingPromiseRef.current = null;
       }
