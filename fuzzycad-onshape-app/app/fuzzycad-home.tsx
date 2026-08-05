@@ -724,13 +724,24 @@ export default function FuzzyCADHome() {
     setElementsResult(data);
 
     if (data.ok && isElementArray(data.data)) {
-      const firstPartStudio = data.data.find(
+      const partStudios = data.data.filter(
         (element) => element.elementType === "PARTSTUDIO",
       );
 
-      if (firstPartStudio) {
-        setSelectedPartStudioId(firstPartStudio.id);
-      }
+      // Only auto-pick a Part Studio when there's no valid selection to
+      // preserve — either nothing selected yet, or the previously selected
+      // id no longer exists in this fresh list (e.g. it was deleted).
+      // Unconditionally overwriting here was a latent bug: any future
+      // caller of loadElements() after the user had already picked a
+      // Part Studio would silently snap the selection back to "the first
+      // one in the list" out from under them.
+      setSelectedPartStudioId((current) => {
+        if (current && partStudios.some((element) => element.id === current)) {
+          return current;
+        }
+
+        return partStudios[0]?.id ?? current;
+      });
     }
   }
 
