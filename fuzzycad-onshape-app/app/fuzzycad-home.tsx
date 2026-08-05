@@ -1809,19 +1809,8 @@ async function pushAcceptedChangesToOnshape() {
     ]);
 
     if (deltas.size === 0) {
-      console.log("[FuzzyCAD] push: no resolved (accepted) Move/Scale/Rotate/Distance marks to push.");
       return;
     }
-
-    console.log(
-      `[FuzzyCAD] push: ${deltas.size} part(s) with a resolved delta —`,
-      Array.from(deltas.entries()).map(([pathKey, delta]) => ({
-        pathKey,
-        translation: delta.translationWorld.some((c) => c !== 0),
-        rotations: delta.rotations.length,
-        scales: delta.scales.length,
-      })),
-    );
 
     // Which annotation touches which pathKeys (== partIds here), across
     // ALL deltas — needed below to only delete an annotation once EVERY
@@ -1839,8 +1828,6 @@ async function pushAcceptedChangesToOnshape() {
     const describePart = (pathKey: string) =>
       partList.find((part) => part.partId === pathKey)?.name ?? pathKey;
 
-    console.log("[FuzzyCAD] push: loading Part Studio part list + STEP export + bounding boxes...");
-
     try {
       await brepGhostSource.ensureLoaded({
         documentId,
@@ -1848,9 +1835,7 @@ async function pushAcceptedChangesToOnshape() {
         partStudioElementId: selectedPartStudioId,
         server,
       });
-      console.log("[FuzzyCAD] push: B-rep data ready (partId -> OCCT handle binding complete).");
     } catch (err) {
-      console.error("[FuzzyCAD] push: failed loading B-rep data:", err);
       setPushBlockedSummary([
         `Couldn't load B-rep data for this Part Studio: ${err instanceof Error ? err.message : String(err)}`,
       ]);
@@ -1865,12 +1850,9 @@ async function pushAcceptedChangesToOnshape() {
       const handle = brepGhostSource.getHandle(pathKey);
 
       if (handle === null) {
-        console.warn(`[FuzzyCAD] push: ${describePart(pathKey)} (${pathKey}) — no bbox-bound B-rep handle, skipping.`);
         blockedLines.push(`${describePart(pathKey)} — no matching B-rep solid found`);
         continue;
       }
-
-      console.log(`[FuzzyCAD] push: applying delta to ${describePart(pathKey)} (${pathKey}), handle ${handle}...`);
 
       let failed = false;
 
@@ -1890,13 +1872,11 @@ async function pushAcceptedChangesToOnshape() {
         );
 
         if (!preview.valid) {
-          console.warn(`[FuzzyCAD] push: ${describePart(pathKey)} — rotation produced invalid geometry, skipping this part.`);
           failed = true;
           break;
         }
 
         await client.rotateSolid(handle, pivotMm, rotation.axisWorld, rotation.angleRad, true);
-        console.log(`[FuzzyCAD] push: ${describePart(pathKey)} — rotation committed (${rotation.angleRad.toFixed(3)} rad).`);
       }
 
       if (!failed) {
@@ -1910,13 +1890,11 @@ async function pushAcceptedChangesToOnshape() {
           const preview = await client.scaleSolid(handle, pivotMm, scale.factor, false);
 
           if (!preview.valid) {
-            console.warn(`[FuzzyCAD] push: ${describePart(pathKey)} — scale produced invalid geometry, skipping this part.`);
             failed = true;
             break;
           }
 
           await client.scaleSolid(handle, pivotMm, scale.factor, true);
-          console.log(`[FuzzyCAD] push: ${describePart(pathKey)} — scale committed (factor ${scale.factor.toFixed(4)}).`);
         }
       }
 
@@ -1932,11 +1910,9 @@ async function pushAcceptedChangesToOnshape() {
         const preview = await client.translateSolid(handle, deltaMm, false);
 
         if (!preview.valid) {
-          console.warn(`[FuzzyCAD] push: ${describePart(pathKey)} — translation produced invalid geometry, skipping this part.`);
           failed = true;
         } else {
           await client.translateSolid(handle, deltaMm, true);
-          console.log(`[FuzzyCAD] push: ${describePart(pathKey)} — translation committed.`);
         }
       }
 
@@ -1947,8 +1923,6 @@ async function pushAcceptedChangesToOnshape() {
         continue;
       }
 
-      console.log(`[FuzzyCAD] push: ${describePart(pathKey)} — all edits committed successfully.`);
-
       succeededPathKeys.add(pathKey);
     }
 
@@ -1958,20 +1932,15 @@ async function pushAcceptedChangesToOnshape() {
     }
 
     if (succeededPathKeys.size === 0) {
-      console.warn("[FuzzyCAD] push: nothing succeeded, nothing to export/import.");
       return;
     }
 
-    console.log(`[FuzzyCAD] push: ${succeededPathKeys.size} part(s) edited, exporting the whole Part Studio as STEP...`);
-
     const stepBuffer = await client.exportAssemblyStep();
-    console.log(`[FuzzyCAD] push: STEP export is ${stepBuffer.byteLength} bytes, importing into Onshape...`);
-
     const importRes = await uploadOnshapeImportStep({ documentId, workspaceId, server }, stepBuffer);
     const importData = (await importRes.json()) as { ok?: boolean; [key: string]: unknown };
 
     if (!importRes.ok || !importData.ok) {
-      console.error("[FuzzyCAD] push: import back into Onshape FAILED:", importData);
+      console.error("Push accepted changes failed to import back into Onshape:", importData);
       setPushBlockedSummary((prev) => [
         ...(prev ?? []),
         `Edited geometry didn't import back into Onshape: ${JSON.stringify(importData)}`,
@@ -1979,7 +1948,7 @@ async function pushAcceptedChangesToOnshape() {
       return;
     }
 
-    console.log("[FuzzyCAD] push: import succeeded — new element created:", importData);
+    console.log("Pushed accepted changes to Onshape as a new element:", importData);
 
     // "Replace" (not just "add") — delete the original Part Studio now
     // that its edited replacement has landed. Only attempted AFTER the
@@ -2000,7 +1969,6 @@ async function pushAcceptedChangesToOnshape() {
         `The edited version imported fine, but the original Part Studio couldn't be deleted automatically — remove it by hand in Onshape. (${JSON.stringify(deleteResult)})`,
       ]);
     } else {
-      console.log("[FuzzyCAD] push: original Part Studio deleted — replace complete.");
       // The selected Part Studio no longer exists — drop it and refresh
       // the element list so the sidebar reflects reality (old gone, new
       // sibling present) instead of pointing at a dead elementId.
