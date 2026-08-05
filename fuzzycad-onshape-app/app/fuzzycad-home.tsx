@@ -28,9 +28,9 @@ import {
   fetchFuzzycadAssemblySummary,
   fetchFuzzycadRelationshipGraph,
   fetchOnshapeAssembly,
-  fetchOnshapeAssemblyGltf,
   fetchOnshapeAssemblyZipManifest,
   fetchOnshapeElements,
+  fetchOnshapePartStudioGltf,
   type ApiResult,
   type OnshapeElement,
   loadFuzzycadProjectState,
@@ -150,7 +150,7 @@ export default function FuzzyCADHome() {
   const [relationshipGraphResult, setRelationshipGraphResult] =
     useState<ApiResult | null>(null);
 
-  const [selectedAssemblyId, setSelectedAssemblyId] = useState<string>("");
+  const [selectedPartStudioId, setSelectedPartStudioId] = useState<string>("");
 
   const [gltfUrl, setGltfUrl] = useState<string | null>(null);
   const [geometryLoadResult, setGeometryLoadResult] =
@@ -389,10 +389,10 @@ export default function FuzzyCADHome() {
       documentId,
       workspaceId,
       elementId,
-      assemblyElementId: selectedAssemblyId || null,
+      assemblyElementId: selectedPartStudioId || null,
       server,
     }),
-    [documentId, workspaceId, elementId, selectedAssemblyId, server],
+    [documentId, workspaceId, elementId, selectedPartStudioId, server],
   );
 
   const {
@@ -466,14 +466,14 @@ export default function FuzzyCADHome() {
     return ids.size;
   }, [uncertaintyDocumentWithCurrentSource, objectSummaries]);
 
-  const assemblyElements = useMemo(() => {
+  const partStudioElements = useMemo(() => {
     const data = elementsResult?.data;
 
     if (!isElementArray(data)) {
       return [];
     }
 
-    return data.filter((element) => element.elementType === "ASSEMBLY");
+    return data.filter((element) => element.elementType === "PARTSTUDIO");
   }, [elementsResult]);
 
   const selectedObjectSummary = useMemo(() => {
@@ -644,13 +644,13 @@ export default function FuzzyCADHome() {
     }
   }
 
-  async function loadAssemblyGeometry(options: LoadOptions = {}) {
+  async function loadPartStudioGeometry(options: LoadOptions = {}) {
     resetGeometryState();
 
-    const res = await fetchOnshapeAssemblyGltf({
+    const res = await fetchOnshapePartStudioGltf({
       documentId: documentId || "",
       workspaceId: workspaceId || "",
-      assemblyElementId: selectedAssemblyId,
+      partStudioElementId: selectedPartStudioId,
       server,
       force: options.force,
     });
@@ -695,7 +695,7 @@ export default function FuzzyCADHome() {
     const data = await fetchOnshapeAssemblyZipManifest({
       documentId: documentId || "",
       workspaceId: workspaceId || "",
-      assemblyElementId: selectedAssemblyId,
+      assemblyElementId: selectedPartStudioId,
       server,
       force: options.force,
     });
@@ -714,12 +714,12 @@ export default function FuzzyCADHome() {
     setElementsResult(data);
 
     if (data.ok && isElementArray(data.data)) {
-      const firstAssembly = data.data.find(
-        (element) => element.elementType === "ASSEMBLY",
+      const firstPartStudio = data.data.find(
+        (element) => element.elementType === "PARTSTUDIO",
       );
 
-      if (firstAssembly) {
-        setSelectedAssemblyId(firstAssembly.id);
+      if (firstPartStudio) {
+        setSelectedPartStudioId(firstPartStudio.id);
       }
     }
   }
@@ -728,7 +728,7 @@ export default function FuzzyCADHome() {
     const data = await fetchOnshapeAssembly({
       documentId: documentId || "",
       workspaceId: workspaceId || "",
-      assemblyElementId: selectedAssemblyId,
+      assemblyElementId: selectedPartStudioId,
       server,
       force: options.force,
     });
@@ -740,7 +740,7 @@ export default function FuzzyCADHome() {
     const data = await fetchFuzzycadAssemblySummary({
       documentId: documentId || "",
       workspaceId: workspaceId || "",
-      assemblyElementId: selectedAssemblyId,
+      assemblyElementId: selectedPartStudioId,
       server,
       force: options.force,
     });
@@ -752,7 +752,7 @@ export default function FuzzyCADHome() {
     const data = await fetchFuzzycadRelationshipGraph({
       documentId: documentId || "",
       workspaceId: workspaceId || "",
-      assemblyElementId: selectedAssemblyId,
+      assemblyElementId: selectedPartStudioId,
       server,
       force: options.force,
     });
@@ -760,16 +760,19 @@ export default function FuzzyCADHome() {
     setRelationshipGraphResult(data);
   }
 
-  async function loadSelectedAssembly() {
-    if (!selectedAssemblyId) {
+  async function loadSelectedPartStudio() {
+    if (!selectedPartStudioId) {
       return;
     }
 
     setBusy(true);
 
     try {
-      await buildRelationshipGraph();
-      await loadAssemblyGeometry();
+      // No buildRelationshipGraph() call here anymore — that builds the
+      // Onshape mate graph, which has no meaning for a Part Studio (see
+      // Phase 5 of the Assembly -> Part Studio migration plan). Part
+      // identity for the loaded geometry is resolved separately (Phase 3).
+      await loadPartStudioGeometry();
       await loadProjectStateFromOnshape();
     } finally {
       setBusy(false);
@@ -1065,11 +1068,11 @@ export default function FuzzyCADHome() {
     // Kick off the (lazy, only-happens-once) B-rep load in the
     // background — the ghost preview upgrades from mesh-clone to
     // geometrically exact automatically once/if it resolves.
-    if (documentId && workspaceId && selectedAssemblyId) {
+    if (documentId && workspaceId && selectedPartStudioId) {
       brepGhostSource.ensureLoaded({
         documentId,
         workspaceId,
-        assemblyElementId: selectedAssemblyId,
+        assemblyElementId: selectedPartStudioId,
         server,
       });
     }
@@ -1363,11 +1366,11 @@ export default function FuzzyCADHome() {
     // Kick off the (lazy, only-happens-once) B-rep load in the
     // background — same as startMove(), the ghost preview upgrades from
     // mesh-clone to geometrically exact automatically once/if it resolves.
-    if (documentId && workspaceId && selectedAssemblyId) {
+    if (documentId && workspaceId && selectedPartStudioId) {
       brepGhostSource.ensureLoaded({
         documentId,
         workspaceId,
-        assemblyElementId: selectedAssemblyId,
+        assemblyElementId: selectedPartStudioId,
         server,
       });
     }
@@ -1409,11 +1412,11 @@ export default function FuzzyCADHome() {
     // Kick off the (lazy, only-happens-once) B-rep load in the
     // background — same as startMove(), the ghost preview upgrades from
     // mesh-clone to geometrically exact automatically once/if it resolves.
-    if (documentId && workspaceId && selectedAssemblyId) {
+    if (documentId && workspaceId && selectedPartStudioId) {
       brepGhostSource.ensureLoaded({
         documentId,
         workspaceId,
-        assemblyElementId: selectedAssemblyId,
+        assemblyElementId: selectedPartStudioId,
         server,
       });
     }
@@ -1754,8 +1757,8 @@ async function saveProjectStateToOnshape() {
  * outright rather than keeping a "handled" bucket around).
  */
 async function pushAcceptedChangesToOnshape() {
-  if (!documentId || !workspaceId || !selectedAssemblyId) {
-    console.warn("Missing documentId, workspaceId, or selectedAssemblyId");
+  if (!documentId || !workspaceId || !selectedPartStudioId) {
+    console.warn("Missing documentId, workspaceId, or selectedPartStudioId");
     return;
   }
 
@@ -1863,7 +1866,7 @@ async function pushAcceptedChangesToOnshape() {
       {
         documentId,
         workspaceId,
-        assemblyElementId: selectedAssemblyId,
+        assemblyElementId: selectedPartStudioId,
         server,
       },
       updates,
@@ -2101,8 +2104,8 @@ if (result.ok && result.state) {
     lastWorldObjectUuidRef.current = uuid;
   }
 
-  function handleAssemblyChange(assemblyId: string) {
-    setSelectedAssemblyId(assemblyId);
+  function handlePartStudioChange(partStudioId: string) {
+    setSelectedPartStudioId(partStudioId);
     resetGeometryState();
     setGeometryZipManifest(null);
   }
@@ -2117,21 +2120,21 @@ if (result.ok && result.state) {
       }
     : null;
 
-  const connected = oauthStatus === "connected" || assemblyElements.length > 0;
+  const connected = oauthStatus === "connected" || partStudioElements.length > 0;
 
   return (
     <main className={styles.root}>
       <FuzzyCADSidebar
         connected={connected}
         connectHref={connectHref}
-        assemblyElements={assemblyElements}
-        selectedAssemblyId={selectedAssemblyId}
+        partStudioElements={partStudioElements}
+        selectedPartStudioId={selectedPartStudioId}
         busy={busy}
         partTree={partTree}
         highlightedPathKey={highlightedPathKey}
         dev={dev}
-        onAssemblyChange={handleAssemblyChange}
-        onLoadAssembly={loadSelectedAssembly}
+        onPartStudioChange={handlePartStudioChange}
+        onLoadPartStudio={loadSelectedPartStudio}
         onSelectPathKey={setHighlightedPathKey}
         onToggleDev={() => {
           setDev((value) => !value);
@@ -2728,7 +2731,7 @@ if (result.ok && result.state) {
       {dev ? (
         <DevPanel
           connectHref={connectHref}
-          selectedAssemblyId={selectedAssemblyId}
+          selectedPartStudioId={selectedPartStudioId}
           graphStats={devGraphStats}
           meshGraph={meshGraph}
           debugResults={[
@@ -2780,7 +2783,7 @@ if (result.ok && result.state) {
           onLoadRawAssembly={loadAssemblyDefinition}
           onLoadSummary={loadAssemblySummary}
           onBuildGraph={buildRelationshipGraph}
-          onLoadGeometry={loadAssemblyGeometry}
+          onLoadGeometry={loadPartStudioGeometry}
           onInspectZip={inspectAssemblyGeometryZip}
         />
       ) : null}
