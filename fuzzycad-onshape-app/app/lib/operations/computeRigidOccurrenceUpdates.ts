@@ -65,46 +65,69 @@ function makeRigidRotationAboutPivot(
 }
 
 /**
- * Scale is NOT a rigid transform — whether Onshape's /occurrencetransforms
- * even accepts a matrix with a non-identity scale component is unverified.
- * Built the same way as a rotation about a pivot (translate to pivot,
- * apply, translate back) so it's ready to test; if Onshape rejects it,
- * Scale needs a different (non-transform) write-back path, or none.
+ * Magnitude of the transform's X-basis column — 1 for a pure rotation,
+ * the (uniform) scale factor otherwise. Confirmed live: Onshape's
+ * /occurrencetransforms rejects any non-rigid matrix outright ("Provided
+ * transform matrix is not a rigid rotation"), even though a GET of the
+ * SAME occurrence can return one with scale already baked in (seen on a
+ * real document — a part whose existing placement had a ~1.19x uniform
+ * scale). So Scale annotations can never produce a pushable result here,
+ * and a part whose CURRENT placement already has non-unit scale can't be
+ * touched by this endpoint at all, even for an unrelated Move/Rotate.
  */
-function makeScaleAboutPivot(
-  factor: number,
-  pivotWorld: [number, number, number],
-): THREE.Matrix4 {
-  const pivot = toOnshapeVector(pivotWorld);
-
-  const scale = new THREE.Matrix4().makeScale(factor, factor, factor);
-
-  return new THREE.Matrix4()
-    .makeTranslation(pivot.x, pivot.y, pivot.z)
-    .multiply(scale)
-    .multiply(new THREE.Matrix4().makeTranslation(-pivot.x, -pivot.y, -pivot.z));
+export function getTransformScale(transform: number[]): number {
+  return Math.hypot(transform[0], transform[4], transform[8]);
 }
+
+const RIGID_SCALE_TOLERANCE = 1e-4;
+
+export type SkippedOccurrenceUpdate = {
+  pathKey: string;
+  reason: "no-placement" | "non-rigid-base" | "scale-unsupported";
+  /** The base transform's existing scale factor, when reason is "non-rigid-base". */
+  baseScale?: number;
+};
 
 /**
  * Given the net rigid deltas per pathKey and each pathKey's CURRENT
  * occurrence transform (from live Onshape placements), builds the
  * absolute transforms to push. Rotations apply in listed order (world
- * space, about their own pivot), then scales (also listed order), then
- * the net translation applies last. Skips pathKeys with no known current
- * placement — can't build an absolute transform without a base to apply
- * the delta to.
+ * space, about their own pivot), then the net translation applies last.
+ *
+ * Skips (rather than sending and letting Onshape reject) any pathKey that
+ * can't produce a rigid result:
+ *  - no known current placement to build an absolute transform from,
+ *  - the CURRENT placement already has non-unit scale baked in (confirmed
+ *    live on a real document — Onshape's own GET can return one even
+ *    though POST rejects it), so touching it at all isn't safe here, or
+ *  - the delta itself includes a Scale — confirmed live that Onshape
+ *    rejects any non-rigid result outright.
  */
 export function computeRigidOccurrenceUpdates(
   deltas: Map<string, ResolvedRigidDelta>,
   placements: PartPlacement[],
-): OccurrenceUpdate[] {
+): { updates: OccurrenceUpdate[]; skipped: SkippedOccurrenceUpdate[] } {
   const placementByPathKey = new Map(placements.map((p) => [p.pathKey, p]));
   const updates: OccurrenceUpdate[] = [];
+  const skipped: SkippedOccurrenceUpdate[] = [];
 
   for (const delta of deltas.values()) {
     const placement = placementByPathKey.get(delta.pathKey);
 
     if (!placement || placement.transform.length !== 16) {
+      skipped.push({ pathKey: delta.pathKey, reason: "no-placement" });
+      continue;
+    }
+
+    if (delta.scales.length > 0) {
+      skipped.push({ pathKey: delta.pathKey, reason: "scale-unsupported" });
+      continue;
+    }
+
+    const baseScale = getTransformScale(placement.transform);
+
+    if (Math.abs(baseScale - 1) > RIGID_SCALE_TOLERANCE) {
+      skipped.push({ pathKey: delta.pathKey, reason: "non-rigid-base", baseScale });
       continue;
     }
 
@@ -117,11 +140,6 @@ export function computeRigidOccurrenceUpdates(
         rotation.pivotWorld,
       );
       matrix = rigidMotion.multiply(matrix);
-    }
-
-    for (const scale of delta.scales) {
-      const scaleMotion = makeScaleAboutPivot(scale.factor, scale.pivotWorld);
-      matrix = scaleMotion.multiply(matrix);
     }
 
     const [dx, dy, dz] = delta.translationWorld;
@@ -142,5 +160,5 @@ export function computeRigidOccurrenceUpdates(
     });
   }
 
-  return updates;
+  return { updates, skipped };
 }

@@ -99,7 +99,7 @@
   opacity: 0.55;
 }
 
-.mateBlockedNote {
+.pushBlockedNote {
   padding: 10px 10px;
   border-radius: 12px;
   border: 1px solid rgba(217, 119, 6, 0.4);
@@ -110,11 +110,11 @@
   margin-bottom: 10px;
 }
 
-.mateBlockedNote strong {
+.pushBlockedNote strong {
   font-weight: 900;
 }
 
-.mateBlockedNote ul {
+.pushBlockedNote ul {
   margin: 4px 0 0;
   padding-left: 16px;
 }

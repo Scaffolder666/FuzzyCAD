@@ -376,7 +376,7 @@ export default function FuzzyCADHome() {
 
   // One line per part skipped on the last push because it's mate-constrained
   // (Onshape's mate solver owns its position — see pushAcceptedChangesToOnshape).
-  const [mateBlockedSummary, setMateBlockedSummary] = useState<string[] | null>(null);
+  const [pushBlockedSummary, setPushBlockedSummary] = useState<string[] | null>(null);
 
   const documentId = params.get("documentId");
   const workspaceId = params.get("workspaceId");
@@ -1764,7 +1764,7 @@ async function pushAcceptedChangesToOnshape() {
   }
 
   setPushingAcceptedChanges(true);
-  setMateBlockedSummary(null);
+  setPushBlockedSummary(null);
 
   try {
     const deltas = mergeRigidDeltaMaps([
@@ -1789,6 +1789,9 @@ async function pushAcceptedChangesToOnshape() {
       }
     }
 
+    const describePart = (pathKey: string) =>
+      partGraph?.byPathKey.get(pathKey)?.instance?.name ?? pathKey;
+
     // A mate-constrained occurrence's position is owned by Onshape's mate
     // solver — trying to set an arbitrary absolute transform on one fails
     // server-side (confirmed live: a 500 "internal error" on a mated part,
@@ -1809,36 +1812,50 @@ async function pushAcceptedChangesToOnshape() {
       }
     }
 
-    if (mateConstrainedPathKeys.size > 0) {
-      const summary = Array.from(mateConstrainedPathKeys).map((pathKey) => {
-        const node = partGraph?.byPathKey.get(pathKey);
-        const partName = node?.instance?.name ?? pathKey;
-        const mateDescriptions = (node?.mateEdges ?? []).map((edge) => {
-          const otherName = partGraph?.byPathKey.get(edge.to)?.instance?.name ?? edge.to;
+    const blockedLines: string[] = [];
+
+    for (const pathKey of mateConstrainedPathKeys) {
+      const mateDescriptions = (partGraph?.byPathKey.get(pathKey)?.mateEdges ?? []).map(
+        (edge) => {
+          const otherName = describePart(edge.to);
           return edge.mateType ? `${edge.mateType} with ${otherName}` : `mated to ${otherName}`;
-        });
-
-        return mateDescriptions.length > 0
-          ? `${partName} — ${mateDescriptions.join(", ")}`
-          : partName;
-      });
-
-      console.warn(
-        "Skipping push for mate-constrained parts — Onshape's mate solver owns their position, so an arbitrary absolute transform isn't valid for them:",
-        summary,
+        },
       );
-      setMateBlockedSummary(summary);
+
+      blockedLines.push(
+        mateDescriptions.length > 0
+          ? `${describePart(pathKey)} — ${mateDescriptions.join(", ")}`
+          : `${describePart(pathKey)} — mate-constrained`,
+      );
     }
 
-    if (pushableDeltas.size === 0) {
-      console.warn("Nothing pushable — every affected part is mate-constrained.");
-      return;
+    // computeRigidOccurrenceUpdates also skips (rather than sending) any
+    // pathKey it can't produce a rigid result for — no known placement, a
+    // Scale delta (confirmed live: Onshape rejects non-rigid transforms
+    // outright), or a current placement that already has non-unit scale
+    // baked in (also confirmed live — Onshape's own GET can return one).
+    const { updates, skipped } = computeRigidOccurrenceUpdates(pushableDeltas, placements);
+
+    for (const item of skipped) {
+      if (item.reason === "no-placement") {
+        blockedLines.push(`${describePart(item.pathKey)} — no current placement data available`);
+      } else if (item.reason === "non-rigid-base") {
+        blockedLines.push(
+          `${describePart(item.pathKey)} — current placement already has a ${item.baseScale?.toFixed(3)}x scale baked in; Onshape's write API rejects non-rigid transforms`,
+        );
+      } else {
+        blockedLines.push(
+          `${describePart(item.pathKey)} — Scale isn't supported by this push (Onshape rejects any non-rigid result)`,
+        );
+      }
     }
 
-    const updates = computeRigidOccurrenceUpdates(pushableDeltas, placements);
+    if (blockedLines.length > 0) {
+      console.warn("Skipped by the last push:", blockedLines);
+      setPushBlockedSummary(blockedLines);
+    }
 
     if (updates.length === 0) {
-      console.warn("No pushable occurrence updates — missing current placements for the affected parts.");
       return;
     }
 
@@ -2570,7 +2587,7 @@ if (result.ok && result.state) {
           onPushAcceptedChanges={() => void pushAcceptedChangesToOnshape()}
           pushingAcceptedChanges={pushingAcceptedChanges}
           pushableChangeCount={pushableChangeCount}
-          mateBlockedSummary={mateBlockedSummary}
+          pushBlockedSummary={pushBlockedSummary}
         />
 
         {heightCandidateOpen ? (
