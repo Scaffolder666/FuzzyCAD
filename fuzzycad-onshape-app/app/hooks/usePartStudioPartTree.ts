@@ -72,16 +72,28 @@ export function usePartStudioPartTree(identity: PartStudioIdentity | null) {
     let cancelled = false;
 
     async function loadParts() {
+      console.log("[FuzzyCAD] partStudioPartTree: effect fired with identity:", {
+        documentId: identity?.documentId,
+        workspaceId: identity?.workspaceId,
+        partStudioElementId: identity?.partStudioElementId,
+        server: identity?.server,
+      });
+
       if (
         !identity?.documentId ||
         !identity?.workspaceId ||
         !identity?.partStudioElementId
       ) {
+        console.log("[FuzzyCAD] partStudioPartTree: incomplete identity, resetting (no fetch).");
         if (!cancelled) {
           resetPartTree();
         }
         return;
       }
+
+      console.log(
+        `[FuzzyCAD] partStudioPartTree: fetching parts for partStudioElementId=${identity.partStudioElementId}...`,
+      );
 
       try {
         const json = await fetchOnshapePartStudioParts({
@@ -92,7 +104,15 @@ export function usePartStudioPartTree(identity: PartStudioIdentity | null) {
         });
 
         if (!json.ok) {
-          console.warn("[FuzzyCAD] partStudioPartTree: part list fetch failed:", json);
+          console.warn(
+            `[FuzzyCAD] partStudioPartTree: part list fetch failed for partStudioElementId=${identity.partStudioElementId}:`,
+            json,
+          );
+        } else {
+          console.log(
+            `[FuzzyCAD] partStudioPartTree: part list fetch OK for partStudioElementId=${identity.partStudioElementId}, raw entries:`,
+            Array.isArray(json.data) ? json.data.length : "not an array",
+          );
         }
 
         const rawData = json?.data ?? json;
@@ -111,8 +131,15 @@ export function usePartStudioPartTree(identity: PartStudioIdentity | null) {
         }
 
         if (cancelled) {
+          console.log(
+            `[FuzzyCAD] partStudioPartTree: fetch for partStudioElementId=${identity.partStudioElementId} completed but was SUPERSEDED by a newer identity before it resolved — discarding ${parts.length} parsed parts. This means an earlier/stale request finished after a later one started.`,
+          );
           return;
         }
+
+        console.log(
+          `[FuzzyCAD] partStudioPartTree: committing ${parts.length} parts to state for partStudioElementId=${identity.partStudioElementId}.`,
+        );
 
         setPartList(parts);
         setPartTree(
@@ -139,8 +166,13 @@ export function usePartStudioPartTree(identity: PartStudioIdentity | null) {
 
     void loadParts();
 
+    const partStudioElementIdForCleanupLog = identity?.partStudioElementId ?? "(none)";
+
     return () => {
       cancelled = true;
+      console.log(
+        `[FuzzyCAD] partStudioPartTree: effect cleanup — cancelling any in-flight fetch for partStudioElementId=${partStudioElementIdForCleanupLog} (identity changed or unmounted).`,
+      );
     };
   }, [
     identity?.documentId,
