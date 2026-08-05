@@ -183,6 +183,22 @@ class OcctClient {
     return response.buffer;
   }
 
+  /**
+   * Same as exportAssemblyStep, but only combines the given handles —
+   * for pushing accepted changes back into the SAME Part Studio: the
+   * untouched parts already exist there, so re-uploading them alongside
+   * the edited ones would create duplicate bodies (and needlessly bloat
+   * the upload, which matters given Vercel's request-size ceiling).
+   */
+  async exportSolidsStep(handles: number[]): Promise<ArrayBuffer> {
+    await this.ready();
+    const response = await this.send({ type: "exportSolidsStep", handles });
+    if (response.type !== "exportSolidsStepResult") {
+      throw new Error(`Unexpected response type: ${response.type}`);
+    }
+    return response.buffer;
+  }
+
   dispose(): void {
     this.worker.terminate();
   }

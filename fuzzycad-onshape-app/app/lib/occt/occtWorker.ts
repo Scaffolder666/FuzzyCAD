@@ -41,7 +41,8 @@ type OcctWorkerRequest =
       angleRad: number;
       commit: boolean;
     }
-  | { id: number; type: "exportAssemblyStep" };
+  | { id: number; type: "exportAssemblyStep" }
+  | { id: number; type: "exportSolidsStep"; handles: number[] };
 
 type TessellatedShape = {
   positions: Float32Array;
@@ -66,6 +67,7 @@ type OcctWorkerResponse =
   | { id: number; type: "rotateSolidResult"; handle: number; mesh: TessellatedShape; valid: boolean }
   | { id: number; type: "testStepBytesResult"; buffer: ArrayBuffer }
   | { id: number; type: "exportAssemblyStepResult"; buffer: ArrayBuffer }
+  | { id: number; type: "exportSolidsStepResult"; buffer: ArrayBuffer }
   | { id: number; type: "error"; message: string };
 
 // Minimal structural typing for the parts of the embind API this file
@@ -602,6 +604,36 @@ self.onmessage = async (event: MessageEvent<OcctWorkerRequest>) => {
         stepBytes.byteOffset + stepBytes.byteLength,
       ) as ArrayBuffer;
       const response: OcctWorkerResponse = { id, type: "exportAssemblyStepResult", buffer };
+      self.postMessage(response, [buffer]);
+      return;
+    }
+
+    if (type === "exportSolidsStep") {
+      const oc = await loadOcct();
+      const { handles } = event.data;
+
+      const shapes = handles
+        .map((handle) => shapeStore.get(handle))
+        .filter((shape): shape is TopoDS_Shape => Boolean(shape));
+
+      if (shapes.length === 0) {
+        throw new Error("exportSolidsStep: none of the given handles have a stored shape");
+      }
+
+      const compound = new oc.TopoDS_Compound();
+      const builder = new oc.BRep_Builder();
+      builder.MakeCompound(compound);
+      for (const shape of shapes) {
+        builder.Add(compound, shape);
+      }
+      builder.delete();
+
+      const stepBytes = shapeToStepBytes(oc, compound);
+      const buffer = stepBytes.buffer.slice(
+        stepBytes.byteOffset,
+        stepBytes.byteOffset + stepBytes.byteLength,
+      ) as ArrayBuffer;
+      const response: OcctWorkerResponse = { id, type: "exportSolidsStepResult", buffer };
       self.postMessage(response, [buffer]);
       return;
     }

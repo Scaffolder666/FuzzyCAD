@@ -1839,6 +1839,7 @@ async function pushAcceptedChangesToOnshape() {
 
     const blocked: string[] = [];
     const pushedPartIds = new Set<string>();
+    const pushedHandles = new Set<number>();
 
     const applyToTargets = (
       partIds: string[],
@@ -1855,6 +1856,7 @@ async function pushAcceptedChangesToOnshape() {
 
           await apply(handle);
           pushedPartIds.add(partId);
+          pushedHandles.add(handle);
         }),
       );
 
@@ -1967,7 +1969,11 @@ async function pushAcceptedChangesToOnshape() {
       return;
     }
 
-    const editedStepBuffer = await client.exportAssemblyStep();
+    // Only the solids an accepted mark actually touched — the rest of the
+    // Part Studio's parts already exist there untouched, so including
+    // them too would both duplicate them as extra bodies AND needlessly
+    // bloat the upload against Vercel's request-size ceiling.
+    const editedStepBuffer = await client.exportSolidsStep([...pushedHandles]);
 
     // Element-scoped import — lands the edited geometry as a new body
     // inside the SAME Part Studio, not a separate sibling element (see
