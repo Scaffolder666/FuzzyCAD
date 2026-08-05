@@ -32,7 +32,7 @@ import {
   fetchOnshapeElements,
   fetchOnshapePartStudioGltf,
   fetchOnshapePartStudioStep,
-  uploadOnshapeImportStep,
+  uploadOnshapePartStudioImportStep,
   type ApiResult,
   type OnshapeElement,
   loadFuzzycadProjectState,
@@ -1969,10 +1969,14 @@ async function pushAcceptedChangesToOnshape() {
 
     const editedStepBuffer = await client.exportAssemblyStep();
 
-    const uploadRes = await uploadOnshapeImportStep({ documentId, workspaceId, server }, editedStepBuffer);
+    // Element-scoped import — lands the edited geometry as a new body
+    // inside the SAME Part Studio, not a separate sibling element (see
+    // partstudio-import-step/route.ts for why this differs from the
+    // document-scoped uploadOnshapeImportStep).
+    const uploadRes = await uploadOnshapePartStudioImportStep(query, editedStepBuffer);
     const uploadResult = (await uploadRes.json()) as ApiResult;
 
-    console.log("pushAcceptedChangesToOnshape: uploaded edited Part Studio", uploadResult);
+    console.log("pushAcceptedChangesToOnshape: imported edited geometry into Part Studio", uploadResult);
 
     setPushBlockedSummary(blocked.length > 0 ? blocked : null);
   } catch (err) {

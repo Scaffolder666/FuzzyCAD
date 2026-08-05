@@ -264,6 +264,19 @@ export async function uploadOnshapeImportStep(
   });
 }
 
+/** Imports a STEP file directly into an existing Part Studio (as a new body/feature there), instead of uploadOnshapeImportStep's always-a-new-element behavior. */
+export async function uploadOnshapePartStudioImportStep(
+  query: PartStudioQuery,
+  stepBuffer: ArrayBuffer,
+) {
+  const params = makePartStudioParams(query);
+
+  return fetch(`/api/onshape/partstudio-import-step?${params.toString()}`, {
+    method: "POST",
+    body: stepBuffer,
+  });
+}
+
 export async function fetchOnshapeAssemblyZipManifest(
   query: AssemblyQuery,
 ): Promise<ApiResult> {
