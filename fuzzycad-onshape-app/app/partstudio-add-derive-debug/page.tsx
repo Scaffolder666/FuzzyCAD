@@ -31,6 +31,7 @@ function PartStudioAddDeriveDebugInner() {
   const [sourceWorkspaceId, setSourceWorkspaceId] = useState(
     searchParams.get("sourceWorkspaceId") ?? "",
   );
+  const [sourceElementId, setSourceElementId] = useState(searchParams.get("sourceElementId") ?? "");
   const [sourcePartId, setSourcePartId] = useState(searchParams.get("sourcePartId") ?? "JHD");
 
   async function run() {
@@ -42,6 +43,7 @@ function PartStudioAddDeriveDebugInner() {
       !targetPartStudioElementId ||
       !sourceDocumentId ||
       !sourceWorkspaceId ||
+      !sourceElementId ||
       !sourcePartId
     ) {
       setStatus("ERROR: fill in all target*/source* fields first.");
@@ -60,6 +62,7 @@ function PartStudioAddDeriveDebugInner() {
           targetPartStudioElementId,
           sourceDocumentId,
           sourceWorkspaceId,
+          sourceElementId,
           sourcePartId,
           server,
         }),
@@ -134,6 +137,16 @@ function PartStudioAddDeriveDebugInner() {
             <input
               value={sourceWorkspaceId}
               onChange={(e) => setSourceWorkspaceId(e.target.value)}
+              style={inputStyle}
+            />
+          </label>
+        </div>
+        <div>
+          <label>
+            sourceElementId:{" "}
+            <input
+              value={sourceElementId}
+              onChange={(e) => setSourceElementId(e.target.value)}
               style={inputStyle}
             />
           </label>

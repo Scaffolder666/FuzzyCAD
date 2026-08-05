@@ -12,6 +12,7 @@ type RequestBody = {
   // STEP-uploaded element -- same or different document than target).
   sourceDocumentId: string;
   sourceWorkspaceId: string;
+  sourceElementId: string;
   sourcePartId: string;
   server?: string;
 };
@@ -53,6 +54,7 @@ export async function POST(req: NextRequest) {
     targetPartStudioElementId,
     sourceDocumentId,
     sourceWorkspaceId,
+    sourceElementId,
     sourcePartId,
     server = "https://cad.onshape.com",
   } = body;
@@ -63,12 +65,13 @@ export async function POST(req: NextRequest) {
     !targetPartStudioElementId ||
     !sourceDocumentId ||
     !sourceWorkspaceId ||
+    !sourceElementId ||
     !sourcePartId
   ) {
     return NextResponse.json(
       {
         error:
-          "Missing one of targetDocumentId/targetWorkspaceId/targetPartStudioElementId/sourceDocumentId/sourceWorkspaceId/sourcePartId",
+          "Missing one of targetDocumentId/targetWorkspaceId/targetPartStudioElementId/sourceDocumentId/sourceWorkspaceId/sourceElementId/sourcePartId",
       },
       { status: 400 },
     );
@@ -80,22 +83,43 @@ export async function POST(req: NextRequest) {
     Accept: "application/json",
   };
 
-  const microversionEndpoint = `${server}/api/documents/d/${sourceDocumentId}/w/${sourceWorkspaceId}/currentmicroversion`;
+  // Try the element-scoped currentmicroversion first -- a document-level
+  // microversion alone was accepted by the /features endpoint (no 400) but
+  // silently failed to resolve (Onshape wiped partQuery.geometryIds back to
+  // [] and the feature landed with featureStatus ERROR), suggesting the
+  // namespace also needs to pin down WHICH element/tab, not just the
+  // document snapshot. Fall back to the workspace-level one if this 404s.
+  const elementMicroversionEndpoint = `${server}/api/documents/d/${sourceDocumentId}/w/${sourceWorkspaceId}/e/${sourceElementId}/currentmicroversion`;
+  const workspaceMicroversionEndpoint = `${server}/api/documents/d/${sourceDocumentId}/w/${sourceWorkspaceId}/currentmicroversion`;
 
-  const microversionRes = await onshapeFetch(
-    microversionEndpoint,
+  const elementMicroversionRes = await onshapeFetch(
+    elementMicroversionEndpoint,
     { method: "GET", headers: authHeaders },
-    { route: "/api/onshape/partstudio-add-derive-debug", operation: "get-current-microversion" },
+    { route: "/api/onshape/partstudio-add-derive-debug", operation: "get-element-current-microversion" },
   );
 
-  const microversionData = (await parseJsonOrText(microversionRes)) as
+  let microversionEndpoint = elementMicroversionEndpoint;
+  let microversionRes = elementMicroversionRes;
+  let microversionData = (await parseJsonOrText(elementMicroversionRes)) as
     | { microversion?: string }
     | string;
+
+  if (!elementMicroversionRes.ok || typeof microversionData !== "object" || !microversionData?.microversion) {
+    microversionEndpoint = workspaceMicroversionEndpoint;
+    microversionRes = await onshapeFetch(
+      workspaceMicroversionEndpoint,
+      { method: "GET", headers: authHeaders },
+      { route: "/api/onshape/partstudio-add-derive-debug", operation: "get-workspace-current-microversion" },
+    );
+    microversionData = (await parseJsonOrText(microversionRes)) as { microversion?: string } | string;
+  }
 
   if (!microversionRes.ok || typeof microversionData !== "object" || !microversionData?.microversion) {
     return NextResponse.json(
       {
         step: "currentmicroversion",
+        elementMicroversionEndpoint,
+        workspaceMicroversionEndpoint,
         endpoint: microversionEndpoint,
         status: microversionRes.status,
         ok: microversionRes.ok,
