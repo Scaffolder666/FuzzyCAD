@@ -33,6 +33,7 @@ import {
   fetchOnshapePartStudioGltf,
   fetchOnshapePartStudioStep,
   uploadOnshapeImportStep,
+  addPartStudioTransformFeature,
   type ApiResult,
   type OnshapeElement,
   loadFuzzycadProjectState,
@@ -1774,18 +1775,23 @@ async function saveProjectStateToOnshape() {
 }
 
 /**
- * Phase 6/7 of the write-back plan: exports the current Part Studio to
- * STEP, binds each STEP solid to a real partId by nearest bounding-box
- * match (stepSolidBinding.ts — cross-checked against the same
- * objectSummaries the viewer itself trusts for selection/highlighting),
- * runs every resolved Move/Scale/Rotate mark as a real OCCT gp_Trsf
- * (translateSolid/scaleSolid/rotateSolid — the same operations already
- * used for the B-rep ghost preview) against its bound solid, then uploads
- * the edited compound back to Onshape as a new sibling element (true
- * in-place feature-history editing is a distinct, out-of-scope future
- * phase — see the migration plan). Bend has no B-rep equivalent (OCCT
- * exposes no "bend a solid" primitive here) and stays visualization-only,
- * same as Distance/MoveQuestion.
+ * Write-back for accepted marks, two paths depending on mark type:
+ *
+ * Move goes through Onshape's native Feature API (addPartStudioTransformFeature)
+ * — a real "transform" feature lands directly in the Part Studio's own
+ * feature tree, in-place, no STEP round-trip, no new sibling element
+ * (confirmed live). This is the model Rotate/Scale should eventually move
+ * to as well, once their transformType variants are confirmed.
+ *
+ * Scale and Rotate still go through the older Phase 6/7 STEP path: export
+ * the Part Studio to STEP, bind each solid to a real partId by nearest
+ * bounding-box match (stepSolidBinding.ts), run the mark as a real OCCT
+ * gp_Trsf (scaleSolid/rotateSolid — same ops used for the B-rep ghost
+ * preview), then upload the edited compound back as a new sibling element
+ * (true in-place editing for these is still out of scope — see the
+ * migration plan). Bend has no B-rep equivalent (OCCT exposes no "bend a
+ * solid" primitive here) and stays visualization-only, same as
+ * Distance/MoveQuestion.
  */
 async function pushAcceptedChangesToOnshape() {
   if (!documentId || !workspaceId || !selectedPartStudioId) {
@@ -1819,6 +1825,36 @@ async function pushAcceptedChangesToOnshape() {
       server,
     };
 
+    const blocked: string[] = [];
+
+    // Move: native Onshape Feature API write-back — adds a real "transform"
+    // feature straight into the Part Studio's own feature tree, in-place.
+    // No STEP round-trip, no new sibling element (confirmed live — see
+    // addPartStudioTransformFeature's doc comment). Scale/Rotate still go
+    // through the STEP path below since their Onshape-native equivalents
+    // haven't been confirmed yet.
+    for (const preview of resolvedMoves) {
+      const [dx, dy, dz] = threeWorldVectorToStep(new THREE.Vector3(...preview.deltaWorld));
+      const partIds = [preview.pathKey, ...preview.followPathKeys];
+
+      const result = await addPartStudioTransformFeature(query, {
+        name: `FuzzyCAD Move (${preview.pathKey})`,
+        partIds,
+        dx,
+        dy,
+        dz,
+      });
+
+      if (!result.ok) {
+        blocked.push(`${preview.pathKey}: transform feature rejected (HTTP ${result.status ?? "?"})`);
+      }
+    }
+
+    if (resolvedScales.length === 0 && resolvedRotates.length === 0) {
+      setPushBlockedSummary(blocked.length > 0 ? blocked : null);
+      return;
+    }
+
     const stepRes = await fetchOnshapePartStudioStep(query);
 
     if (!stepRes.ok) {
@@ -1837,7 +1873,6 @@ async function pushAcceptedChangesToOnshape() {
     const { bound, unmatchedPartIds } = bindSolidsToPartIdsByBoundingBox(solids, objectSummaries);
     const handleByPartId = new Map(bound.map((entry) => [entry.partId, entry.handle]));
 
-    const blocked: string[] = [];
     const pushedPartIds = new Set<string>();
     const pushedHandles = new Set<number>();
 
@@ -1931,29 +1966,15 @@ async function pushAcceptedChangesToOnshape() {
       });
     }
 
-    for (const preview of resolvedMoves) {
-      const deltaStep = threeWorldVectorToStep(new THREE.Vector3(...preview.deltaWorld));
-
-      await applyToTargets([preview.pathKey, ...preview.followPathKeys], async (handle) => {
-        const result = await client.translateSolid(handle, deltaStep, true);
-        if (!result.valid) {
-          blocked.push(`${preview.pathKey}: moved solid failed OCCT's validity check`);
-        }
-      });
-    }
-
     // unmatchedPartIds only matters for partIds an accepted mark actually
     // targeted — a part nobody touched having no STEP solid isn't worth
-    // surfacing as a problem.
+    // surfacing as a problem. Move is excluded here — it no longer goes
+    // through this STEP path at all.
     const targetedUnmatched = unmatchedPartIds.filter((partId) => {
       const targeted = (preview: { pathKey: string; followPathKeys: string[] }) =>
         preview.pathKey === partId || preview.followPathKeys.includes(partId);
 
-      return (
-        resolvedMoves.some(targeted) ||
-        resolvedScales.some(targeted) ||
-        resolvedRotates.some(targeted)
-      );
+      return resolvedScales.some(targeted) || resolvedRotates.some(targeted);
     });
 
     for (const partId of targetedUnmatched) {

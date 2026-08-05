@@ -278,6 +278,26 @@ export async function fetchOnshapePartStudioParts(
 }
 
 /**
+ * In-place write-back for an accepted Move mark: adds a native "transform"
+ * feature straight into the Part Studio's own feature tree via Onshape's
+ * Feature API (confirmed live — see partstudio-add-feature/route.ts). No
+ * STEP export/import, no new sibling element, no ID translation — partIds
+ * are the same ones already tracked as userData.fuzzyPartId.
+ */
+export async function addPartStudioTransformFeature(
+  query: PartStudioQuery,
+  body: { name: string; partIds: string[]; dx: number; dy: number; dz: number },
+): Promise<ApiResult> {
+  const res = await fetch(`/api/onshape/partstudio-add-feature`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...query, ...body }),
+  });
+
+  return res.json() as Promise<ApiResult>;
+}
+
+/**
  * An edited-and-re-exported STEP file (opencascade.js's STEPControl_Writer
  * output) is verbose CAD text, not the binary STL gzipBlob's doc comment
  * describes — but it compresses just as well, and hits the exact same
