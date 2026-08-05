@@ -2,9 +2,9 @@ import * as THREE from "three";
 import { STLExporter } from "three/examples/jsm/exporters/STLExporter.js";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import {
-  applyPlacements,
-  type PartPlacement,
-} from "../../components/viewer/placement";
+  tagPartIds,
+  type PartStudioPart,
+} from "../../components/viewer/partIdentity";
 import { prepareRenderableMeshes } from "../../components/viewer/materials";
 import type { FuzzyCADUncertaintyAnnotation } from "../uncertainty/document";
 
@@ -132,7 +132,7 @@ function exportSceneToBinaryStl(root: THREE.Object3D) {
 
 export async function exportAnnotatedSelectionStl(input: {
   gltfUrl: string;
-  placements: PartPlacement[];
+  partList: PartStudioPart[];
   annotations: FuzzyCADUncertaintyAnnotation[];
 }) {
   const annotatedPathKeys = getAnnotatedPathKeys(input.annotations);
@@ -146,7 +146,7 @@ export async function exportAnnotatedSelectionStl(input: {
   const scene = gltf.scene.clone(true);
 
   prepareRenderableMeshes(scene);
-  applyPlacements(scene, input.placements ?? []);
+  tagPartIds(scene, input.partList ?? []);
 
   /**
    * Important:
