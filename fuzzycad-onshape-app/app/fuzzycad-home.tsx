@@ -32,7 +32,7 @@ import {
   fetchOnshapeElements,
   fetchOnshapePartStudioGltf,
   fetchOnshapePartStudioStep,
-  uploadOnshapePartStudioImportStep,
+  uploadOnshapeImportStep,
   type ApiResult,
   type OnshapeElement,
   loadFuzzycadProjectState,
@@ -1975,14 +1975,21 @@ async function pushAcceptedChangesToOnshape() {
     // bloat the upload against Vercel's request-size ceiling.
     const editedStepBuffer = await client.exportSolidsStep([...pushedHandles]);
 
-    // Element-scoped import — lands the edited geometry as a new body
-    // inside the SAME Part Studio, not a separate sibling element (see
-    // partstudio-import-step/route.ts for why this differs from the
-    // document-scoped uploadOnshapeImportStep).
-    const uploadRes = await uploadOnshapePartStudioImportStep(query, editedStepBuffer);
+    // Reverted from the element-scoped import (which would land this
+    // inside the SAME Part Studio): confirmed live that Onshape's own
+    // /partstudios/.../translations endpoint 413s on a real part's STEP
+    // well below what Vercel Blob or gzip can help with — a hard,
+    // much-tighter size ceiling on THAT specific endpoint, not something
+    // fixable from this app's side. The document-scoped endpoint doesn't
+    // hit it (confirmed live at a larger size), so accepted changes land
+    // as a new sibling element again.
+    const uploadRes = await uploadOnshapeImportStep(
+      { documentId, workspaceId, server },
+      editedStepBuffer,
+    );
     const uploadResult = (await uploadRes.json()) as ApiResult;
 
-    console.log("pushAcceptedChangesToOnshape: imported edited geometry into Part Studio", uploadResult);
+    console.log("pushAcceptedChangesToOnshape: uploaded edited geometry as a new element", uploadResult);
 
     setPushBlockedSummary(blocked.length > 0 ? blocked : null);
   } catch (err) {
