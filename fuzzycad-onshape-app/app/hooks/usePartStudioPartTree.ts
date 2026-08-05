@@ -91,24 +91,7 @@ export function usePartStudioPartTree(identity: PartStudioIdentity | null) {
           server: identity.server,
         });
 
-        if (!json.ok) {
-          console.warn("[FuzzyCAD] partStudioPartTree: part list fetch failed:", json);
-        }
-
-        const rawData = json?.data ?? json;
-        const parts = parsePartList(rawData);
-
-        if (json.ok && parts.length === 0) {
-          // json.ok but nothing parsed — either the Part Studio really has
-          // no parts, or the real response shape doesn't match the
-          // ["partId","id"]/["name","partName"] field-name guesses below.
-          // Logging the raw shape here turns that ambiguity into something
-          // checkable from the console instead of a silent empty state.
-          console.warn(
-            "[FuzzyCAD] partStudioPartTree: 0 parts parsed from a successful response — check field names against the raw data:",
-            rawData,
-          );
-        }
+        const parts = parsePartList(json?.data ?? json);
 
         if (cancelled) {
           return;
@@ -129,8 +112,7 @@ export function usePartStudioPartTree(identity: PartStudioIdentity | null) {
               ]
             : [],
         );
-      } catch (err) {
-        console.warn("[FuzzyCAD] partStudioPartTree: part list fetch threw:", err);
+      } catch {
         if (!cancelled) {
           resetPartTree();
         }
