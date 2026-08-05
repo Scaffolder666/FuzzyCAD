@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { STLExporter } from "three/examples/jsm/exporters/STLExporter.js";
+import { OBJExporter } from "three/examples/jsm/exporters/OBJExporter.js";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import {
   applyPlacements,
@@ -91,46 +91,16 @@ function cloneObjectInWorldSpace(object: THREE.Object3D) {
   return clone;
 }
 
-function exportSceneToBinaryStl(root: THREE.Object3D) {
-  const exporter = new STLExporter();
+function exportSceneToObj(root: THREE.Object3D) {
+  const exporter = new OBJExporter();
+  const objText = exporter.parse(root);
 
-  const result = exporter.parse(root, {
-    binary: true,
-  }) as ArrayBuffer | DataView | string;
-
-  if (result instanceof DataView) {
-    /**
-     * DataView.buffer is typed as ArrayBufferLike, which can include
-     * SharedArrayBuffer. BlobPart does not accept that type directly.
-     *
-     * Copy the visible DataView range into a normal Uint8Array backed by
-     * a plain ArrayBuffer.
-     */
-    const bytes = new Uint8Array(result.byteLength);
-    bytes.set(
-      new Uint8Array(result.buffer, result.byteOffset, result.byteLength),
-    );
-
-    return new Blob([bytes], {
-      type: "model/stl",
-    });
-  }
-
-  if (result instanceof ArrayBuffer) {
-    return new Blob([result], {
-      type: "model/stl",
-    });
-  }
-
-  /**
-   * Fallback only. Normal path should be binary STL above.
-   */
-  return new Blob([result], {
-    type: "model/stl",
+  return new Blob([objText], {
+    type: "text/plain",
   });
 }
 
-export async function exportAnnotatedSelectionStl(input: {
+export async function exportAnnotatedSelectionObj(input: {
   gltfUrl: string;
   placements: PartPlacement[];
   annotations: FuzzyCADUncertaintyAnnotation[];
@@ -150,11 +120,13 @@ export async function exportAnnotatedSelectionStl(input: {
 
   /**
    * Important:
-   * Do NOT apply FuzzyCADGeometryViewer's display rotation here.
+   * Do NOT apply the Three.js viewer rotation here.
    *
-   * The viewer uses scene.rotation.x = -Math.PI / 2 for browser display.
-   * This STL is generated for return-to-Onshape import, so it should stay
-   * in source assembly coordinate space.
+   * FuzzyCADGeometryViewer uses scene.rotation.x = -Math.PI / 2
+   * only for browser display.
+   *
+   * This OBJ is meant to go back into Onshape, so it should remain in
+   * source assembly coordinate space.
    */
   scene.updateMatrixWorld(true);
 
@@ -173,5 +145,5 @@ export async function exportAnnotatedSelectionStl(input: {
 
   exportRoot.updateMatrixWorld(true);
 
-  return exportSceneToBinaryStl(exportRoot);
+  return exportSceneToObj(exportRoot);
 }

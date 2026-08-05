@@ -25,7 +25,7 @@ type DebugResult = {
 
 type DevPanelProps = {
   connectHref: string;
-  selectedPartStudioId: string;
+  selectedAssemblyId: string;
   graphStats: DevGraphStats | null;
   meshGraph: MeshGraphNode[];
   debugResults: DebugResult[];
@@ -41,7 +41,7 @@ type DevPanelProps = {
 
 export default function DevPanel({
   connectHref,
-  selectedPartStudioId,
+  selectedAssemblyId,
   graphStats,
   meshGraph,
   debugResults,
@@ -123,7 +123,7 @@ export default function DevPanel({
             onClick={() => {
               void onLoadRawAssembly();
             }}
-            disabled={!selectedPartStudioId}
+            disabled={!selectedAssemblyId}
           >
             Raw Assembly
           </button>
@@ -132,7 +132,7 @@ export default function DevPanel({
             onClick={() => {
               void onLoadRawAssembly({ force: true });
             }}
-            disabled={!selectedPartStudioId}
+            disabled={!selectedAssemblyId}
           >
             Force Raw Assembly
           </button>
@@ -141,7 +141,7 @@ export default function DevPanel({
             onClick={() => {
               void onLoadSummary();
             }}
-            disabled={!selectedPartStudioId}
+            disabled={!selectedAssemblyId}
           >
             Summary
           </button>
@@ -150,7 +150,7 @@ export default function DevPanel({
             onClick={() => {
               void onLoadSummary({ force: true });
             }}
-            disabled={!selectedPartStudioId}
+            disabled={!selectedAssemblyId}
           >
             Force Summary
           </button>
@@ -159,7 +159,7 @@ export default function DevPanel({
             onClick={() => {
               void onBuildGraph();
             }}
-            disabled={!selectedPartStudioId}
+            disabled={!selectedAssemblyId}
           >
             Build Graph
           </button>
@@ -168,7 +168,7 @@ export default function DevPanel({
             onClick={() => {
               void onBuildGraph({ force: true });
             }}
-            disabled={!selectedPartStudioId}
+            disabled={!selectedAssemblyId}
           >
             Force Build Graph
           </button>
@@ -177,7 +177,7 @@ export default function DevPanel({
             onClick={() => {
               void onLoadGeometry();
             }}
-            disabled={!selectedPartStudioId}
+            disabled={!selectedAssemblyId}
           >
             Load Geometry
           </button>
@@ -186,7 +186,7 @@ export default function DevPanel({
             onClick={() => {
               void onLoadGeometry({ force: true });
             }}
-            disabled={!selectedPartStudioId}
+            disabled={!selectedAssemblyId}
           >
             Force Load Geometry
           </button>
@@ -195,7 +195,7 @@ export default function DevPanel({
             onClick={() => {
               void onInspectZip();
             }}
-            disabled={!selectedPartStudioId}
+            disabled={!selectedAssemblyId}
           >
             Inspect ZIP
           </button>
@@ -204,7 +204,7 @@ export default function DevPanel({
             onClick={() => {
               void onInspectZip({ force: true });
             }}
-            disabled={!selectedPartStudioId}
+            disabled={!selectedAssemblyId}
           >
             Force Inspect ZIP
           </button>

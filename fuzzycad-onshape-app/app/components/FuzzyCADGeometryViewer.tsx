@@ -15,7 +15,7 @@ import * as THREE from "three";
 import styles from "./FuzzyCADGeometryViewer.module.css";
 import { buildMeshGraph, type MeshGraphNode } from "./viewer/meshGraph";
 import { findFuzzyPathKey } from "./viewer/selection";
-import { tagPartIds, type PartStudioPart } from "./viewer/partIdentity";
+import { applyPlacements, type PartPlacement } from "./viewer/placement";
 import { applyPathHighlight } from "./viewer/highlight";
 import { prepareRenderableMeshes } from "./viewer/materials";
 import type { OperationTool } from "../lib/operations/types";
@@ -114,7 +114,7 @@ import ClearanceRuler from "./viewer/ClearanceRuler";
 import { closestPointsBetweenAabbs } from "../lib/operations/clearanceMeasure";
 
 export type { MeshGraphNode } from "./viewer/meshGraph";
-export type { PartStudioPart, PartIdentityReport } from "./viewer/partIdentity";
+export type { PartPlacement, PlacementReport } from "./viewer/placement";
 export type { MoveDelta } from "./viewer/MoveTriadHandle";
 export type { AxialStretchObjectSummary } from "../lib/operations/axialStretchTypes";
 
@@ -268,7 +268,7 @@ export type FuzzyConfidenceEditor = {
 
 type FuzzyCADGeometryViewerProps = {
   gltfUrl: string | null;
-  partList?: PartStudioPart[];
+  placements?: PartPlacement[];
   highlightedPathKey?: string | null;
   selectedPathKeys?: string[];
   activeTool?: OperationTool;
@@ -1054,7 +1054,7 @@ function UncertaintyLegendOverlay() {
 
 function Model({
   url,
-  partList,
+  placements,
   highlightedPathKey,
   selectedPathKeys,
   activeTool,
@@ -1117,7 +1117,7 @@ function Model({
   onManipulationDragStateChange,
 }: {
   url: string;
-  partList?: PartStudioPart[];
+  placements?: PartPlacement[];
   highlightedPathKey?: string | null;
   selectedPathKeys?: string[];
   activeTool?: OperationTool;
@@ -1188,17 +1188,17 @@ function Model({
     const cloned = gltf.scene.clone(true);
 
     prepareRenderableMeshes(cloned);
-    tagPartIds(cloned, partList ?? []);
+    applyPlacements(cloned, placements ?? []);
     cloned.rotation.x = -Math.PI / 2;
 
     return cloned;
-  }, [gltf.scene, partList]);
+  }, [gltf.scene, placements]);
 
   // scene.clone(true) shares geometry references with the cached
   // gltf.scene (only prepareRenderableMeshes' material clones are
   // independent) — every mesh's geometry here is the SAME object
   // useGLTF's cache holds, and any future scene recompute (e.g. a
-  // partList refresh) will share it too. Disposing it would corrupt
+  // placements refresh) will share it too. Disposing it would corrupt
   // that shared geometry for every clone, present and future, which is
   // exactly what react-three-fiber's own auto-dispose-on-unmount would
   // do if left to fire on this <primitive> (it disposes everything it
@@ -3826,7 +3826,7 @@ function Model({
 
 export default function FuzzyCADGeometryViewer({
   gltfUrl,
-  partList,
+  placements,
   highlightedPathKey,
   selectedPathKeys,
   activeTool = "select",
@@ -3946,7 +3946,7 @@ export default function FuzzyCADGeometryViewer({
               <Bounds fit clip margin={1.2}>
                 <Model
                   url={gltfUrl}
-                  partList={partList}
+                  placements={placements}
                   highlightedPathKey={highlightedPathKey}
                   selectedPathKeys={selectedPathKeys}
                   activeTool={activeTool}

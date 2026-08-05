@@ -51,7 +51,7 @@ type UncertaintyMarksPanelProps = {
   onAnswerMoveQuestion: (annotationId: string, deltaMm: number) => void;
   onSaveToOnshape: () => void;
   savingToOnshape?: boolean;
-  /** Pushes accepted Move/Rotate/MoveQuestion marks to Onshape as real B-rep edits (a new element with the edited geometry), replacing the ghost preview with an actual shape change. */
+  /** Pushes accepted Move/Rotate/MoveQuestion marks to Onshape as real occurrence transforms, replacing the ghost preview with an actual placement change. */
   onPushAcceptedChanges: () => void;
   pushingAcceptedChanges?: boolean;
   /** Count of resolved annotations eligible for a real write-back — shown so the reviewer knows what a click will do before doing it. */

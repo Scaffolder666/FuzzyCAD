@@ -2,56 +2,26 @@
 
 import { useCallback, useRef, useState } from "react";
 import { getOcctClient } from "./occtClient";
-import { bindSolidsToPartIdsByBoundingBox } from "./stepSolidBinding";
-import {
-  fetchOnshapePartStudioBoundingBoxes,
-  fetchOnshapePartStudioParts,
-  fetchOnshapePartStudioStep,
-} from "../onshapeClient";
+import { bindSolidsToPathKeysPositionally } from "./stepPathKeyBinding";
+import { extractOrderedAssemblyPathKeys } from "./orderedAssemblyPathKeys";
+import { fetchOnshapeAssembly, fetchOnshapeAssemblyStep } from "../onshapeClient";
 
 export type BrepGhostSourceStatus = "idle" | "loading" | "ready" | "error";
 
-export type BrepPartStudioQuery = {
+export type BrepAssemblyQuery = {
   documentId: string;
   workspaceId: string;
-  partStudioElementId: string;
+  assemblyElementId: string;
   server: string;
 };
 
-function extractPartIds(partsResult: { data?: unknown } | undefined): string[] {
-  const list = Array.isArray(partsResult?.data) ? partsResult!.data : [];
-  const ids: string[] = [];
-
-  for (const entry of list) {
-    if (typeof entry !== "object" || entry === null) {
-      continue;
-    }
-
-    const record = entry as Record<string, unknown>;
-    const partId = record.partId ?? record.id;
-
-    if (typeof partId === "string" && partId.length > 0) {
-      ids.push(partId);
-    }
-  }
-
-  return ids;
-}
-
 /**
- * Lazily loads a B-rep-backed OCCT handle per partId, for upgrading
+ * Lazily loads a B-rep-backed OCCT handle per pathKey, for upgrading
  * ghost previews (Move/Scale/Rotate) from mesh-clone approximations to
  * geometrically exact ones. Nothing happens until ensureLoaded() is
  * called — by design, so opening the FuzzyCAD panel or annotating with
  * any other tool never pays the ~66MB WASM + STEP export cost; only the
  * first use of Move/Scale/Rotate does.
- *
- * Part Studio migration (Phase 6): binds each STEP solid to a real
- * partId by nearest-bounding-box match (stepSolidBinding.ts) instead of
- * the old assembly path's positional zip against occurrence order —
- * there's real per-part ground truth to match against now
- * (GET .../boundingboxes), so this cross-validates instead of trusting
- * an assumed order.
  */
 export function useBrepGhostSource() {
   const [status, setStatus] = useState<BrepGhostSourceStatus>("idle");
@@ -60,7 +30,7 @@ export function useBrepGhostSource() {
   const loadingPromiseRef = useRef<Promise<void> | null>(null);
   const statusRef = useRef<BrepGhostSourceStatus>("idle");
 
-  const ensureLoaded = useCallback((query: BrepPartStudioQuery) => {
+  const ensureLoaded = useCallback((query: BrepAssemblyQuery) => {
     if (loadingPromiseRef.current) {
       return loadingPromiseRef.current;
     }
@@ -75,15 +45,15 @@ export function useBrepGhostSource() {
       setError(null);
 
       try {
-        const partsResult = await fetchOnshapePartStudioParts(query);
+        const assemblyResult = await fetchOnshapeAssembly(query);
 
-        if (!partsResult.ok) {
-          throw new Error(`Failed to fetch part list: ${JSON.stringify(partsResult)}`);
+        if (!assemblyResult.ok) {
+          throw new Error(`Failed to fetch occurrences: ${JSON.stringify(assemblyResult)}`);
         }
 
-        const partIds = extractPartIds(partsResult);
+        const orderedPathKeys = extractOrderedAssemblyPathKeys(assemblyResult);
 
-        const stepRes = await fetchOnshapePartStudioStep(query);
+        const stepRes = await fetchOnshapeAssemblyStep(query);
 
         if (!stepRes.ok) {
           throw new Error(`STEP export failed (${stepRes.status}): ${await stepRes.text()}`);
@@ -91,31 +61,19 @@ export function useBrepGhostSource() {
 
         const stepBuffer = await stepRes.arrayBuffer();
 
-        const [client, bboxResult] = await Promise.all([
-          (async () => {
-            const c = getOcctClient();
-            await c.ready();
-            return c;
-          })(),
-          fetchOnshapePartStudioBoundingBoxes({ ...query, partIds }),
-        ]);
-
+        const client = getOcctClient();
+        await client.ready();
         const solids = await client.loadAssemblySolids(stepBuffer);
 
-        const meshToHandle = new Map(solids.map((s) => [s.mesh, s.handle]));
-
-        const { bound } = bindSolidsToPartIdsByBoundingBox(
+        const { bound } = bindSolidsToPathKeysPositionally(
           solids.map((s) => s.mesh),
-          bboxResult.results.map((r) => ({ partId: r.partId, boundingBox: r.boundingBox })),
+          orderedPathKeys.map((p) => p.pathKey),
         );
 
         const handles = new Map<string, number>();
-        for (const b of bound) {
-          const handle = meshToHandle.get(b.mesh);
-          if (handle !== undefined) {
-            handles.set(b.partId, handle);
-          }
-        }
+        bound.forEach((b, i) => {
+          handles.set(b.pathKey, solids[i].handle);
+        });
         handlesRef.current = handles;
 
         statusRef.current = "ready";
@@ -124,12 +82,6 @@ export function useBrepGhostSource() {
         statusRef.current = "error";
         setError(err instanceof Error ? err.message : String(err));
         setStatus("error");
-        // Rethrow (not swallowed) so a caller that awaits ensureLoaded()
-        // directly — e.g. the STEP write-back push, which needs to know
-        // synchronously within its own call whether B-rep data is usable —
-        // gets a rejection instead of having to poll the `status` state,
-        // which reflects a stale value inside that caller's own closure.
-        throw err instanceof Error ? err : new Error(String(err));
       } finally {
         loadingPromiseRef.current = null;
       }

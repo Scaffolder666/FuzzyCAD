@@ -10,7 +10,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import styles from "./fuzzycad-home.module.css";
 import FuzzyCADSidebar from "./components/FuzzyCADSidebar";
 import DevPanel from "./components/DevPanel";
-import { usePartStudioPartTree } from "./hooks/usePartStudioPartTree";
+import { useAssemblyPlacementTree } from "./hooks/useAssemblyPlacementTree";
 import type {
   AxialStretchObjectSummary,
   BendRolePlan,
@@ -24,18 +24,19 @@ import type {
 import { usePartGraph } from "./hooks/usePartGraph";
 import { getRelatedGroup } from "./lib/partGraph";
 import {
+  applyOnshapeOccurrenceTransforms,
   fetchFuzzycadAssemblySummary,
   fetchFuzzycadRelationshipGraph,
   fetchOnshapeAssembly,
+  fetchOnshapeAssemblyGltf,
   fetchOnshapeAssemblyZipManifest,
   fetchOnshapeElements,
-  fetchOnshapePartStudioGltf,
   type ApiResult,
   type OnshapeElement,
   loadFuzzycadProjectState,
   saveFuzzycadProject,
-  uploadOnshapeImportStep,
 } from "./lib/onshapeClient";
+import { computeRigidOccurrenceUpdates } from "./lib/operations/computeRigidOccurrenceUpdates";
 import { computeExternalGeometryDeltas } from "./lib/operations/resolveExternalGeometryDeltas";
 import type { OperationTool } from "./lib/operations/types";
 import OperationToolbar from "./components/OperationToolbar";
@@ -69,6 +70,7 @@ import {
   type MoveQuestionAxisDirection,
   type ProposalAxisIndex,
   type ProposalAxisMode,
+  type ResolvedRigidDelta,
   type RotateAxisDirection,
   type SizeUncertaintyAnnotation,
 } from "./lib/uncertainty/document";
@@ -77,7 +79,6 @@ import { useUncertaintyDocument } from "./hooks/useUncertaintyDocument";
 import { buildFuzzyCADProjectState } from "./lib/fuzzycad/projectState";
 import { exportAnnotatedSelectionStl } from "./lib/fuzzycad/exportAnnotatedSelectionStl";
 import { useBrepGhostSource } from "./lib/occt/useBrepGhostSource";
-import { getOcctClient } from "./lib/occt/occtClient";
 import { useFuzzyMarkAppearance } from "./hooks/useFuzzyMarkAppearance";
 
 const FuzzyCADGeometryViewer = dynamic(
@@ -149,7 +150,7 @@ export default function FuzzyCADHome() {
   const [relationshipGraphResult, setRelationshipGraphResult] =
     useState<ApiResult | null>(null);
 
-  const [selectedPartStudioId, setSelectedPartStudioId] = useState<string>("");
+  const [selectedAssemblyId, setSelectedAssemblyId] = useState<string>("");
 
   const [gltfUrl, setGltfUrl] = useState<string | null>(null);
   const [geometryLoadResult, setGeometryLoadResult] =
@@ -174,6 +175,10 @@ export default function FuzzyCADHome() {
     setFocusRequest({ pathKey, token: Date.now() });
   }
   const [lassoPathKeys, setLassoPathKeys] = useState<string[]>([]);
+
+  const { placements, partTree, resetPlacementTree } = useAssemblyPlacementTree(
+    relationshipGraphResult,
+  );
 
   const { partGraph, linkedGroup, selectedGraphPathKey } = usePartGraph({
     relationshipGraphResult,
@@ -379,32 +384,15 @@ export default function FuzzyCADHome() {
   const server = params.get("server") || "https://cad.onshape.com";
   const oauthStatus = params.get("oauth");
 
-  const partStudioIdentity = useMemo(
-    () =>
-      documentId && workspaceId && selectedPartStudioId
-        ? {
-            documentId,
-            workspaceId,
-            partStudioElementId: selectedPartStudioId,
-            server,
-          }
-        : null,
-    [documentId, workspaceId, selectedPartStudioId, server],
-  );
-
-  const { partList, partTree, resetPartTree } = usePartStudioPartTree(
-    partStudioIdentity,
-  );
-
   const currentUncertaintySource = useMemo(
     () => ({
       documentId,
       workspaceId,
       elementId,
-      assemblyElementId: selectedPartStudioId || null,
+      assemblyElementId: selectedAssemblyId || null,
       server,
     }),
-    [documentId, workspaceId, elementId, selectedPartStudioId, server],
+    [documentId, workspaceId, elementId, selectedAssemblyId, server],
   );
 
   const {
@@ -442,19 +430,17 @@ export default function FuzzyCADHome() {
   } = useUncertaintyDocument(currentUncertaintySource);
 
   const appearanceMarkingQuery = useMemo(
-    () =>
-      documentId && workspaceId && selectedPartStudioId
-        ? { documentId, workspaceId, elementId: selectedPartStudioId, server }
-        : null,
-    [documentId, workspaceId, selectedPartStudioId, server],
+    () => (documentId && workspaceId ? { documentId, workspaceId, server } : null),
+    [documentId, workspaceId, server],
   );
 
   // Colors the real part orange in Onshape while it has an open mark, and
   // reverts it once resolved/deleted — see useFuzzyMarkAppearance.ts for
-  // the known scope limits (part-level not per-occurrence, in-memory
-  // original-color cache).
+  // the known scope limits (part-level not per-occurrence, same-document
+  // parts only, in-memory original-color cache).
   useFuzzyMarkAppearance(
     uncertaintyDocumentWithCurrentSource,
+    partGraph,
     appearanceMarkingQuery,
   );
 
@@ -480,14 +466,14 @@ export default function FuzzyCADHome() {
     return ids.size;
   }, [uncertaintyDocumentWithCurrentSource, objectSummaries]);
 
-  const partStudioElements = useMemo(() => {
+  const assemblyElements = useMemo(() => {
     const data = elementsResult?.data;
 
     if (!isElementArray(data)) {
       return [];
     }
 
-    return data.filter((element) => element.elementType === "PARTSTUDIO");
+    return data.filter((element) => element.elementType === "ASSEMBLY");
   }, [elementsResult]);
 
   const selectedObjectSummary = useMemo(() => {
@@ -650,7 +636,7 @@ export default function FuzzyCADHome() {
     resetUncertaintyDocument();
 
     setGeometryLoadResult(null);
-    resetPartTree();
+    resetPlacementTree();
 
     if (gltfUrl) {
       URL.revokeObjectURL(gltfUrl);
@@ -658,13 +644,13 @@ export default function FuzzyCADHome() {
     }
   }
 
-  async function loadPartStudioGeometry(options: LoadOptions = {}) {
+  async function loadAssemblyGeometry(options: LoadOptions = {}) {
     resetGeometryState();
 
-    const res = await fetchOnshapePartStudioGltf({
+    const res = await fetchOnshapeAssemblyGltf({
       documentId: documentId || "",
       workspaceId: workspaceId || "",
-      partStudioElementId: selectedPartStudioId,
+      assemblyElementId: selectedAssemblyId,
       server,
       force: options.force,
     });
@@ -709,7 +695,7 @@ export default function FuzzyCADHome() {
     const data = await fetchOnshapeAssemblyZipManifest({
       documentId: documentId || "",
       workspaceId: workspaceId || "",
-      assemblyElementId: selectedPartStudioId,
+      assemblyElementId: selectedAssemblyId,
       server,
       force: options.force,
     });
@@ -728,12 +714,12 @@ export default function FuzzyCADHome() {
     setElementsResult(data);
 
     if (data.ok && isElementArray(data.data)) {
-      const firstPartStudio = data.data.find(
-        (element) => element.elementType === "PARTSTUDIO",
+      const firstAssembly = data.data.find(
+        (element) => element.elementType === "ASSEMBLY",
       );
 
-      if (firstPartStudio) {
-        setSelectedPartStudioId(firstPartStudio.id);
+      if (firstAssembly) {
+        setSelectedAssemblyId(firstAssembly.id);
       }
     }
   }
@@ -742,7 +728,7 @@ export default function FuzzyCADHome() {
     const data = await fetchOnshapeAssembly({
       documentId: documentId || "",
       workspaceId: workspaceId || "",
-      assemblyElementId: selectedPartStudioId,
+      assemblyElementId: selectedAssemblyId,
       server,
       force: options.force,
     });
@@ -754,7 +740,7 @@ export default function FuzzyCADHome() {
     const data = await fetchFuzzycadAssemblySummary({
       documentId: documentId || "",
       workspaceId: workspaceId || "",
-      assemblyElementId: selectedPartStudioId,
+      assemblyElementId: selectedAssemblyId,
       server,
       force: options.force,
     });
@@ -766,7 +752,7 @@ export default function FuzzyCADHome() {
     const data = await fetchFuzzycadRelationshipGraph({
       documentId: documentId || "",
       workspaceId: workspaceId || "",
-      assemblyElementId: selectedPartStudioId,
+      assemblyElementId: selectedAssemblyId,
       server,
       force: options.force,
     });
@@ -774,19 +760,16 @@ export default function FuzzyCADHome() {
     setRelationshipGraphResult(data);
   }
 
-  async function loadSelectedPartStudio() {
-    if (!selectedPartStudioId) {
+  async function loadSelectedAssembly() {
+    if (!selectedAssemblyId) {
       return;
     }
 
     setBusy(true);
 
     try {
-      // No buildRelationshipGraph() call here anymore — that builds the
-      // Onshape mate graph, which has no meaning for a Part Studio (see
-      // Phase 5 of the Assembly -> Part Studio migration plan). Part
-      // identity for the loaded geometry is resolved separately (Phase 3).
-      await loadPartStudioGeometry();
+      await buildRelationshipGraph();
+      await loadAssemblyGeometry();
       await loadProjectStateFromOnshape();
     } finally {
       setBusy(false);
@@ -1082,15 +1065,12 @@ export default function FuzzyCADHome() {
     // Kick off the (lazy, only-happens-once) B-rep load in the
     // background — the ghost preview upgrades from mesh-clone to
     // geometrically exact automatically once/if it resolves.
-    if (documentId && workspaceId && selectedPartStudioId) {
+    if (documentId && workspaceId && selectedAssemblyId) {
       brepGhostSource.ensureLoaded({
         documentId,
         workspaceId,
-        partStudioElementId: selectedPartStudioId,
+        assemblyElementId: selectedAssemblyId,
         server,
-      }).catch(() => {
-        // Best-effort background upgrade — brepGhostSource.error already
-        // surfaces the failure reactively; nothing else to do here.
       });
     }
 
@@ -1383,15 +1363,12 @@ export default function FuzzyCADHome() {
     // Kick off the (lazy, only-happens-once) B-rep load in the
     // background — same as startMove(), the ghost preview upgrades from
     // mesh-clone to geometrically exact automatically once/if it resolves.
-    if (documentId && workspaceId && selectedPartStudioId) {
+    if (documentId && workspaceId && selectedAssemblyId) {
       brepGhostSource.ensureLoaded({
         documentId,
         workspaceId,
-        partStudioElementId: selectedPartStudioId,
+        assemblyElementId: selectedAssemblyId,
         server,
-      }).catch(() => {
-        // Best-effort background upgrade — brepGhostSource.error already
-        // surfaces the failure reactively; nothing else to do here.
       });
     }
   }
@@ -1432,15 +1409,12 @@ export default function FuzzyCADHome() {
     // Kick off the (lazy, only-happens-once) B-rep load in the
     // background — same as startMove(), the ghost preview upgrades from
     // mesh-clone to geometrically exact automatically once/if it resolves.
-    if (documentId && workspaceId && selectedPartStudioId) {
+    if (documentId && workspaceId && selectedAssemblyId) {
       brepGhostSource.ensureLoaded({
         documentId,
         workspaceId,
-        partStudioElementId: selectedPartStudioId,
+        assemblyElementId: selectedAssemblyId,
         server,
-      }).catch(() => {
-        // Best-effort background upgrade — brepGhostSource.error already
-        // surfaces the failure reactively; nothing else to do here.
       });
     }
   }
@@ -1742,10 +1716,10 @@ async function saveProjectStateToOnshape() {
     });
 
     const annotatedSelectionStl =
-      gltfUrl && partList
+      gltfUrl && placements
         ? await exportAnnotatedSelectionStl({
             gltfUrl,
-            partList,
+            placements,
             annotations: uncertaintyDocumentWithCurrentSource.annotations,
           })
         : null;
@@ -1771,26 +1745,17 @@ async function saveProjectStateToOnshape() {
 }
 
 /**
- * Phase 7 of the Part Studio migration: turns every resolved (accepted)
- * Move / answered MoveQuestion / custom-axis Rotate mark into a real edit
- * of the actual B-rep, via the same OCCT worker the ghost previews
- * already use — translateSolid/rotateSolid/scaleSolid with commit=true
- * instead of the preview path's commit=false — then exports the whole
- * Part Studio's solids (edited + untouched) as one STEP file and imports
- * it back into Onshape as a new sibling element
- * (uploadOnshapeImportStep). Replaces Track 1's /occurrencetransforms
- * approach, which has no equivalent in a Part Studio.
- *
- * Each operation is tried once with commit=false first to read OCCT's
- * own validity verdict — occtWorker.ts's commit path persists the
- * transformed shape into shapeStore even when invalid, so committing
- * blind on the first try risks corrupting that handle's state for every
- * op after it (and for the final export). Only a valid preview gets a
- * second, committing call.
+ * Track 1 of the B-rep write-back plan: turns every resolved (accepted)
+ * Move / answered MoveQuestion / custom-axis Rotate mark into a real
+ * Onshape occurrence transform — the ORIGINAL part actually moves, not an
+ * overlay. On success the pushed annotations are removed: their effect is
+ * now permanent in the document, so they shouldn't linger as "open work"
+ * (mirrors how Accept already deletes Reject's counterpart annotation
+ * outright rather than keeping a "handled" bucket around).
  */
 async function pushAcceptedChangesToOnshape() {
-  if (!documentId || !workspaceId || !selectedPartStudioId) {
-    console.warn("Missing documentId, workspaceId, or selectedPartStudioId");
+  if (!documentId || !workspaceId || !selectedAssemblyId) {
+    console.warn("Missing documentId, workspaceId, or selectedAssemblyId");
     return;
   }
 
@@ -1811,9 +1776,9 @@ async function pushAcceptedChangesToOnshape() {
       return;
     }
 
-    // Which annotation touches which pathKeys (== partIds here), across
-    // ALL deltas — needed below to only delete an annotation once EVERY
-    // part it affects actually landed in the exported STEP, not just some.
+    // Which annotation touches which pathKeys, across ALL deltas (not just
+    // the pushable ones) — needed below to only delete an annotation once
+    // EVERY pathKey it affects has actually landed in Onshape, not just some.
     const annotationPathKeys = new Map<string, Set<string>>();
     for (const [pathKey, delta] of deltas) {
       for (const id of delta.sourceAnnotationIds) {
@@ -1825,104 +1790,64 @@ async function pushAcceptedChangesToOnshape() {
     }
 
     const describePart = (pathKey: string) =>
-      partList.find((part) => part.partId === pathKey)?.name ?? pathKey;
+      partGraph?.byPathKey.get(pathKey)?.instance?.name ?? pathKey;
 
-    try {
-      await brepGhostSource.ensureLoaded({
-        documentId,
-        workspaceId,
-        partStudioElementId: selectedPartStudioId,
-        server,
-      });
-    } catch (err) {
-      setPushBlockedSummary([
-        `Couldn't load B-rep data for this Part Studio: ${err instanceof Error ? err.message : String(err)}`,
-      ]);
-      return;
-    }
-
-    const client = getOcctClient();
-    const blockedLines: string[] = [];
-    const succeededPathKeys = new Set<string>();
+    // A mate-constrained occurrence's position is owned by Onshape's mate
+    // solver — trying to set an arbitrary absolute transform on one fails
+    // server-side (confirmed live: a 500 "internal error" on a mated part,
+    // vs. the same request succeeding on an unmated one). partGraph already
+    // has mate data loaded (same graph the Move/Scale/Rotate "include
+    // mate-linked neighbors" prompt uses), so this is checked up front
+    // instead of discovering it via a failed push.
+    const mateConstrainedPathKeys = new Set<string>();
+    const pushableDeltas = new Map<string, ResolvedRigidDelta>();
 
     for (const [pathKey, delta] of deltas) {
-      const handle = brepGhostSource.getHandle(pathKey);
+      const hasMates = (partGraph?.byPathKey.get(pathKey)?.mateEdges.length ?? 0) > 0;
 
-      if (handle === null) {
-        blockedLines.push(`${describePart(pathKey)} — no matching B-rep solid found`);
-        continue;
+      if (hasMates) {
+        mateConstrainedPathKeys.add(pathKey);
+      } else {
+        pushableDeltas.set(pathKey, delta);
       }
+    }
 
-      let failed = false;
+    const blockedLines: string[] = [];
 
-      for (const rotation of delta.rotations) {
-        const pivotMm: [number, number, number] = [
-          rotation.pivotWorld[0] * 1000,
-          rotation.pivotWorld[1] * 1000,
-          rotation.pivotWorld[2] * 1000,
-        ];
+    for (const pathKey of mateConstrainedPathKeys) {
+      const mateDescriptions = (partGraph?.byPathKey.get(pathKey)?.mateEdges ?? []).map(
+        (edge) => {
+          const otherName = describePart(edge.to);
+          return edge.mateType ? `${edge.mateType} with ${otherName}` : `mated to ${otherName}`;
+        },
+      );
 
-        const preview = await client.rotateSolid(
-          handle,
-          pivotMm,
-          rotation.axisWorld,
-          rotation.angleRad,
-          false,
-        );
+      blockedLines.push(
+        mateDescriptions.length > 0
+          ? `${describePart(pathKey)} — ${mateDescriptions.join(", ")}`
+          : `${describePart(pathKey)} — mate-constrained`,
+      );
+    }
 
-        if (!preview.valid) {
-          failed = true;
-          break;
-        }
+    // computeRigidOccurrenceUpdates also skips (rather than sending) any
+    // pathKey it can't produce a rigid result for — no known placement, a
+    // Scale delta (confirmed live: Onshape rejects non-rigid transforms
+    // outright), or a current placement that already has non-unit scale
+    // baked in (also confirmed live — Onshape's own GET can return one).
+    const { updates, skipped } = computeRigidOccurrenceUpdates(pushableDeltas, placements);
 
-        await client.rotateSolid(handle, pivotMm, rotation.axisWorld, rotation.angleRad, true);
-      }
-
-      if (!failed) {
-        for (const scale of delta.scales) {
-          const pivotMm: [number, number, number] = [
-            scale.pivotWorld[0] * 1000,
-            scale.pivotWorld[1] * 1000,
-            scale.pivotWorld[2] * 1000,
-          ];
-
-          const preview = await client.scaleSolid(handle, pivotMm, scale.factor, false);
-
-          if (!preview.valid) {
-            failed = true;
-            break;
-          }
-
-          await client.scaleSolid(handle, pivotMm, scale.factor, true);
-        }
-      }
-
-      const hasTranslation = delta.translationWorld.some((component) => component !== 0);
-
-      if (!failed && hasTranslation) {
-        const deltaMm: [number, number, number] = [
-          delta.translationWorld[0] * 1000,
-          delta.translationWorld[1] * 1000,
-          delta.translationWorld[2] * 1000,
-        ];
-
-        const preview = await client.translateSolid(handle, deltaMm, false);
-
-        if (!preview.valid) {
-          failed = true;
-        } else {
-          await client.translateSolid(handle, deltaMm, true);
-        }
-      }
-
-      if (failed) {
+    for (const item of skipped) {
+      if (item.reason === "no-placement") {
+        blockedLines.push(`${describePart(item.pathKey)} — no current placement data available`);
+      } else if (item.reason === "non-rigid-base") {
         blockedLines.push(
-          `${describePart(pathKey)} — resulting geometry failed OCCT's validity check`,
+          `${describePart(item.pathKey)} — current placement already has a ${item.baseScale?.toFixed(3)}x scale baked in; Onshape's write API rejects non-rigid transforms`,
         );
-        continue;
+      } else {
+        blockedLines.push(
+          `${describePart(item.pathKey)} — Scale isn't supported by this push (Onshape rejects any non-rigid result)`,
+        );
       }
-
-      succeededPathKeys.add(pathKey);
     }
 
     if (blockedLines.length > 0) {
@@ -1930,24 +1855,42 @@ async function pushAcceptedChangesToOnshape() {
       setPushBlockedSummary(blockedLines);
     }
 
-    if (succeededPathKeys.size === 0) {
+    if (updates.length === 0) {
       return;
     }
 
-    const stepBuffer = await client.exportAssemblyStep();
-    const importRes = await uploadOnshapeImportStep({ documentId, workspaceId, server }, stepBuffer);
-    const importData = (await importRes.json()) as { ok?: boolean; [key: string]: unknown };
+    const result = await applyOnshapeOccurrenceTransforms(
+      {
+        documentId,
+        workspaceId,
+        assemblyElementId: selectedAssemblyId,
+        server,
+      },
+      updates,
+    );
 
-    if (!importRes.ok || !importData.ok) {
-      console.error("Push accepted changes failed to import back into Onshape:", importData);
-      setPushBlockedSummary((prev) => [
-        ...(prev ?? []),
-        `Edited geometry didn't import back into Onshape: ${JSON.stringify(importData)}`,
-      ]);
-      return;
+    const perOccurrenceResults = Array.isArray(result.results)
+      ? (result.results as { path: string[]; ok: boolean }[])
+      : [];
+    const succeededPathKeys = new Set(
+      perOccurrenceResults.filter((r) => r.ok).map((r) => r.path.join("/")),
+    );
+
+    if (!result.ok) {
+      // Onshape's error body is what actually explains a failure — log it
+      // stringified so it survives a plain-text console copy instead of
+      // collapsing to "{…}", plus the request payload that triggered it.
+      console.error(
+        "Push accepted changes failed (partially or fully):",
+        JSON.stringify(
+          { status: result.status, results: result.results, data: result.data, updates },
+          null,
+          2,
+        ),
+      );
+    } else {
+      console.log("Pushed accepted changes to Onshape:", result);
     }
-
-    console.log("Pushed accepted changes to Onshape as a new element:", importData);
 
     // Only delete an annotation once EVERY pathKey it touches actually
     // succeeded — a partially-applied group edit should stay visible as
@@ -1959,6 +1902,14 @@ async function pushAcceptedChangesToOnshape() {
         deleteAnnotation(id);
       }
     }
+
+    if (succeededPathKeys.size === 0) {
+      return;
+    }
+
+    // Refresh placements from Onshape so the viewer's part positions catch
+    // up to the real, just-written occurrence transforms.
+    await buildRelationshipGraph({ force: true });
   } finally {
     setPushingAcceptedChanges(false);
   }
@@ -2150,8 +2101,8 @@ if (result.ok && result.state) {
     lastWorldObjectUuidRef.current = uuid;
   }
 
-  function handlePartStudioChange(partStudioId: string) {
-    setSelectedPartStudioId(partStudioId);
+  function handleAssemblyChange(assemblyId: string) {
+    setSelectedAssemblyId(assemblyId);
     resetGeometryState();
     setGeometryZipManifest(null);
   }
@@ -2166,21 +2117,21 @@ if (result.ok && result.state) {
       }
     : null;
 
-  const connected = oauthStatus === "connected" || partStudioElements.length > 0;
+  const connected = oauthStatus === "connected" || assemblyElements.length > 0;
 
   return (
     <main className={styles.root}>
       <FuzzyCADSidebar
         connected={connected}
         connectHref={connectHref}
-        partStudioElements={partStudioElements}
-        selectedPartStudioId={selectedPartStudioId}
+        assemblyElements={assemblyElements}
+        selectedAssemblyId={selectedAssemblyId}
         busy={busy}
         partTree={partTree}
         highlightedPathKey={highlightedPathKey}
         dev={dev}
-        onPartStudioChange={handlePartStudioChange}
-        onLoadPartStudio={loadSelectedPartStudio}
+        onAssemblyChange={handleAssemblyChange}
+        onLoadAssembly={loadSelectedAssembly}
         onSelectPathKey={setHighlightedPathKey}
         onToggleDev={() => {
           setDev((value) => !value);
@@ -2190,7 +2141,7 @@ if (result.ok && result.state) {
       <div className={styles.viewerPane}>
         <FuzzyCADGeometryViewer
           gltfUrl={gltfUrl}
-          partList={partList}
+          placements={placements}
           highlightedPathKey={highlightedPathKey}
           selectedPathKeys={viewerSelectedPathKeys}
           activeTool={activeTool}
@@ -2777,7 +2728,7 @@ if (result.ok && result.state) {
       {dev ? (
         <DevPanel
           connectHref={connectHref}
-          selectedPartStudioId={selectedPartStudioId}
+          selectedAssemblyId={selectedAssemblyId}
           graphStats={devGraphStats}
           meshGraph={meshGraph}
           debugResults={[
@@ -2829,7 +2780,7 @@ if (result.ok && result.state) {
           onLoadRawAssembly={loadAssemblyDefinition}
           onLoadSummary={loadAssemblySummary}
           onBuildGraph={buildRelationshipGraph}
-          onLoadGeometry={loadPartStudioGeometry}
+          onLoadGeometry={loadAssemblyGeometry}
           onInspectZip={inspectAssemblyGeometryZip}
         />
       ) : null}

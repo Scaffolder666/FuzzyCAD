@@ -203,14 +203,18 @@ const toolGroups: ToolGroup[] = [
     key: "proposed",
     label: "Proposed",
     tools: [
-      // "extend" and "angle" hidden: no write-back path exists for them at
-      // all right now — not just "not part of the STEP push," but their
-      // whole apply mechanism (confirmedHeightPlan / onApply on
-      // FuzzyCADSidebar) isn't even wired into the current render, so
-      // resolving one of these marks currently does nothing observable,
-      // ever. Re-enable once that flow (or a STEP-based replacement) is
-      // actually connected. Kept in OperationTool's type union and out of
-      // this array only (not deleted) so re-enabling is a one-line change.
+      {
+        id: "extend",
+        label: "Extend",
+        title: "Drag to a specific length and save it as a proposed change",
+        icon: <ExtendIcon />,
+      },
+      {
+        id: "angle",
+        label: "Angle",
+        title: "Drag to a specific angle",
+        icon: <AngleIcon />,
+      },
       {
         id: "move",
         label: "Move",

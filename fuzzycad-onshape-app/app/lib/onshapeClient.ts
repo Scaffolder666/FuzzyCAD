@@ -154,10 +154,6 @@ type AssemblyQuery = DocumentQuery & {
   assemblyElementId: string;
 };
 
-type PartStudioQuery = DocumentQuery & {
-  partStudioElementId: string;
-};
-
 function appendOptionalParams(
   params: URLSearchParams,
   query: { force?: boolean },
@@ -184,17 +180,6 @@ function makeAssemblyParams(query: AssemblyQuery) {
     documentId: query.documentId,
     workspaceId: query.workspaceId,
     assemblyElementId: query.assemblyElementId,
-    server: query.server,
-  });
-
-  return appendOptionalParams(params, query);
-}
-
-function makePartStudioParams(query: PartStudioQuery) {
-  const params = new URLSearchParams({
-    documentId: query.documentId,
-    workspaceId: query.workspaceId,
-    partStudioElementId: query.partStudioElementId,
     server: query.server,
   });
 
@@ -231,52 +216,6 @@ export async function fetchOnshapeAssemblyStep(query: AssemblyQuery) {
   return fetch(`/api/onshape/assembly-step?${params.toString()}`);
 }
 
-export async function fetchOnshapePartStudioGltf(query: PartStudioQuery) {
-  const params = makePartStudioParams(query);
-
-  return fetch(`/api/onshape/partstudio-gltf?${params.toString()}`);
-}
-
-export async function fetchOnshapePartStudioParts(
-  query: PartStudioQuery,
-): Promise<ApiResult> {
-  const params = makePartStudioParams(query);
-  const res = await fetch(`/api/onshape/partstudio-parts?${params.toString()}`);
-
-  return res.json() as Promise<ApiResult>;
-}
-
-export async function fetchOnshapePartStudioStep(query: PartStudioQuery) {
-  const params = makePartStudioParams(query);
-
-  return fetch(`/api/onshape/partstudio-step?${params.toString()}`);
-}
-
-export type PartBoundingBoxResult = {
-  partId: string;
-  ok: boolean;
-  status: number;
-  boundingBox: {
-    lowX: number;
-    lowY: number;
-    lowZ: number;
-    highX: number;
-    highY: number;
-    highZ: number;
-  } | null;
-};
-
-export async function fetchOnshapePartStudioBoundingBoxes(
-  query: PartStudioQuery & { partIds: string[] },
-): Promise<{ ok: boolean; results: PartBoundingBoxResult[] }> {
-  const params = makePartStudioParams(query);
-  params.set("partIds", query.partIds.join(","));
-
-  const res = await fetch(`/api/onshape/partstudio-boundingboxes?${params.toString()}`);
-
-  return res.json() as Promise<{ ok: boolean; results: PartBoundingBoxResult[] }>;
-}
-
 export async function uploadOnshapeImportStep(
   query: DocumentQuery,
   stepBuffer: ArrayBuffer,
@@ -287,19 +226,6 @@ export async function uploadOnshapeImportStep(
     method: "POST",
     body: stepBuffer,
   });
-}
-
-export async function deleteOnshapeElement(
-  query: DocumentQuery & { elementId: string },
-): Promise<ApiResult> {
-  const params = makeDocumentParams(query);
-  params.set("elementId", query.elementId);
-
-  const res = await fetch(`/api/onshape/element?${params.toString()}`, {
-    method: "DELETE",
-  });
-
-  return res.json() as Promise<ApiResult>;
 }
 
 export async function fetchOnshapeAssemblyZipManifest(
