@@ -79,6 +79,9 @@ type PathMatch = {
     name: string | null;
     type: string | null;
     sourceKey: string;
+    sourceDocumentId: string | null;
+    sourceElementId: string | null;
+    sourcePartId: string | null;
     contextPath: string;
   } | null;
 };
@@ -605,6 +608,9 @@ function buildPathMatches(
             name: matched.name,
             type: matched.type,
             sourceKey: sourceKeyForInstance(matched),
+            sourceDocumentId: matched.sourceDocumentId,
+            sourceElementId: matched.sourceElementId,
+            sourcePartId: matched.sourcePartId,
             contextPath: matched.contextPath,
           }
         : null,

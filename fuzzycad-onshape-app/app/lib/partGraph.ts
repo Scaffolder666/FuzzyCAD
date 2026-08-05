@@ -12,6 +12,10 @@ export type MatchedInstance = {
   name: string | null;
   type: string | null;
   sourceKey: string;
+  /** Raw identity behind sourceKey — needed to call Onshape's part-scoped APIs (e.g. appearance) directly, rather than re-parsing the joined key. */
+  sourceDocumentId: string | null;
+  sourceElementId: string | null;
+  sourcePartId: string | null;
 } | null;
 export type LogicalMateEdge = {
   a: string;

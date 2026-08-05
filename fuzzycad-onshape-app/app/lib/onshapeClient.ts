@@ -287,6 +287,52 @@ export async function applyOnshapeOccurrenceTransforms(
   return res.json() as Promise<ApiResult>;
 }
 
+export type PartQuery = {
+  documentId: string;
+  workspaceId: string;
+  elementId: string;
+  partId: string;
+  server: string;
+};
+
+export type PartColor = { red: number; green: number; blue: number };
+
+export async function fetchOnshapePartAppearance(query: PartQuery): Promise<ApiResult> {
+  const params = new URLSearchParams({
+    documentId: query.documentId,
+    workspaceId: query.workspaceId,
+    elementId: query.elementId,
+    partId: query.partId,
+    server: query.server,
+  });
+
+  const res = await fetch(`/api/onshape/part-appearance?${params.toString()}`);
+
+  return res.json() as Promise<ApiResult>;
+}
+
+export async function setOnshapePartAppearance(
+  query: PartQuery,
+  color: PartColor,
+  opacity?: number,
+): Promise<ApiResult> {
+  const res = await fetch("/api/onshape/part-appearance", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      documentId: query.documentId,
+      workspaceId: query.workspaceId,
+      elementId: query.elementId,
+      partId: query.partId,
+      server: query.server,
+      color,
+      opacity,
+    }),
+  });
+
+  return res.json() as Promise<ApiResult>;
+}
+
 export async function saveFuzzycadProjectState(
   query: DocumentQuery,
   state: unknown,

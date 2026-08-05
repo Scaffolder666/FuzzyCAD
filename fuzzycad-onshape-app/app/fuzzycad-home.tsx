@@ -79,6 +79,7 @@ import { useUncertaintyDocument } from "./hooks/useUncertaintyDocument";
 import { buildFuzzyCADProjectState } from "./lib/fuzzycad/projectState";
 import { exportAnnotatedSelectionStl } from "./lib/fuzzycad/exportAnnotatedSelectionStl";
 import { useBrepGhostSource } from "./lib/occt/useBrepGhostSource";
+import { useFuzzyMarkAppearance } from "./hooks/useFuzzyMarkAppearance";
 
 const FuzzyCADGeometryViewer = dynamic(
   () => import("./components/FuzzyCADGeometryViewer"),
@@ -423,6 +424,21 @@ export default function FuzzyCADHome() {
     upsertMoveQuestionMark,
     answerMoveQuestionMark,
   } = useUncertaintyDocument(currentUncertaintySource);
+
+  const appearanceMarkingQuery = useMemo(
+    () => (documentId && workspaceId ? { documentId, workspaceId, server } : null),
+    [documentId, workspaceId, server],
+  );
+
+  // Colors the real part orange in Onshape while it has an open mark, and
+  // reverts it once resolved/deleted — see useFuzzyMarkAppearance.ts for
+  // the known scope limits (part-level not per-occurrence, same-document
+  // parts only, in-memory original-color cache).
+  useFuzzyMarkAppearance(
+    uncertaintyDocumentWithCurrentSource,
+    partGraph,
+    appearanceMarkingQuery,
+  );
 
   // Every resolved mark computeAllFinalOccurrenceDeltas (self-contained:
   // Move/MoveQuestion/Rotate-custom) and computeExternalGeometryDeltas
