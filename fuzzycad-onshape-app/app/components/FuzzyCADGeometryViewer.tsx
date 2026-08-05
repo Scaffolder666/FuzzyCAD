@@ -47,6 +47,7 @@ import type { AxialStretchObjectSummary } from "../lib/operations/axialStretchTy
 import {
   findObjectsByPathKeys,
   rotateObjectsAroundWorldAxis,
+  scaleObjectsAroundWorldPivot,
   translateObjectsWorld,
 } from "./viewer/manipulation";
 import SizingHandle from "./viewer/SizingHandle";
@@ -107,6 +108,10 @@ import {
   disposeBendPreviewSession,
   getBendControlPointBaseWorlds,
   updateBendPreviewSession,
+  collectMeshes as collectBendMeshes,
+  sampleControlOffset,
+  getBendAxisUnitVector,
+  BEND_LIFT_AXIS_WORLD,
   type BendPreviewSession,
   type BendAxisDirection,
 } from "./viewer/bendPreview";
@@ -1588,14 +1593,24 @@ function Model({
     };
   }, [moveTranslatePreviewSession, movePlan, moveDelta, brepGhostSource, invalidate]);
 
-  // Every OTHER saved move (not the one currently being dragged) shows as a
-  // static ghost at its saved delta.
+  // Every OTHER saved-but-still-OPEN move (not the one currently being
+  // dragged) shows as a static ghost at its saved delta. Resolved moves are
+  // no longer represented as "uncertainty" at all — the real object is
+  // transformed directly instead (see resolvedMovePreviews below).
   const persistentMovePreviews = useMemo(
     () =>
       (movePreviews ?? []).filter(
-        (preview) => preview.pathKey !== activeMovePathKey,
+        (preview) =>
+          preview.pathKey !== activeMovePathKey && preview.status === "open",
       ),
     [movePreviews, activeMovePathKey],
+  );
+
+  // Accepted moves: applied directly to the real (solid) object, not shown
+  // as a ghost.
+  const resolvedMovePreviews = useMemo(
+    () => (movePreviews ?? []).filter((preview) => preview.status === "resolved"),
+    [movePreviews],
   );
 
   // Saved (non-active) moves loop back and forth between their original spot
@@ -1820,14 +1835,24 @@ function Model({
     invalidate();
   }, [scalePreviewSession, scaleFactor, invalidate]);
 
-  // Every OTHER saved scale proposal (not the one currently being dragged)
-  // shows as a static ghost at its saved factor.
+  // Every OTHER saved-but-still-OPEN scale proposal (not the one currently
+  // being dragged) shows as a static ghost at its saved factor. Resolved
+  // scales are applied directly to the real object instead (see
+  // resolvedScalePreviews below).
   const persistentScalePreviews = useMemo(
     () =>
       (scalePreviews ?? []).filter(
-        (preview) => preview.pathKey !== activeScalePathKey,
+        (preview) =>
+          preview.pathKey !== activeScalePathKey && preview.status === "open",
       ),
     [scalePreviews, activeScalePathKey],
+  );
+
+  // Accepted scales: applied directly to the real (solid) object, not
+  // shown as a ghost.
+  const resolvedScalePreviews = useMemo(
+    () => (scalePreviews ?? []).filter((preview) => preview.status === "resolved"),
+    [scalePreviews],
   );
 
   // Saved (non-active) scale proposals loop back and forth between their
@@ -2153,14 +2178,24 @@ function Model({
     invalidate,
   ]);
 
-  // Every OTHER saved rotate proposal (not the one currently being dragged)
-  // shows as a static ghost at its saved angle.
+  // Every OTHER saved-but-still-OPEN rotate proposal (not the one currently
+  // being dragged) shows as a static ghost at its saved angle. Resolved
+  // rotations are applied directly to the real object instead (see
+  // resolvedRotatePreviews below).
   const persistentRotatePreviews = useMemo(
     () =>
       (rotatePreviews ?? []).filter(
-        (preview) => preview.pathKey !== activeRotatePathKey,
+        (preview) =>
+          preview.pathKey !== activeRotatePathKey && preview.status === "open",
       ),
     [rotatePreviews, activeRotatePathKey],
+  );
+
+  // Accepted rotations: applied directly to the real (solid) object, not
+  // shown as a ghost.
+  const resolvedRotatePreviews = useMemo(
+    () => (rotatePreviews ?? []).filter((preview) => preview.status === "resolved"),
+    [rotatePreviews],
   );
 
   // Saved (non-active) rotate proposals loop back and forth between their
@@ -2465,9 +2500,17 @@ function Model({
   const persistentBendPreviews = useMemo(
     () =>
       (bendPreviews ?? []).filter(
-        (preview) => preview.pathKey !== activeBendPathKey,
+        (preview) =>
+          preview.pathKey !== activeBendPathKey && preview.status === "open",
       ),
     [bendPreviews, activeBendPathKey],
+  );
+
+  // Accepted bends: the real mesh's own vertices are lifted directly, not
+  // shown as a ghost.
+  const resolvedBendPreviews = useMemo(
+    () => (bendPreviews ?? []).filter((preview) => preview.status === "resolved"),
+    [bendPreviews],
   );
 
   // Saved (non-active) bend proposals loop back and forth between flat and
@@ -2586,6 +2629,356 @@ function Model({
       Math.max(bendControlPointOffsetsMeters.length, 1),
     );
   }, [bendPreviewSession, bendControlPointOffsetsMeters.length]);
+
+  // Once a Move/Scale/Rotate mark is accepted, it should stop reading as
+  // "uncertainty" (no more ghost) and instead the real object should just
+  // BE the new state — solid, fully opaque, directly manipulable like any
+  // other part. This snapshots each affected real object's original local
+  // transform the first time a resolved mark touches it, resets to that
+  // snapshot, then reapplies every resolved mark's transform on top —
+  // rotate, then scale, then translate — so re-runs never compound and
+  // multiple resolved marks on the same part still compose correctly.
+  // objectSummaries is a stable snapshot of the ORIGINAL (untransformed)
+  // geometry (see the objectSummaries useMemo above, keyed only on
+  // [scene, selectedPathKeys] — it never reacts to these direct mutations),
+  // so pivots/axes resolved from it stay anchored to the true original
+  // frame across repeated runs instead of drifting.
+  const resolvedRigidOriginalsRef = useRef<
+    Map<
+      string,
+      { position: THREE.Vector3; quaternion: THREE.Quaternion; scale: THREE.Vector3 }
+    >
+  >(new Map());
+  const resolvedRigidSceneRef = useRef<THREE.Object3D | null>(null);
+
+  useEffect(() => {
+    const originals = resolvedRigidOriginalsRef.current;
+
+    // A freshly (re)loaded scene means brand-new Object3D instances — any
+    // snapshots taken against the old scene are meaningless now.
+    if (resolvedRigidSceneRef.current !== scene) {
+      originals.clear();
+      resolvedRigidSceneRef.current = scene;
+    }
+
+    const activePathKeys = new Set<string>();
+
+    for (const preview of resolvedMovePreviews) {
+      activePathKeys.add(preview.pathKey);
+      for (const key of preview.followPathKeys) activePathKeys.add(key);
+    }
+    for (const preview of resolvedScalePreviews) {
+      activePathKeys.add(preview.pathKey);
+      for (const key of preview.followPathKeys) activePathKeys.add(key);
+    }
+    for (const preview of resolvedRotatePreviews) {
+      activePathKeys.add(preview.pathKey);
+      for (const key of preview.followPathKeys) activePathKeys.add(key);
+    }
+
+    // Anything previously under direct control that no longer has a
+    // resolved mark (e.g. un-accepted, or deleted) goes back to its
+    // original transform and stops being tracked.
+    for (const pathKey of Array.from(originals.keys())) {
+      if (activePathKeys.has(pathKey)) {
+        continue;
+      }
+
+      const original = originals.get(pathKey)!;
+      const [object] = findObjectsByPathKeys(scene, [pathKey]);
+
+      if (object) {
+        object.position.copy(original.position);
+        object.quaternion.copy(original.quaternion);
+        object.scale.copy(original.scale);
+        object.matrixWorldNeedsUpdate = true;
+      }
+
+      originals.delete(pathKey);
+    }
+
+    if (activePathKeys.size === 0) {
+      invalidate();
+      return;
+    }
+
+    for (const pathKey of activePathKeys) {
+      const [object] = findObjectsByPathKeys(scene, [pathKey]);
+
+      if (!object) {
+        continue;
+      }
+
+      let original = originals.get(pathKey);
+
+      if (!original) {
+        original = {
+          position: object.position.clone(),
+          quaternion: object.quaternion.clone(),
+          scale: object.scale.clone(),
+        };
+        originals.set(pathKey, original);
+      } else {
+        object.position.copy(original.position);
+        object.quaternion.copy(original.quaternion);
+        object.scale.copy(original.scale);
+      }
+
+      object.matrixWorldNeedsUpdate = true;
+    }
+
+    scene.updateMatrixWorld(true);
+
+    for (const preview of resolvedRotatePreviews) {
+      const frame =
+        preview.axisMode === "custom"
+          ? resolveRotateFrame(
+              {
+                axisMode: "custom",
+                pivotWorld: preview.pivotWorld!,
+                axisVectorWorld: preview.axisVectorWorld!,
+              },
+              objectSummaries,
+            )
+          : resolveRotateFrame(
+              {
+                axisMode: "object",
+                axisPathKey: preview.axisPathKey!,
+                axisDirection: preview.axisDirection!,
+              },
+              objectSummaries,
+            );
+
+      if (!frame) {
+        continue;
+      }
+
+      const objects = findObjectsByPathKeys(scene, [
+        preview.pathKey,
+        ...preview.followPathKeys,
+      ]);
+
+      rotateObjectsAroundWorldAxis(
+        objects,
+        frame.pivotWorld,
+        frame.axisWorld,
+        preview.angleRad,
+      );
+    }
+
+    for (const preview of resolvedScalePreviews) {
+      const allPathKeys = [preview.pathKey, ...preview.followPathKeys];
+      const summaries = allPathKeys
+        .map((key) => objectSummaries.find((item) => item.pathKey === key))
+        .filter((item): item is AxialStretchObjectSummary => Boolean(item));
+
+      if (summaries.length === 0) {
+        continue;
+      }
+
+      const box = new THREE.Box3();
+
+      for (const summary of summaries) {
+        const center = new THREE.Vector3(...summary.aabbCenterWorld);
+        const halfSize = new THREE.Vector3(
+          ...summary.aabbSizeWorld,
+        ).multiplyScalar(0.5);
+
+        box.union(
+          new THREE.Box3(
+            center.clone().sub(halfSize),
+            center.clone().add(halfSize),
+          ),
+        );
+      }
+
+      const pivotWorld = box.getCenter(new THREE.Vector3());
+      const objects = findObjectsByPathKeys(scene, allPathKeys);
+
+      scaleObjectsAroundWorldPivot(objects, pivotWorld, preview.factor);
+    }
+
+    for (const preview of resolvedMovePreviews) {
+      const objects = findObjectsByPathKeys(scene, [
+        preview.pathKey,
+        ...preview.followPathKeys,
+      ]);
+
+      translateObjectsWorld(objects, new THREE.Vector3(...preview.deltaWorld));
+    }
+
+    invalidate();
+  }, [
+    scene,
+    objectSummaries,
+    resolvedMovePreviews,
+    resolvedScalePreviews,
+    resolvedRotatePreviews,
+    invalidate,
+  ]);
+
+  // Same idea as the rigid Move/Scale/Rotate case above, but Bend is a
+  // per-vertex deformation, not a rigid transform — so instead of
+  // snapshotting position/quaternion/scale, this snapshots each real
+  // mesh's own vertex buffer once, then re-derives the lifted buffer from
+  // that original snapshot every run (never from whatever the previous
+  // lifted state was, so repeated runs don't compound). Mirrors
+  // updateBendPreviewSession's per-vertex math exactly, applied to the
+  // real mesh's geometry instead of a ghost clone's.
+  type ResolvedBendMeshSnapshot = {
+    geometry: THREE.BufferGeometry;
+    originalPositions: Float32Array;
+    originalMatrixWorld: THREE.Matrix4;
+    originalInverseMatrixWorld: THREE.Matrix4;
+  };
+
+  const resolvedBendOriginalsRef = useRef<Map<string, ResolvedBendMeshSnapshot[]>>(
+    new Map(),
+  );
+  const resolvedBendSceneRef = useRef<THREE.Object3D | null>(null);
+
+  useEffect(() => {
+    const originals = resolvedBendOriginalsRef.current;
+
+    if (resolvedBendSceneRef.current !== scene) {
+      originals.clear();
+      resolvedBendSceneRef.current = scene;
+    }
+
+    const restore = (snapshots: ResolvedBendMeshSnapshot[]) => {
+      for (const snapshot of snapshots) {
+        const position = snapshot.geometry.attributes.position;
+
+        if (position instanceof THREE.BufferAttribute) {
+          (position.array as Float32Array).set(snapshot.originalPositions);
+          position.needsUpdate = true;
+        }
+
+        snapshot.geometry.computeBoundingBox();
+        snapshot.geometry.computeBoundingSphere();
+      }
+    };
+
+    const activePathKeys = new Set(
+      resolvedBendPreviews.map((preview) => preview.pathKey),
+    );
+
+    for (const pathKey of Array.from(originals.keys())) {
+      if (activePathKeys.has(pathKey)) {
+        continue;
+      }
+
+      restore(originals.get(pathKey)!);
+      originals.delete(pathKey);
+    }
+
+    if (resolvedBendPreviews.length === 0) {
+      invalidate();
+      return;
+    }
+
+    scene.updateMatrixWorld(true);
+
+    const localPoint = new THREE.Vector3();
+    const worldPoint = new THREE.Vector3();
+
+    for (const preview of resolvedBendPreviews) {
+      const summary = objectSummaries.find(
+        (item) => item.pathKey === preview.pathKey,
+      );
+      const [original] = findObjectsByPathKeys(scene, [preview.pathKey]);
+
+      if (!summary || !original) {
+        continue;
+      }
+
+      original.updateMatrixWorld(true);
+
+      let snapshots = originals.get(preview.pathKey);
+
+      if (!snapshots) {
+        snapshots = [];
+
+        for (const mesh of collectBendMeshes(original)) {
+          const position = mesh.geometry.attributes.position;
+
+          if (!(position instanceof THREE.BufferAttribute)) {
+            continue;
+          }
+
+          mesh.updateMatrixWorld(true);
+
+          snapshots.push({
+            geometry: mesh.geometry,
+            originalPositions: Float32Array.from(
+              position.array as ArrayLike<number>,
+            ),
+            originalMatrixWorld: mesh.matrixWorld.clone(),
+            originalInverseMatrixWorld: mesh.matrixWorld.clone().invert(),
+          });
+        }
+
+        originals.set(preview.pathKey, snapshots);
+      }
+
+      if (snapshots.length === 0) {
+        continue;
+      }
+
+      const axisWorld = getBendAxisUnitVector(preview.axisDirection);
+      const centerWorld = new THREE.Vector3(...summary.aabbCenterWorld);
+      const halfSize = new THREE.Vector3(...summary.aabbSizeWorld).multiplyScalar(
+        0.5,
+      );
+      const halfExtent = Math.max(Math.abs(halfSize.dot(axisWorld)), 1e-6);
+
+      for (const snapshot of snapshots) {
+        const position = snapshot.geometry.attributes.position;
+
+        if (!(position instanceof THREE.BufferAttribute)) {
+          continue;
+        }
+
+        const array = position.array as Float32Array;
+        const originalArray = snapshot.originalPositions;
+
+        for (let index = 0; index < position.count; index += 1) {
+          const base = index * 3;
+
+          localPoint.set(
+            originalArray[base],
+            originalArray[base + 1],
+            originalArray[base + 2],
+          );
+
+          worldPoint.copy(localPoint).applyMatrix4(snapshot.originalMatrixWorld);
+
+          const offsetAlongAxis = worldPoint
+            .clone()
+            .sub(centerWorld)
+            .dot(axisWorld);
+          const t = offsetAlongAxis / halfExtent;
+          const lift = sampleControlOffset(t, preview.controlPointOffsetsMeters);
+
+          worldPoint.addScaledVector(BEND_LIFT_AXIS_WORLD, lift);
+
+          localPoint
+            .copy(worldPoint)
+            .applyMatrix4(snapshot.originalInverseMatrixWorld);
+
+          array[base] = localPoint.x;
+          array[base + 1] = localPoint.y;
+          array[base + 2] = localPoint.z;
+        }
+
+        position.needsUpdate = true;
+        snapshot.geometry.computeBoundingBox();
+        snapshot.geometry.computeBoundingSphere();
+      }
+    }
+
+    invalidate();
+  }, [scene, objectSummaries, resolvedBendPreviews, invalidate]);
 
   // Active "Move (needs input)" range-definition session — a single
   // object, no ghost clone needed (there's no one "current value" yet,

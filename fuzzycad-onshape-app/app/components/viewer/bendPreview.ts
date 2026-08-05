@@ -24,7 +24,7 @@ export function getBendAxisUnitVector(direction: BendAxisDirection) {
   return BEND_AXIS_UNIT_VECTORS[direction].clone();
 }
 
-const BEND_LIFT_AXIS_WORLD = new THREE.Vector3(0, 1, 0);
+export const BEND_LIFT_AXIS_WORLD = new THREE.Vector3(0, 1, 0);
 
 type BendMeshSnapshot = {
   mesh: THREE.Mesh;
@@ -46,7 +46,7 @@ export type BendPreviewSession = {
   axisWorld: THREE.Vector3;
 };
 
-function collectMeshes(root: THREE.Object3D) {
+export function collectMeshes(root: THREE.Object3D) {
   const meshes: THREE.Mesh[] = [];
 
   root.traverse((object) => {
