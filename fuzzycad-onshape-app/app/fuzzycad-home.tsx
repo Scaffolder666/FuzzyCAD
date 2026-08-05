@@ -10,7 +10,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import styles from "./fuzzycad-home.module.css";
 import FuzzyCADSidebar from "./components/FuzzyCADSidebar";
 import DevPanel from "./components/DevPanel";
-import { useAssemblyPlacementTree } from "./hooks/useAssemblyPlacementTree";
+import { usePartStudioPartTree } from "./hooks/usePartStudioPartTree";
 import type {
   AxialStretchObjectSummary,
   BendRolePlan,
@@ -24,7 +24,6 @@ import type {
 import { usePartGraph } from "./hooks/usePartGraph";
 import { getRelatedGroup } from "./lib/partGraph";
 import {
-  applyOnshapeOccurrenceTransforms,
   fetchFuzzycadAssemblySummary,
   fetchFuzzycadRelationshipGraph,
   fetchOnshapeAssembly,
@@ -36,7 +35,6 @@ import {
   loadFuzzycadProjectState,
   saveFuzzycadProject,
 } from "./lib/onshapeClient";
-import { computeRigidOccurrenceUpdates } from "./lib/operations/computeRigidOccurrenceUpdates";
 import { computeExternalGeometryDeltas } from "./lib/operations/resolveExternalGeometryDeltas";
 import type { OperationTool } from "./lib/operations/types";
 import OperationToolbar from "./components/OperationToolbar";
@@ -70,7 +68,6 @@ import {
   type MoveQuestionAxisDirection,
   type ProposalAxisIndex,
   type ProposalAxisMode,
-  type ResolvedRigidDelta,
   type RotateAxisDirection,
   type SizeUncertaintyAnnotation,
 } from "./lib/uncertainty/document";
@@ -175,10 +172,6 @@ export default function FuzzyCADHome() {
     setFocusRequest({ pathKey, token: Date.now() });
   }
   const [lassoPathKeys, setLassoPathKeys] = useState<string[]>([]);
-
-  const { placements, partTree, resetPlacementTree } = useAssemblyPlacementTree(
-    relationshipGraphResult,
-  );
 
   const { partGraph, linkedGroup, selectedGraphPathKey } = usePartGraph({
     relationshipGraphResult,
@@ -383,6 +376,23 @@ export default function FuzzyCADHome() {
   const elementId = params.get("elementId");
   const server = params.get("server") || "https://cad.onshape.com";
   const oauthStatus = params.get("oauth");
+
+  const partStudioIdentity = useMemo(
+    () =>
+      documentId && workspaceId && selectedPartStudioId
+        ? {
+            documentId,
+            workspaceId,
+            partStudioElementId: selectedPartStudioId,
+            server,
+          }
+        : null,
+    [documentId, workspaceId, selectedPartStudioId, server],
+  );
+
+  const { partList, partTree, resetPartTree } = usePartStudioPartTree(
+    partStudioIdentity,
+  );
 
   const currentUncertaintySource = useMemo(
     () => ({
@@ -636,7 +646,7 @@ export default function FuzzyCADHome() {
     resetUncertaintyDocument();
 
     setGeometryLoadResult(null);
-    resetPlacementTree();
+    resetPartTree();
 
     if (gltfUrl) {
       URL.revokeObjectURL(gltfUrl);
@@ -1719,10 +1729,10 @@ async function saveProjectStateToOnshape() {
     });
 
     const annotatedSelectionStl =
-      gltfUrl && placements
+      gltfUrl && partList
         ? await exportAnnotatedSelectionStl({
             gltfUrl,
-            placements,
+            partList,
             annotations: uncertaintyDocumentWithCurrentSource.annotations,
           })
         : null;
@@ -1748,174 +1758,17 @@ async function saveProjectStateToOnshape() {
 }
 
 /**
- * Track 1 of the B-rep write-back plan: turns every resolved (accepted)
- * Move / answered MoveQuestion / custom-axis Rotate mark into a real
- * Onshape occurrence transform — the ORIGINAL part actually moves, not an
- * overlay. On success the pushed annotations are removed: their effect is
- * now permanent in the document, so they shouldn't linger as "open work"
- * (mirrors how Accept already deletes Reject's counterpart annotation
- * outright rather than keeping a "handled" bucket around).
+ * Track 1 of the B-rep write-back plan (occurrence transforms) only made
+ * sense for an Assembly's occurrence layer, which a Part Studio doesn't
+ * have — every part's exported geometry is already in its final position,
+ * there's nothing to "transform." Disconnected pending Phase 6/7's
+ * STEP-based replacement (translateSolid/rotateSolid -> export STEP ->
+ * uploadOnshapeImportStep), see /root/.claude/plans/memoized-purring-koala.md.
  */
 async function pushAcceptedChangesToOnshape() {
-  if (!documentId || !workspaceId || !selectedPartStudioId) {
-    console.warn("Missing documentId, workspaceId, or selectedPartStudioId");
-    return;
-  }
-
-  if (pushingAcceptedChanges) {
-    return;
-  }
-
-  setPushingAcceptedChanges(true);
-  setPushBlockedSummary(null);
-
-  try {
-    const deltas = mergeRigidDeltaMaps([
-      computeAllFinalOccurrenceDeltas(uncertaintyDocumentWithCurrentSource),
-      computeExternalGeometryDeltas(uncertaintyDocumentWithCurrentSource, objectSummaries),
-    ]);
-
-    if (deltas.size === 0) {
-      return;
-    }
-
-    // Which annotation touches which pathKeys, across ALL deltas (not just
-    // the pushable ones) — needed below to only delete an annotation once
-    // EVERY pathKey it affects has actually landed in Onshape, not just some.
-    const annotationPathKeys = new Map<string, Set<string>>();
-    for (const [pathKey, delta] of deltas) {
-      for (const id of delta.sourceAnnotationIds) {
-        if (!annotationPathKeys.has(id)) {
-          annotationPathKeys.set(id, new Set());
-        }
-        annotationPathKeys.get(id)!.add(pathKey);
-      }
-    }
-
-    const describePart = (pathKey: string) =>
-      partGraph?.byPathKey.get(pathKey)?.instance?.name ?? pathKey;
-
-    // A mate-constrained occurrence's position is owned by Onshape's mate
-    // solver — trying to set an arbitrary absolute transform on one fails
-    // server-side (confirmed live: a 500 "internal error" on a mated part,
-    // vs. the same request succeeding on an unmated one). partGraph already
-    // has mate data loaded (same graph the Move/Scale/Rotate "include
-    // mate-linked neighbors" prompt uses), so this is checked up front
-    // instead of discovering it via a failed push.
-    const mateConstrainedPathKeys = new Set<string>();
-    const pushableDeltas = new Map<string, ResolvedRigidDelta>();
-
-    for (const [pathKey, delta] of deltas) {
-      const hasMates = (partGraph?.byPathKey.get(pathKey)?.mateEdges.length ?? 0) > 0;
-
-      if (hasMates) {
-        mateConstrainedPathKeys.add(pathKey);
-      } else {
-        pushableDeltas.set(pathKey, delta);
-      }
-    }
-
-    const blockedLines: string[] = [];
-
-    for (const pathKey of mateConstrainedPathKeys) {
-      const mateDescriptions = (partGraph?.byPathKey.get(pathKey)?.mateEdges ?? []).map(
-        (edge) => {
-          const otherName = describePart(edge.to);
-          return edge.mateType ? `${edge.mateType} with ${otherName}` : `mated to ${otherName}`;
-        },
-      );
-
-      blockedLines.push(
-        mateDescriptions.length > 0
-          ? `${describePart(pathKey)} — ${mateDescriptions.join(", ")}`
-          : `${describePart(pathKey)} — mate-constrained`,
-      );
-    }
-
-    // computeRigidOccurrenceUpdates also skips (rather than sending) any
-    // pathKey it can't produce a rigid result for — no known placement, a
-    // Scale delta (confirmed live: Onshape rejects non-rigid transforms
-    // outright), or a current placement that already has non-unit scale
-    // baked in (also confirmed live — Onshape's own GET can return one).
-    const { updates, skipped } = computeRigidOccurrenceUpdates(pushableDeltas, placements);
-
-    for (const item of skipped) {
-      if (item.reason === "no-placement") {
-        blockedLines.push(`${describePart(item.pathKey)} — no current placement data available`);
-      } else if (item.reason === "non-rigid-base") {
-        blockedLines.push(
-          `${describePart(item.pathKey)} — current placement already has a ${item.baseScale?.toFixed(3)}x scale baked in; Onshape's write API rejects non-rigid transforms`,
-        );
-      } else {
-        blockedLines.push(
-          `${describePart(item.pathKey)} — Scale isn't supported by this push (Onshape rejects any non-rigid result)`,
-        );
-      }
-    }
-
-    if (blockedLines.length > 0) {
-      console.warn("Skipped by the last push:", blockedLines);
-      setPushBlockedSummary(blockedLines);
-    }
-
-    if (updates.length === 0) {
-      return;
-    }
-
-    const result = await applyOnshapeOccurrenceTransforms(
-      {
-        documentId,
-        workspaceId,
-        assemblyElementId: selectedPartStudioId,
-        server,
-      },
-      updates,
-    );
-
-    const perOccurrenceResults = Array.isArray(result.results)
-      ? (result.results as { path: string[]; ok: boolean }[])
-      : [];
-    const succeededPathKeys = new Set(
-      perOccurrenceResults.filter((r) => r.ok).map((r) => r.path.join("/")),
-    );
-
-    if (!result.ok) {
-      // Onshape's error body is what actually explains a failure — log it
-      // stringified so it survives a plain-text console copy instead of
-      // collapsing to "{…}", plus the request payload that triggered it.
-      console.error(
-        "Push accepted changes failed (partially or fully):",
-        JSON.stringify(
-          { status: result.status, results: result.results, data: result.data, updates },
-          null,
-          2,
-        ),
-      );
-    } else {
-      console.log("Pushed accepted changes to Onshape:", result);
-    }
-
-    // Only delete an annotation once EVERY pathKey it touches actually
-    // succeeded — a partially-applied group edit should stay visible as
-    // open work, not silently disappear.
-    for (const [id, pathKeys] of annotationPathKeys) {
-      const allSucceeded = Array.from(pathKeys).every((pathKey) => succeededPathKeys.has(pathKey));
-
-      if (allSucceeded) {
-        deleteAnnotation(id);
-      }
-    }
-
-    if (succeededPathKeys.size === 0) {
-      return;
-    }
-
-    // Refresh placements from Onshape so the viewer's part positions catch
-    // up to the real, just-written occurrence transforms.
-    await buildRelationshipGraph({ force: true });
-  } finally {
-    setPushingAcceptedChanges(false);
-  }
+  console.warn(
+    "pushAcceptedChangesToOnshape: disabled during the Part Studio migration — STEP-based write-back (Phase 7) isn't wired up yet.",
+  );
 }
 
 // Fills in fields that were added to the schema after some annotations were
@@ -2144,7 +1997,7 @@ if (result.ok && result.state) {
       <div className={styles.viewerPane}>
         <FuzzyCADGeometryViewer
           gltfUrl={gltfUrl}
-          placements={placements}
+          partList={partList}
           highlightedPathKey={highlightedPathKey}
           selectedPathKeys={viewerSelectedPathKeys}
           activeTool={activeTool}
