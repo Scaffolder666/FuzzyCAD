@@ -2,7 +2,6 @@
 
 import { useEffect, useRef } from "react";
 import type { FuzzyCADUncertaintyDocument } from "../lib/uncertainty/document";
-import type { PartNode } from "../lib/partGraph";
 import {
   fetchOnshapePartAppearance,
   setOnshapePartAppearance,
@@ -11,19 +10,14 @@ import {
 
 const MARK_COLOR: PartColor = { red: 255, green: 149, blue: 0 };
 
-type PartGraphLike = {
-  byPathKey: Map<string, PartNode>;
-};
-
 type AppearanceQuery = {
   documentId: string;
   workspaceId: string;
+  elementId: string;
   server: string;
 };
 
 type CachedOriginal = {
-  documentId: string;
-  elementId: string;
   partId: string;
   color: PartColor | null;
   opacity: number | null;
@@ -65,28 +59,29 @@ function extractAppearance(data: unknown): { color: PartColor | null; opacity: n
  * directly in Onshape (not FuzzyCAD) can see "this has an open question"
  * without needing to open FuzzyCAD first.
  *
+ * Simplified for the Part Studio migration (Phase 4,
+ * /root/.claude/plans/memoized-purring-koala.md): a pathKey now IS a
+ * partId directly (see partIdentity.ts), and every part in a loaded scene
+ * lives in the one fixed Part Studio element in `query` — no partGraph
+ * indirection needed to resolve which document/element/part a pathKey
+ * came from.
+ *
  * Known limits, all deliberate v1 scope cuts rather than oversights:
  *  - Onshape's public API only exposes PART-level appearance, not a
  *    per-occurrence override (confirmed against the public OpenAPI spec —
- *    no per-instance appearance endpoint found). A part instanced
- *    multiple times in the assembly recolors at every occurrence, not
- *    just the marked one.
- *  - Only parts living in the SAME document as the open assembly are
- *    marked — a part from a linked external document doesn't have a
- *    known workspace id here to write into, so it's silently skipped.
+ *    no per-instance appearance endpoint found).
  *  - The "original color" cache is in-memory only, not persisted — a
  *    page reload while parts are still marked orange in Onshape won't
  *    remember what to restore them to; they stay orange until resolved.
  */
 export function useFuzzyMarkAppearance(
   document: FuzzyCADUncertaintyDocument,
-  partGraph: PartGraphLike | null,
   query: AppearanceQuery | null,
 ) {
   const cacheRef = useRef<Map<string, CachedOriginal>>(new Map());
 
   useEffect(() => {
-    if (!query || !partGraph) {
+    if (!query) {
       return;
     }
 
@@ -108,22 +103,11 @@ export function useFuzzyMarkAppearance(
         continue;
       }
 
-      const instance = partGraph.byPathKey.get(pathKey)?.instance;
-
-      if (
-        !instance?.sourceDocumentId ||
-        !instance.sourceElementId ||
-        !instance.sourcePartId ||
-        instance.sourceDocumentId !== query.documentId
-      ) {
-        continue;
-      }
-
       const partQuery = {
-        documentId: instance.sourceDocumentId,
+        documentId: query.documentId,
         workspaceId: query.workspaceId,
-        elementId: instance.sourceElementId,
-        partId: instance.sourcePartId,
+        elementId: query.elementId,
+        partId: pathKey,
         server: query.server,
       };
 
@@ -131,8 +115,6 @@ export function useFuzzyMarkAppearance(
       // GET resolves doesn't fire a second overlapping request for the
       // same part.
       cache.set(pathKey, {
-        documentId: partQuery.documentId,
-        elementId: partQuery.elementId,
         partId: partQuery.partId,
         color: null,
         opacity: null,
@@ -143,7 +125,7 @@ export function useFuzzyMarkAppearance(
           const current = await fetchOnshapePartAppearance(partQuery);
           const { color, opacity } = extractAppearance(current.data);
 
-          cache.set(pathKey, { ...partQuery, color, opacity });
+          cache.set(pathKey, { partId: partQuery.partId, color, opacity });
 
           await setOnshapePartAppearance(partQuery, MARK_COLOR);
         } catch (err) {
@@ -167,9 +149,9 @@ export function useFuzzyMarkAppearance(
 
       void setOnshapePartAppearance(
         {
-          documentId: cached.documentId,
+          documentId: query.documentId,
           workspaceId: query.workspaceId,
-          elementId: cached.elementId,
+          elementId: query.elementId,
           partId: cached.partId,
           server: query.server,
         },
@@ -179,5 +161,5 @@ export function useFuzzyMarkAppearance(
         console.warn(`[FuzzyCAD] appearance restore failed for ${pathKey}:`, err);
       });
     }
-  }, [document, partGraph, query]);
+  }, [document, query]);
 }

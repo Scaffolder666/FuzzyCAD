@@ -440,17 +440,19 @@ export default function FuzzyCADHome() {
   } = useUncertaintyDocument(currentUncertaintySource);
 
   const appearanceMarkingQuery = useMemo(
-    () => (documentId && workspaceId ? { documentId, workspaceId, server } : null),
-    [documentId, workspaceId, server],
+    () =>
+      documentId && workspaceId && selectedPartStudioId
+        ? { documentId, workspaceId, elementId: selectedPartStudioId, server }
+        : null,
+    [documentId, workspaceId, selectedPartStudioId, server],
   );
 
   // Colors the real part orange in Onshape while it has an open mark, and
   // reverts it once resolved/deleted — see useFuzzyMarkAppearance.ts for
-  // the known scope limits (part-level not per-occurrence, same-document
-  // parts only, in-memory original-color cache).
+  // the known scope limits (part-level not per-occurrence, in-memory
+  // original-color cache).
   useFuzzyMarkAppearance(
     uncertaintyDocumentWithCurrentSource,
-    partGraph,
     appearanceMarkingQuery,
   );
 
@@ -1082,7 +1084,7 @@ export default function FuzzyCADHome() {
       brepGhostSource.ensureLoaded({
         documentId,
         workspaceId,
-        assemblyElementId: selectedPartStudioId,
+        partStudioElementId: selectedPartStudioId,
         server,
       });
     }
@@ -1380,7 +1382,7 @@ export default function FuzzyCADHome() {
       brepGhostSource.ensureLoaded({
         documentId,
         workspaceId,
-        assemblyElementId: selectedPartStudioId,
+        partStudioElementId: selectedPartStudioId,
         server,
       });
     }
@@ -1426,7 +1428,7 @@ export default function FuzzyCADHome() {
       brepGhostSource.ensureLoaded({
         documentId,
         workspaceId,
-        assemblyElementId: selectedPartStudioId,
+        partStudioElementId: selectedPartStudioId,
         server,
       });
     }

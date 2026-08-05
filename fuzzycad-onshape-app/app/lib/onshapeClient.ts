@@ -246,6 +246,37 @@ export async function fetchOnshapePartStudioParts(
   return res.json() as Promise<ApiResult>;
 }
 
+export async function fetchOnshapePartStudioStep(query: PartStudioQuery) {
+  const params = makePartStudioParams(query);
+
+  return fetch(`/api/onshape/partstudio-step?${params.toString()}`);
+}
+
+export type PartBoundingBoxResult = {
+  partId: string;
+  ok: boolean;
+  status: number;
+  boundingBox: {
+    lowX: number;
+    lowY: number;
+    lowZ: number;
+    highX: number;
+    highY: number;
+    highZ: number;
+  } | null;
+};
+
+export async function fetchOnshapePartStudioBoundingBoxes(
+  query: PartStudioQuery & { partIds: string[] },
+): Promise<{ ok: boolean; results: PartBoundingBoxResult[] }> {
+  const params = makePartStudioParams(query);
+  params.set("partIds", query.partIds.join(","));
+
+  const res = await fetch(`/api/onshape/partstudio-boundingboxes?${params.toString()}`);
+
+  return res.json() as Promise<{ ok: boolean; results: PartBoundingBoxResult[] }>;
+}
+
 export async function uploadOnshapeImportStep(
   query: DocumentQuery,
   stepBuffer: ArrayBuffer,
