@@ -41,26 +41,43 @@ export async function GET(req: NextRequest) {
   }
 
   const featuresEndpoint = `${server}/api/partstudios/d/${documentId}/w/${workspaceId}/e/${partStudioElementId}/features`;
+  const partsEndpoint = `${server}/api/parts/d/${documentId}/w/${workspaceId}/e/${partStudioElementId}`;
 
-  const res = await onshapeFetch(
-    featuresEndpoint,
-    {
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        Accept: "application/json",
+  const [featuresRes, partsRes] = await Promise.all([
+    onshapeFetch(
+      featuresEndpoint,
+      {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          Accept: "application/json",
+        },
       },
-    },
-    { route: "/api/onshape/partstudio-features-debug", operation: "fetch-features" },
-  );
+      { route: "/api/onshape/partstudio-features-debug", operation: "fetch-features" },
+    ),
+    onshapeFetch(
+      partsEndpoint,
+      {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          Accept: "application/json",
+        },
+      },
+      { route: "/api/onshape/partstudio-features-debug", operation: "fetch-parts" },
+    ),
+  ]);
 
-  const data = await parseJsonOrText(res);
+  const data = await parseJsonOrText(featuresRes);
+  const partsData = await parseJsonOrText(partsRes);
 
   return NextResponse.json(
     {
       endpoint: featuresEndpoint,
-      status: res.status,
-      ok: res.ok,
+      status: featuresRes.status,
+      ok: featuresRes.ok,
       data,
+      partsEndpoint,
+      partsStatus: partsRes.status,
+      partsData,
     },
     { status: 200 },
   );
