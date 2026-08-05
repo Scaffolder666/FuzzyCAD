@@ -1,3 +1,4 @@
+import { gunzipSync } from "node:zlib";
 import { NextRequest, NextResponse } from "next/server";
 import { onshapeFetch } from "../../../lib/server/onshapeApi";
 
@@ -7,6 +8,20 @@ type UnknownRecord = Record<string, unknown>;
 
 function isRecord(value: unknown): value is UnknownRecord {
   return typeof value === "object" && value !== null;
+}
+
+/** The client gzips the STEP body when supported (see onshapeClient.ts's gzipStepBuffer) to stay under Vercel's ~4.5MB serverless request body limit — undo that before forwarding real STEP bytes to Onshape. */
+function decompressIfGzipped(buffer: ArrayBuffer, encoding: string | null): ArrayBuffer {
+  if (encoding !== "gzip") {
+    return buffer;
+  }
+
+  const decompressed = gunzipSync(Buffer.from(buffer));
+
+  return decompressed.buffer.slice(
+    decompressed.byteOffset,
+    decompressed.byteOffset + decompressed.byteLength,
+  ) as ArrayBuffer;
 }
 
 function getStringField(record: UnknownRecord, keys: string[]): string | null {
@@ -107,7 +122,8 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const stepBuffer = await req.arrayBuffer();
+  const rawBody = await req.arrayBuffer();
+  const stepBuffer = decompressIfGzipped(rawBody, searchParams.get("stepEncoding"));
 
   if (stepBuffer.byteLength === 0) {
     return NextResponse.json({ error: "Empty STEP body" }, { status: 400 });

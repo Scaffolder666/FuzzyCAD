@@ -80,7 +80,7 @@ async function parseApiResult(res: Response): Promise<ApiResult> {
  * screws), so gzip typically shrinks it well past that line. Falls back to
  * sending the blob as-is if the browser lacks CompressionStream.
  */
-async function gzipBlob(blob: Blob): Promise<Blob | null> {
+export async function gzipBlob(blob: Blob): Promise<Blob | null> {
   if (typeof CompressionStream === "undefined") {
     return null;
   }
@@ -252,15 +252,35 @@ export async function fetchOnshapePartStudioParts(
   return res.json() as Promise<ApiResult>;
 }
 
+/**
+ * An edited-and-re-exported STEP file (opencascade.js's STEPControl_Writer
+ * output) is verbose CAD text, not the binary STL gzipBlob's doc comment
+ * describes — but it compresses just as well, and hits the exact same
+ * Vercel ~4.5MB serverless body limit for anything beyond a trivially
+ * small part (confirmed live: a several-part STEP export 413'd). Gzips
+ * before upload when the browser supports it; the route decompresses
+ * server-side before forwarding the real STEP bytes to Onshape.
+ */
+async function gzipStepBuffer(stepBuffer: ArrayBuffer): Promise<{ body: BodyInit; gzip: boolean }> {
+  const gzipped = await gzipBlob(new Blob([stepBuffer]));
+
+  return gzipped ? { body: gzipped, gzip: true } : { body: stepBuffer, gzip: false };
+}
+
 export async function uploadOnshapeImportStep(
   query: DocumentQuery,
   stepBuffer: ArrayBuffer,
 ) {
   const params = makeDocumentParams(query);
+  const { body, gzip } = await gzipStepBuffer(stepBuffer);
+
+  if (gzip) {
+    params.set("stepEncoding", "gzip");
+  }
 
   return fetch(`/api/onshape/import-step?${params.toString()}`, {
     method: "POST",
-    body: stepBuffer,
+    body,
   });
 }
 
@@ -270,10 +290,15 @@ export async function uploadOnshapePartStudioImportStep(
   stepBuffer: ArrayBuffer,
 ) {
   const params = makePartStudioParams(query);
+  const { body, gzip } = await gzipStepBuffer(stepBuffer);
+
+  if (gzip) {
+    params.set("stepEncoding", "gzip");
+  }
 
   return fetch(`/api/onshape/partstudio-import-step?${params.toString()}`, {
     method: "POST",
-    body: stepBuffer,
+    body,
   });
 }
 
