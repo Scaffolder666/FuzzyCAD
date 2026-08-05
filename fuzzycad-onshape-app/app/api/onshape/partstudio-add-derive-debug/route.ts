@@ -129,8 +129,14 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  // The manually-captured real Derive feature's namespace had an "m"
+  // prefix on the microversion segment (e.g. "docId::me89b8f386f6b8a968...")
+  // -- Onshape's internal convention for typed ids (workspace ids get "w",
+  // version ids get "v"). The currentmicroversion endpoint returns the raw
+  // id with no prefix, so prepend it here; two prior attempts using the
+  // bare id both got their partQuery silently wiped to [] server-side.
   const microversionId = microversionData.microversion;
-  const namespace = `${sourceDocumentId}::${microversionId}`;
+  const namespace = `${sourceDocumentId}::m${microversionId}`;
 
   const featuresEndpoint = `${server}/api/partstudios/d/${targetDocumentId}/w/${targetWorkspaceId}/e/${targetPartStudioElementId}/features`;
 
