@@ -390,9 +390,7 @@ export default function FuzzyCADHome() {
     [documentId, workspaceId, selectedPartStudioId, server],
   );
 
-  const { partList, partTree, resetPartTree } = usePartStudioPartTree(
-    partStudioIdentity,
-  );
+  const { partList, partTree } = usePartStudioPartTree(partStudioIdentity);
 
   const currentUncertaintySource = useMemo(
     () => ({
@@ -646,7 +644,20 @@ export default function FuzzyCADHome() {
     resetUncertaintyDocument();
 
     setGeometryLoadResult(null);
-    resetPartTree();
+
+    // Deliberately NOT calling resetPartTree() here. The part list is
+    // keyed on selectedPartStudioId (usePartStudioPartTree's own effect
+    // refetches when that changes), not on "is geometry currently
+    // reloading" — reloading the SAME Part Studio's geometry doesn't make
+    // its part list stale. This used to unconditionally clear it on every
+    // geometry (re)load, but if selectedPartStudioId hadn't actually
+    // changed (e.g. clicking "Load Part Studio" again on the
+    // already-selected one), nothing re-fires to refill it afterward —
+    // the list would just stay empty until a different Part Studio was
+    // picked. Confirmed live: the fetch succeeds and commits real parts
+    // to state right after mount (auto-selected first Part Studio), then
+    // clicking Load on that same Part Studio wiped it via this call with
+    // nothing to repopulate it.
 
     if (gltfUrl) {
       URL.revokeObjectURL(gltfUrl);
