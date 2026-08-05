@@ -35,7 +35,6 @@ import {
   loadFuzzycadProjectState,
   saveFuzzycadProject,
   uploadOnshapeImportStep,
-  deleteOnshapeElement,
 } from "./lib/onshapeClient";
 import { computeExternalGeometryDeltas } from "./lib/operations/resolveExternalGeometryDeltas";
 import type { OperationTool } from "./lib/operations/types";
@@ -1949,41 +1948,6 @@ async function pushAcceptedChangesToOnshape() {
     }
 
     console.log("Pushed accepted changes to Onshape as a new element:", importData);
-
-    // "Replace" (not just "add") — delete the original Part Studio now
-    // that its edited replacement has landed. Only attempted AFTER the
-    // import above is confirmed to have succeeded, never before: losing
-    // the original before its replacement exists would be unrecoverable
-    // if the import had failed instead.
-    const deleteResult = await deleteOnshapeElement({
-      documentId,
-      workspaceId,
-      server,
-      elementId: selectedPartStudioId,
-    });
-
-    if (!deleteResult.ok) {
-      console.error("Failed to delete the original Part Studio after pushing:", deleteResult);
-      setPushBlockedSummary((prev) => [
-        ...(prev ?? []),
-        `The edited version imported fine, but the original Part Studio couldn't be deleted automatically — remove it by hand in Onshape. (${JSON.stringify(deleteResult)})`,
-      ]);
-    } else {
-      // Deliberately NOT auto-clearing selectedPartStudioId / resetting
-      // geometry / force-reloading elements here anymore. That cascade
-      // fired several state changes back-to-back with no user action in
-      // between, right on top of a real (separately-fixed) timing race in
-      // usePartStudioPartTree — an easy way to reproduce "part list looks
-      // empty, nothing is selectable" that had nothing to do with the
-      // delete itself. The geometry currently on screen refers to a now-
-      // deleted element, so it's stale, but it stays put and inert until
-      // the user does something (pick a Part Studio, reload) — one
-      // deliberate action at a time instead of an automatic chain.
-      setPushBlockedSummary((prev) => [
-        ...(prev ?? []),
-        "Original Part Studio deleted — the edited version is now the only copy. Pick a Part Studio from the dropdown (or reload) to keep working.",
-      ]);
-    }
 
     // Only delete an annotation once EVERY pathKey it touches actually
     // succeeded — a partially-applied group edit should stay visible as
