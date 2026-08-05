@@ -86,11 +86,27 @@ function isAncestor(ancestor: THREE.Object3D, node: THREE.Object3D): boolean {
   return false;
 }
 
+/**
+ * Assembly glTF exports always wrap a mesh in a named Group (one extra
+ * layer for the occurrence), so the original version of this function
+ * (placement.ts) could just skip Mesh nodes entirely and only look at
+ * Groups. A Part Studio export has no such guarantee: three.js's
+ * GLTFLoader only wraps a glTF node's mesh in a Group when it has
+ * multiple primitives (multiple materials) — a single-material part
+ * becomes a bare, directly-named THREE.Mesh with no wrapping Group at
+ * all. Excluding Mesh nodes here left every single-material part
+ * completely untagged (confirmed live: geometry rendered fine, but
+ * clicking never resolved a partId — collectPartGroups was returning
+ * zero groups for most/all parts in a Part Studio). Now a named Mesh is
+ * itself a valid candidate; the ancestor filter below still prefers an
+ * enclosing named Group over its child Mesh when both exist, so
+ * multi-primitive parts still tag at the group level, not per-submesh.
+ */
 function collectPartGroups(scene: THREE.Object3D): THREE.Object3D[] {
   const groups: THREE.Object3D[] = [];
 
   scene.traverse((object) => {
-    if (object === scene || object instanceof THREE.Mesh) {
+    if (object === scene) {
       return;
     }
 
@@ -98,13 +114,17 @@ function collectPartGroups(scene: THREE.Object3D): THREE.Object3D[] {
       return;
     }
 
-    let hasMesh = false;
-
-    object.traverse((child) => {
-      if (child instanceof THREE.Mesh) {
-        hasMesh = true;
-      }
-    });
+    const hasMesh =
+      object instanceof THREE.Mesh ||
+      (() => {
+        let found = false;
+        object.traverse((child) => {
+          if (child instanceof THREE.Mesh) {
+            found = true;
+          }
+        });
+        return found;
+      })();
 
     if (hasMesh) {
       groups.push(object);
