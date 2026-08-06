@@ -6,12 +6,21 @@ import { useSearchParams } from "next/navigation";
 /**
  * Verification page for the "Element right panel" application extension
  * — see https://onshape-public.github.io/docs/app-dev/messages/element-right-panel/.
- * Not usable standalone: Onshape only supplies documentId/workspaceId/
- * elementId/server as query params when it loads this page inside its own
- * iframe, after you register it as an Extension (Location: "Element right
- * panel") on the FuzzyCAD OAuth app in the Developer Portal
- * (https://cad.onshape.com/appstore/dev-portal) and open it from inside a
- * real Part Studio.
+ * Not usable standalone: only works loaded inside a registered Element
+ * right panel extension (Developer Portal:
+ * https://cad.onshape.com/appstore/dev-portal), opened from inside a real
+ * Part Studio.
+ *
+ * CONFIRMED LIVE (2026-08-06, real Onshape session, DevTools Network tab):
+ * for this extension Onshape's initial iframe src carries only
+ * companyId/sessionCompanyId/server/userId/clientId/locale/theme — NOT
+ * documentId/workspaceId/elementId. Those are dynamic (change on tab
+ * switch without reloading the panel), so they must arrive via postMessage
+ * after the applicationInit handshake instead of being in the URL. This
+ * page now sends applicationInit unconditionally on load (previously it
+ * incorrectly gated that on documentId/workspaceId/elementId already being
+ * present, which meant it never fired) and adopts whatever
+ * documentId/workspaceId/elementId shows up in ANY inbound message.
  *
  * Exercises the full interaction loop by hand:
  * 1. applicationInit handshake on load.
@@ -25,10 +34,11 @@ type LogEntry = { at: string; direction: "in" | "out"; data: unknown };
 
 function RightPanelDebugInner() {
   const searchParams = useSearchParams();
-  const documentId = searchParams.get("documentId") ?? "";
-  const workspaceId = searchParams.get("workspaceId") ?? "";
-  const elementId = searchParams.get("elementId") ?? "";
   const server = searchParams.get("server") ?? "";
+
+  const [documentId, setDocumentId] = useState(searchParams.get("documentId") ?? "");
+  const [workspaceId, setWorkspaceId] = useState(searchParams.get("workspaceId") ?? "");
+  const [elementId, setElementId] = useState(searchParams.get("elementId") ?? "");
 
   const [log, setLog] = useState<LogEntry[]>([]);
   const [lastSelectionId, setLastSelectionId] = useState<string | null>(null);
@@ -48,10 +58,6 @@ function RightPanelDebugInner() {
   }
 
   useEffect(() => {
-    if (!documentId || !workspaceId || !elementId) {
-      return;
-    }
-
     const initTimer = setTimeout(() => post({ messageName: "applicationInit" }), 0);
 
     function handleMessage(event: MessageEvent) {
@@ -61,6 +67,16 @@ function RightPanelDebugInner() {
       }
 
       appendLog("in", event.data);
+
+      if (typeof event.data?.documentId === "string" && event.data.documentId) {
+        setDocumentId(event.data.documentId);
+      }
+      if (typeof event.data?.workspaceId === "string" && event.data.workspaceId) {
+        setWorkspaceId(event.data.workspaceId);
+      }
+      if (typeof event.data?.elementId === "string" && event.data.elementId) {
+        setElementId(event.data.elementId);
+      }
 
       const messageName = event.data?.messageName;
       if (messageName === "SELECTION" || messageName === "requestSelection") {
@@ -81,7 +97,7 @@ function RightPanelDebugInner() {
       window.removeEventListener("message", handleMessage);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [documentId, workspaceId, elementId, server]);
+  }, [server]);
 
   function requestOneFace() {
     const messageId = `req-${nextMessageIdRef.current++}`;
@@ -116,8 +132,9 @@ function RightPanelDebugInner() {
       </p>
       {missingContext ? (
         <p style={{ color: "#b91c1c" }}>
-          No Onshape context in the URL — this page only works when Onshape itself loads it
-          inside a registered Element right panel extension.
+          No documentId/workspaceId/elementId yet — confirmed these are NOT in the initial iframe
+          URL for this extension, so waiting on an inbound postMessage from Onshape to carry them
+          (see the log below). If nothing ever arrives, that itself is the finding.
         </p>
       ) : null}
       <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
