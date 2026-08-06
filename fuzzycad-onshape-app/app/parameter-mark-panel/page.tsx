@@ -28,7 +28,9 @@ import {
 } from "../lib/featureParameterValue";
 import {
   ONSHAPE_CONTEXT_STORAGE_KEY,
+  readRightPanelElementOverride,
   readSharedOnshapeContext,
+  writeRightPanelElementOverride,
   type SharedOnshapeContext,
 } from "../lib/onshapeRightPanelContext";
 import styles from "./page.module.css";
@@ -115,6 +117,11 @@ function ParameterMarkPanelInner() {
   // the person using the panel visually confirm it matches what's open,
   // rather than silently trusting a possibly-stale elementId.
   const [currentElementName, setCurrentElementName] = useState<string | null>(null);
+  // Every Part Studio in the current document -- NOT a cross-document
+  // search (that scope was explicitly rejected before: this only lets you
+  // switch among the few Part Studios already inside the document you're
+  // looking at).
+  const [partStudioOptions, setPartStudioOptions] = useState<OnshapeElement[]>([]);
   // Need input is the only tab with real content right now (see
   // RIGHT_PANEL_TABS) -- defaulting here instead of "overall" so the
   // panel doesn't open on an empty placeholder.
@@ -124,7 +131,8 @@ function ParameterMarkPanelInner() {
     function applyStoredContext() {
       const stored = readSharedOnshapeContext();
       if (stored) {
-        setContext(stored);
+        const override = readRightPanelElementOverride(stored.documentId, stored.workspaceId);
+        setContext(override ? { ...stored, elementId: override } : stored);
       }
     }
 
@@ -158,10 +166,10 @@ function ParameterMarkPanelInner() {
         return;
       }
 
-      const match = (result.data as OnshapeElement[]).find(
-        (element) => element.id === context!.elementId,
-      );
+      const elements = result.data as OnshapeElement[];
+      const match = elements.find((element) => element.id === context!.elementId);
       setCurrentElementName(match?.name ?? null);
+      setPartStudioOptions(elements.filter((element) => element.elementType === "PARTSTUDIO"));
     }
 
     void resolveElementName();
@@ -225,6 +233,17 @@ function ParameterMarkPanelInner() {
       cancelled = true;
     };
   }, [context]);
+
+  /** Lets the panel's user correct a stale elementId themselves, since Onshape won't tell us. */
+  function switchPartStudio(elementId: string) {
+    if (!context || elementId === context.elementId) return;
+    writeRightPanelElementOverride({
+      documentId: context.documentId,
+      workspaceId: context.workspaceId,
+      elementId,
+    });
+    setContext({ ...context, elementId });
+  }
 
   function annotationIdFor(entry: ValueParameterEntry) {
     return makeFeatureParameterQuestionAnnotationId(entry.featureId, entry.parameterId);
@@ -513,9 +532,31 @@ function ParameterMarkPanelInner() {
         ))}
       </div>
 
-      <p className={styles.elementBadge}>
-        Part Studio: {currentElementName ?? "unknown (check Onshape)"}
-      </p>
+      <div className={styles.elementSwitcher}>
+        <span className={styles.elementBadge}>Part Studio:</span>
+        {partStudioOptions.length > 0 ? (
+          <select
+            className={styles.elementSelect}
+            value={context.elementId}
+            onChange={(event) => switchPartStudio(event.target.value)}
+          >
+            {!partStudioOptions.some((option) => option.id === context.elementId) ? (
+              <option value={context.elementId}>
+                {currentElementName ?? "unknown (check Onshape)"}
+              </option>
+            ) : null}
+            {partStudioOptions.map((option) => (
+              <option key={option.id} value={option.id}>
+                {option.name}
+              </option>
+            ))}
+          </select>
+        ) : (
+          <span className={styles.elementBadge}>
+            {currentElementName ?? "unknown (check Onshape)"}
+          </span>
+        )}
+      </div>
 
       {notConnected ? (
         <div className={styles.header}>

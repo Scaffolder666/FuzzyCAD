@@ -46,3 +46,58 @@ export function readSharedOnshapeContext(): SharedOnshapeContext | null {
     return null;
   }
 }
+
+/**
+ * The shared context's elementId reflects whatever Part Studio the main
+ * FuzzyCAD tab last had open -- it goes stale the moment someone switches
+ * Onshape tabs without reopening the main tab (confirmed live: Onshape
+ * never tells the right panel which element is active). This lets the
+ * right panel remember its own choice of Part Studio, scoped to one
+ * documentId+workspaceId so it doesn't leak across documents.
+ */
+const RIGHT_PANEL_ELEMENT_OVERRIDE_STORAGE_KEY = "fuzzycad:rightPanelElementOverride";
+
+export type RightPanelElementOverride = {
+  documentId: string;
+  workspaceId: string;
+  elementId: string;
+  updatedAt: number;
+};
+
+export function writeRightPanelElementOverride(
+  override: Omit<RightPanelElementOverride, "updatedAt">,
+) {
+  try {
+    const full: RightPanelElementOverride = { ...override, updatedAt: Date.now() };
+    window.localStorage.setItem(
+      RIGHT_PANEL_ELEMENT_OVERRIDE_STORAGE_KEY,
+      JSON.stringify(full),
+    );
+  } catch {
+    // localStorage can throw in restrictive iframe sandboxes -- best-effort only.
+  }
+}
+
+/** Returns the override's elementId only if it matches the given document, else null. */
+export function readRightPanelElementOverride(
+  documentId: string,
+  workspaceId: string,
+): string | null {
+  try {
+    const raw = window.localStorage.getItem(RIGHT_PANEL_ELEMENT_OVERRIDE_STORAGE_KEY);
+    if (!raw) {
+      return null;
+    }
+    const parsed = JSON.parse(raw) as Partial<RightPanelElementOverride>;
+    if (
+      parsed.documentId !== documentId ||
+      parsed.workspaceId !== workspaceId ||
+      !parsed.elementId
+    ) {
+      return null;
+    }
+    return parsed.elementId;
+  } catch {
+    return null;
+  }
+}
