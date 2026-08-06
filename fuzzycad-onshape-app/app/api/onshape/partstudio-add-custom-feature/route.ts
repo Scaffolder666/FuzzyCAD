@@ -10,7 +10,7 @@ type RequestBody = {
   server?: string;
   name?: string;
   originalFeatureId: string;
-  depthMm: number;
+  depthExpression: string;
   oppositeDirection?: boolean;
 };
 
@@ -66,7 +66,7 @@ export async function POST(req: NextRequest) {
     server = "https://cad.onshape.com",
     name,
     originalFeatureId,
-    depthMm,
+    depthExpression,
     oppositeDirection = false,
   } = body;
 
@@ -77,8 +77,8 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  if (typeof depthMm !== "number" || !Number.isFinite(depthMm)) {
-    return NextResponse.json({ error: "depthMm must be a number" }, { status: 400 });
+  if (!depthExpression) {
+    return NextResponse.json({ error: "Missing depthExpression" }, { status: 400 });
   }
 
   const featuresEndpoint = `${server}/api/partstudios/d/${documentId}/w/${workspaceId}/e/${partStudioElementId}/features`;
@@ -170,7 +170,7 @@ export async function POST(req: NextRequest) {
           typeName: "BTMParameterQuantity",
           message: {
             parameterId: "depth",
-            expression: `${depthMm}*mm`,
+            expression: depthExpression,
           },
         },
         {

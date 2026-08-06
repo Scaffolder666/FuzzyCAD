@@ -11,6 +11,7 @@ import {
   resolveUncertaintyAnnotation,
   setFeatureParameterQuestionAnswer,
   setFeatureParameterQuestionMarkedAppearances,
+  setFeatureParameterQuestionProposedFeatureId,
   setFeatureParameterQuestionRange,
   upsertFeatureParameterQuestion,
   type FeatureParameterPartAppearanceSnapshot,
@@ -19,6 +20,8 @@ import {
   type FuzzyCADUncertaintyDocument,
 } from "../lib/uncertainty/document";
 import {
+  addPartStudioProposedExtrude,
+  deletePartStudioFeature,
   fetchFeatureCreatedPartIds,
   fetchOnshapeElements,
   fetchOnshapePartAppearance,
@@ -279,6 +282,26 @@ function ParameterMarkPanelInner() {
     );
   }
 
+  /**
+   * Only Extrude's "depth" parameter is wired to the FeatureScript ghost
+   * preview so far -- other Extrude parameters (thickness, offsetDistance,
+   * etc.) and every other feature type still use the old
+   * mutate-the-real-feature-directly preview (see livePreviewValue).
+   */
+  function isGhostExtrudeParam(entry: ValueParameterEntry) {
+    return entry.featureType === "extrude" && entry.parameterId === "depth";
+  }
+
+  function extractInsertedFeatureId(data: unknown): string | null {
+    if (!data || typeof data !== "object") return null;
+    const feature = (data as Record<string, unknown>).feature;
+    if (!feature || typeof feature !== "object") return null;
+    const message = (feature as Record<string, unknown>).message;
+    if (!message || typeof message !== "object") return null;
+    const featureId = (message as Record<string, unknown>).featureId;
+    return typeof featureId === "string" ? featureId : null;
+  }
+
   /** One card per feature instead of one per parameter -- an Extrude with 4 numeric fields was showing 4 near-identical cards that all highlighted the same feature. */
   const featureGroups = useMemo<FeatureGroup[]>(() => {
     if (!parameters) return [];
@@ -391,6 +414,7 @@ function ParameterMarkPanelInner() {
       if (saveRes.ok) {
         setUncertaintyDoc(nextDocument);
         void applyAppearanceMark(entry);
+        void applyProposedExtrudeGhost(entry);
       } else {
         setStatus(`save failed (HTTP ${saveRes.status})`);
       }
@@ -533,6 +557,108 @@ function ParameterMarkPanelInner() {
     }
   }
 
+  /**
+   * Inserts a "FuzzyCAD Proposed Extrude" ghost instance so the proposed
+   * depth is real, separate geometry sitting next to the untouched
+   * original -- Onshape's own tracked-changes model, instead of
+   * livePreviewValue's old approach of temporarily mutating the real
+   * feature. Scoped to Extrude's "depth" parameter only (see
+   * isGhostExtrudeParam). Idempotent (skips if already inserted) and
+   * best-effort: if the insert fails, livePreviewValue falls back to its
+   * old direct-mutate behavior since proposedFeatureId stays unset.
+   */
+  async function applyProposedExtrudeGhost(entry: ValueParameterEntry) {
+    if (!context || !isGhostExtrudeParam(entry)) return;
+
+    try {
+      const stateRes = await loadFuzzycadProjectState({
+        documentId: context.documentId,
+        workspaceId: context.workspaceId,
+        server: context.server,
+      });
+      if (!stateRes.ok || !isValidUncertaintyDocument(stateRes.state)) return;
+
+      const id = annotationIdFor(entry);
+      const annotation = stateRes.state.annotations.find(
+        (a): a is FeatureParameterQuestionUncertaintyAnnotation =>
+          a.id === id && a.type === "featureParameterQuestion",
+      );
+      if (!annotation || annotation.proposedFeatureId) return;
+
+      const insertRes = await addPartStudioProposedExtrude(
+        {
+          documentId: context.documentId,
+          workspaceId: context.workspaceId,
+          partStudioElementId: context.elementId,
+          server: context.server,
+        },
+        {
+          name: `FuzzyCAD Proposed: ${entry.featureName}`,
+          originalFeatureId: entry.featureId,
+          depthExpression: annotation.currentValue,
+        },
+      );
+
+      const featureId = extractInsertedFeatureId(insertRes.data);
+      if (!insertRes.ok || !featureId) {
+        console.warn(`[FuzzyCAD] proposed-extrude ghost insert failed for ${entry.featureId}:`, insertRes);
+        return;
+      }
+
+      await withSavedDocument((doc) => setFeatureParameterQuestionProposedFeatureId(doc, id, featureId));
+    } catch (err) {
+      console.warn(`[FuzzyCAD] proposed-extrude ghost insert failed for ${entry.featureId}:`, err);
+    }
+  }
+
+  /**
+   * Removes the ghost instance on accept/reject -- accept already patched
+   * the real feature to the final value elsewhere (resolveMark), so the
+   * ghost's job is done; reject just discards it since the real feature
+   * was never touched. Only clears proposedFeatureId after the delete
+   * succeeds, so a failed delete can be retried instead of silently
+   * orphaning the ghost.
+   */
+  async function deleteProposedExtrudeGhost(entry: ValueParameterEntry) {
+    if (!context || !isGhostExtrudeParam(entry)) return;
+
+    try {
+      const stateRes = await loadFuzzycadProjectState({
+        documentId: context.documentId,
+        workspaceId: context.workspaceId,
+        server: context.server,
+      });
+      if (!stateRes.ok || !isValidUncertaintyDocument(stateRes.state)) return;
+
+      const id = annotationIdFor(entry);
+      const annotation = stateRes.state.annotations.find(
+        (a): a is FeatureParameterQuestionUncertaintyAnnotation =>
+          a.id === id && a.type === "featureParameterQuestion",
+      );
+      const proposedFeatureId = annotation?.proposedFeatureId ?? null;
+      if (!annotation || !proposedFeatureId) return;
+
+      const deleteRes = await deletePartStudioFeature(
+        {
+          documentId: context.documentId,
+          workspaceId: context.workspaceId,
+          partStudioElementId: context.elementId,
+          server: context.server,
+        },
+        { featureId: proposedFeatureId },
+      );
+
+      if (!deleteRes.ok) {
+        console.warn(`[FuzzyCAD] proposed-extrude ghost delete failed for ${entry.featureId}:`, deleteRes);
+        return;
+      }
+
+      await withSavedDocument((doc) => setFeatureParameterQuestionProposedFeatureId(doc, id, null));
+    } catch (err) {
+      console.warn(`[FuzzyCAD] proposed-extrude ghost delete failed for ${entry.featureId}:`, err);
+    }
+  }
+
   /** Reload -> apply a pure document.ts mutation -> save -> update local state, shared by every detail-view action. */
   async function withSavedDocument(
     mutate: (current: FuzzyCADUncertaintyDocument) => FuzzyCADUncertaintyDocument,
@@ -582,6 +708,26 @@ function ParameterMarkPanelInner() {
     const baseExpression =
       annotation?.currentValue ?? formatFeatureParameterValue(entry.typeName, entry.message);
     const expression = substituteNumericMagnitude(baseExpression, value);
+
+    // Ghost-tracked Extrude depth: patch the ghost instance instead of the
+    // real feature, so the original stays untouched until Accept. Falls
+    // back to the old direct-mutate behavior below if the ghost hasn't
+    // been inserted yet (or its insert failed).
+    if (isGhostExtrudeParam(entry) && annotation?.proposedFeatureId) {
+      await updatePartStudioFeatureSuppressed(
+        {
+          documentId: context.documentId,
+          workspaceId: context.workspaceId,
+          partStudioElementId: context.elementId,
+          server: context.server,
+        },
+        {
+          featureId: annotation.proposedFeatureId,
+          parameterUpdates: [{ parameterId: "depth", expression }],
+        },
+      );
+      return;
+    }
 
     await updatePartStudioFeatureSuppressed(
       {
@@ -646,6 +792,7 @@ function ParameterMarkPanelInner() {
 
     await withSavedDocument((doc) => resolveUncertaintyAnnotation(doc, annotationIdFor(entry)));
     void revertAppearanceMark(entry);
+    void deleteProposedExtrudeGhost(entry);
   }
 
   /**
@@ -679,10 +826,12 @@ function ParameterMarkPanelInner() {
     );
     setSaving(false);
 
-    // Must happen before the delete below -- revertAppearanceMark looks
-    // the annotation back up to find markedAppearances, and a deleted
+    // Must happen before the delete below -- revertAppearanceMark and
+    // deleteProposedExtrudeGhost both look the annotation back up (for
+    // markedAppearances / proposedFeatureId respectively), and a deleted
     // annotation has nothing left to find.
     await revertAppearanceMark(entry);
+    await deleteProposedExtrudeGhost(entry);
     await withSavedDocument((doc) => removeUncertaintyAnnotationById(doc, annotationIdFor(entry)));
     return true;
   }
@@ -965,7 +1114,10 @@ function ParameterMarkPanelInner() {
                 onReopen={() =>
                   void withSavedDocument((doc) =>
                     reopenUncertaintyAnnotation(doc, annotationIdFor(selected)),
-                  ).then(() => applyAppearanceMark(selected))
+                  ).then(() => {
+                    void applyAppearanceMark(selected);
+                    void applyProposedExtrudeGhost(selected);
+                  })
                 }
                 onReject={() =>
                   void rejectMark(selected).then((deleted) => {

@@ -330,6 +330,17 @@ export type FeatureParameterQuestionUncertaintyAnnotation = BaseAnnotationFields
   commentThread: FeatureParameterComment[];
   /** Parts this feature created, recolored transparent while the mark is open -- empty until the feature->part lookup resolves, and cleared back to [] once restored on resolve/reject. */
   markedAppearances: FeatureParameterPartAppearanceSnapshot[];
+  /**
+   * For featureType "extrude" only: the featureId of a ghost
+   * "FuzzyCAD Proposed Extrude" custom feature instance inserted into the
+   * same Part Studio, showing the proposed depth as real, separate
+   * geometry next to the untouched original -- Onshape's own tracked-
+   * changes preview instead of a temporary live mutation of the real
+   * feature. Null until the ghost is inserted, and cleared back to null
+   * once it's deleted on accept/reject. Optional (`?? null` reads) since
+   * documents saved before this field existed won't have it.
+   */
+  proposedFeatureId: string | null;
 };
 
 export type FuzzyCADUncertaintyAnnotation =
@@ -1970,6 +1981,7 @@ function createFeatureParameterQuestionAnnotation(input: {
   rangeMaxValue?: number | null;
   commentThread?: FeatureParameterComment[];
   markedAppearances?: FeatureParameterPartAppearanceSnapshot[];
+  proposedFeatureId?: string | null;
   comment?: string;
   author?: string;
   assignee?: string;
@@ -2003,6 +2015,7 @@ function createFeatureParameterQuestionAnnotation(input: {
     rangeMaxValue: input.rangeMaxValue ?? null,
     commentThread: input.commentThread ?? [],
     markedAppearances: input.markedAppearances ?? [],
+    proposedFeatureId: input.proposedFeatureId ?? null,
     comment: input.comment,
     author: input.author,
     assignee: input.assignee,
@@ -2041,6 +2054,7 @@ export function upsertFeatureParameterQuestion(
     rangeMaxValue: existingQuestion?.rangeMaxValue,
     commentThread: existingQuestion?.commentThread,
     markedAppearances: existingQuestion?.markedAppearances,
+    proposedFeatureId: existingQuestion?.proposedFeatureId,
     comment: existing?.comment,
     author: existing?.author ?? input.author,
     assignee: existing?.assignee,
@@ -2162,6 +2176,30 @@ export function clearFeatureParameterQuestionMarkedAppearances(
       return {
         ...annotation,
         markedAppearances: [],
+        updatedAt: now,
+      };
+    }),
+  };
+}
+
+/** Records (or clears, passing null) the ghost "Proposed Extrude" instance's featureId -- unlike markedAppearances there's no idempotent guard, since this is a single value created once on insert and cleared once on delete, not an append-once snapshot. */
+export function setFeatureParameterQuestionProposedFeatureId(
+  document: FuzzyCADUncertaintyDocument,
+  annotationId: string,
+  proposedFeatureId: string | null,
+): FuzzyCADUncertaintyDocument {
+  const now = new Date().toISOString();
+
+  return {
+    ...document,
+    annotations: document.annotations.map((annotation) => {
+      if (annotation.id !== annotationId || annotation.type !== "featureParameterQuestion") {
+        return annotation;
+      }
+
+      return {
+        ...annotation,
+        proposedFeatureId,
         updatedAt: now,
       };
     }),

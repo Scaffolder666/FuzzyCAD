@@ -345,7 +345,7 @@ export async function updatePartStudioFeatureSuppressed(
  */
 export async function addPartStudioProposedExtrude(
   query: PartStudioQuery,
-  body: { name?: string; originalFeatureId: string; depthMm: number; oppositeDirection?: boolean },
+  body: { name?: string; originalFeatureId: string; depthExpression: string; oppositeDirection?: boolean },
 ): Promise<ApiResult> {
   const res = await fetch(`/api/onshape/partstudio-add-custom-feature`, {
     method: "POST",
