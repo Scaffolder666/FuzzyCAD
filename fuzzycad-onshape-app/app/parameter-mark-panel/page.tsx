@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import {
   addFeatureParameterQuestionComment,
   createEmptyUncertaintyDocument,
@@ -317,13 +317,45 @@ function ParameterMarkPanelInner() {
   }
 
   /**
-   * Resolving is the moment a proposed value actually takes effect --
-   * before this, "Save proposed value" only records the proposal in
-   * FuzzyCAD's own uncertainty document, the real Onshape feature is
-   * untouched. If there's a resolvedValue, patch the real parameter's
-   * expression via the Feature API first (preserving its original unit
-   * suffix), then mark the annotation resolved. If the Feature API patch
-   * fails, the mark stays open so nothing is silently lost.
+   * Pushes a not-yet-confirmed value straight into the real Onshape
+   * feature for live visual feedback while someone is still typing or
+   * dragging the slider -- debounced from DetailView, not on every
+   * keystroke. Deliberately does NOT touch the annotation (no
+   * resolvedValue write, no status change, no lock) -- this is preview
+   * only; "Mark resolved" is still the one action that confirms it.
+   */
+  async function livePreviewValue(entry: ValueParameterEntry, value: string) {
+    if (!context) return;
+    const annotation = findAnnotation(entry);
+    const baseExpression =
+      annotation?.currentValue ?? formatFeatureParameterValue(entry.typeName, entry.message);
+    const expression = substituteNumericMagnitude(baseExpression, value);
+
+    await updatePartStudioFeatureSuppressed(
+      {
+        documentId: context.documentId,
+        workspaceId: context.workspaceId,
+        partStudioElementId: context.elementId,
+        server: context.server,
+      },
+      {
+        featureId: entry.featureId,
+        parameterUpdates: [{ parameterId: entry.parameterId, expression }],
+      },
+    );
+  }
+
+  /**
+   * Resolving is the moment a proposed value is CONFIRMED, even though
+   * livePreviewValue may have already pushed intermediate values to
+   * Onshape while someone was still dragging the slider -- this call
+   * re-applies the final resolvedValue (in case the last live preview
+   * wasn't the final one, e.g. answered via typing after a slider drag)
+   * and is what actually locks the mark. If there's a resolvedValue,
+   * patch the real parameter's expression via the Feature API (preserving
+   * its original unit suffix), then mark the annotation resolved. If the
+   * Feature API patch fails, the mark stays open so nothing is silently
+   * lost.
    */
   async function resolveMark(entry: ValueParameterEntry) {
     if (!context) return;
@@ -401,6 +433,7 @@ function ParameterMarkPanelInner() {
         onReopen={() =>
           withSavedDocument((doc) => reopenUncertaintyAnnotation(doc, annotationIdFor(selected)))
         }
+        onLivePreview={(value) => void livePreviewValue(selected, value)}
       />
     );
   }
@@ -486,6 +519,7 @@ function DetailView({
   onAddComment,
   onResolve,
   onReopen,
+  onLivePreview,
 }: {
   entry: ValueParameterEntry;
   annotation: FeatureParameterQuestionUncertaintyAnnotation | undefined;
@@ -496,6 +530,7 @@ function DetailView({
   onAddComment: (text: string) => void;
   onResolve: () => void;
   onReopen: () => void;
+  onLivePreview: (value: string) => void;
 }) {
   const currentValueLabel = formatFeatureParameterValue(entry.typeName, entry.message);
   const currentMagnitude = parseNumericMagnitude(currentValueLabel);
@@ -510,10 +545,12 @@ function DetailView({
       ? String(annotation.rangeMaxValue)
       : "",
   );
-  const [answerDraft, setAnswerDraft] = useState(
-    annotation?.resolvedValue ?? (currentMagnitude !== null ? String(currentMagnitude) : ""),
-  );
+  const initialAnswer =
+    annotation?.resolvedValue ?? (currentMagnitude !== null ? String(currentMagnitude) : "");
+  const [answerDraft, setAnswerDraft] = useState(initialAnswer);
   const [commentDraft, setCommentDraft] = useState("");
+  const [previewStatus, setPreviewStatus] = useState<"idle" | "previewing" | "previewed">("idle");
+  const lastPreviewedRef = useRef(initialAnswer);
 
   const rangeMin = annotation?.rangeMinValue ?? null;
   const rangeMax = annotation?.rangeMaxValue ?? null;
@@ -523,6 +560,26 @@ function DetailView({
   // quietly move the goalposts while someone else is answering within it.
   // Resolving the mark (settling the question) is the only way to reopen it.
   const rangeLocked = hasRange && !resolved;
+
+  // Every edit (typing or dragging the slider) pushes a live, NOT-yet-
+  // confirmed value straight into the real Onshape feature so the change
+  // is visible in the model as it's being worked out -- debounced so
+  // dragging a slider doesn't fire one request per pixel. Only "Mark
+  // resolved" actually confirms and locks it.
+  useEffect(() => {
+    if (resolved) return;
+    const trimmed = answerDraft.trim();
+    if (!trimmed || trimmed === lastPreviewedRef.current) return;
+
+    setPreviewStatus("previewing");
+    const timer = setTimeout(() => {
+      lastPreviewedRef.current = trimmed;
+      onLivePreview(trimmed);
+      setPreviewStatus("previewed");
+    }, 400);
+
+    return () => clearTimeout(timer);
+  }, [answerDraft, resolved, onLivePreview]);
 
   return (
     <div className={styles.page}>
@@ -615,6 +672,13 @@ function DetailView({
                 onChange={(event) => setAnswerDraft(event.target.value)}
               />
             )}
+            {previewStatus !== "idle" ? (
+              <div className={styles.rangeLockedNote}>
+                {previewStatus === "previewing"
+                  ? "Previewing in Onshape..."
+                  : "Previewing in Onshape — not confirmed yet"}
+              </div>
+            ) : null}
             <button
               type="button"
               className={styles.primaryButton}
