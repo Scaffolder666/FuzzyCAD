@@ -8,6 +8,7 @@ import type {
   DistanceMoveMode,
   DistanceUncertaintyAnnotation,
   ExtrudeUncertaintyAnnotation,
+  FeatureParameterQuestionUncertaintyAnnotation,
   FilletUncertaintyAnnotation,
   FuzzyCADUncertaintyAnnotation,
   FuzzyCADUncertaintyDocument,
@@ -52,6 +53,7 @@ type UncertaintyMarksPanelProps = {
   ) => void;
   onSetDistanceMoveMode: (annotationId: string, moveMode: DistanceMoveMode) => void;
   onAnswerMoveQuestion: (annotationId: string, deltaMm: number) => void;
+  onAnswerFeatureParameterQuestion: (annotationId: string, value: string) => void;
   onSaveToOnshape: () => void;
   savingToOnshape?: boolean;
   /** Pushes accepted Move/Rotate/MoveQuestion marks to Onshape as real occurrence transforms, replacing the ghost preview with an actual placement change. */
@@ -133,7 +135,8 @@ function matchesFilter(
     return (
       annotation.type === "size" ||
       annotation.type === "distance" ||
-      annotation.type === "moveQuestion"
+      annotation.type === "moveQuestion" ||
+      annotation.type === "featureParameterQuestion"
     );
   }
 
@@ -1345,6 +1348,136 @@ function MoveQuestionCard({
   );
 }
 
+/**
+ * List-only card: this mark has no mesh/3D representation (it's created
+ * from the Onshape "Element right panel" extension, questioning a value
+ * already in the feature tree, not a shape on the target part), so unlike
+ * every other card here there's no viewer highlight tied to selecting it.
+ */
+function FeatureParameterQuestionCard({
+  annotation,
+  selected,
+  hovered,
+  onSelect,
+  onDelete,
+  onCommentChange,
+  onAnswer,
+  onResolve,
+}: {
+  annotation: FeatureParameterQuestionUncertaintyAnnotation;
+  selected: boolean;
+  hovered: boolean;
+  onSelect: () => void;
+  onDelete: () => void;
+  onCommentChange: (comment: string) => void;
+  onAnswer: (value: string) => void;
+  onResolve: () => void;
+}) {
+  const [answerDraft, setAnswerDraft] = useState("");
+
+  function submit() {
+    if (answerDraft.trim()) {
+      onAnswer(answerDraft.trim());
+      setAnswerDraft("");
+    }
+  }
+
+  return (
+    <article
+      className={`${styles.card} ${selected ? styles.cardSelected : ""} ${
+        hovered ? styles.cardHovered : ""
+      }`}
+      onClick={onSelect}
+    >
+      <div className={styles.cardHeader}>
+        <span className={`${styles.kindPill} ${styles.kindPillMoveQuestion}`}>
+          Needs input
+        </span>
+      </div>
+
+      <div className={styles.cardTitle}>
+        {annotation.featureName || annotation.featureId}
+        <span className={styles.proposalModeTag}>{annotation.featureType}</span>
+      </div>
+
+      <div className={styles.valueLine}>
+        <span>
+          {annotation.parameterId}: {annotation.currentValue}
+        </span>
+      </div>
+
+      {annotation.author ? (
+        <div className={styles.metaRow}>flagged by {annotation.author}</div>
+      ) : null}
+
+      {annotation.resolvedValue !== null ? (
+        <div className={styles.distanceAnsweredBox}>
+          <span className={styles.distanceAnsweredLabel}>Answered</span>
+          <span className={styles.valueNew}>{annotation.resolvedValue}</span>
+        </div>
+      ) : (
+        <div
+          className={styles.distanceQuestionBox}
+          onClick={(event) => event.stopPropagation()}
+        >
+          <div className={styles.distanceQuestionLabel}>
+            What should this parameter actually be?
+          </div>
+          <div className={styles.answerRow}>
+            <input
+              type="text"
+              className={styles.answerInput}
+              placeholder={annotation.currentValue}
+              value={answerDraft}
+              onChange={(event) => setAnswerDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.currentTarget.blur();
+                  submit();
+                }
+              }}
+            />
+            <button type="button" className={styles.answerButton} onClick={submit}>
+              Submit
+            </button>
+          </div>
+        </div>
+      )}
+
+      <textarea
+        className={styles.comment}
+        value={annotation.comment ?? ""}
+        placeholder="Add a comment..."
+        onClick={(event) => event.stopPropagation()}
+        onChange={(event) => onCommentChange(event.target.value)}
+      />
+
+      <div className={styles.actions}>
+        <button
+          type="button"
+          className={styles.resolveButton}
+          onClick={(event) => {
+            event.stopPropagation();
+            onResolve();
+          }}
+        >
+          Accept
+        </button>
+        <button
+          type="button"
+          className={styles.deleteButton}
+          onClick={(event) => {
+            event.stopPropagation();
+            onDelete();
+          }}
+        >
+          Reject
+        </button>
+      </div>
+    </article>
+  );
+}
+
 function AlternativeCard({
   annotation,
   selected,
@@ -1442,6 +1575,7 @@ export default function UncertaintyMarksPanel({
   onSetDistanceConfidence,
   onSetDistanceMoveMode,
   onAnswerMoveQuestion,
+  onAnswerFeatureParameterQuestion,
   onSaveToOnshape,
   savingToOnshape = false,
   onPushAcceptedChanges,
@@ -1761,6 +1895,26 @@ export default function UncertaintyMarksPanel({
               );
             }
 
+            if (annotation.type === "featureParameterQuestion") {
+              return (
+                <FeatureParameterQuestionCard
+                  key={annotation.id}
+                  annotation={annotation}
+                  selected={selected}
+                  hovered={hovered}
+                  onSelect={() => onSelectAnnotation(annotation.id)}
+                  onDelete={() => onDeleteAnnotation(annotation.id)}
+                  onCommentChange={(comment) =>
+                    onCommentChange(annotation.id, comment)
+                  }
+                  onAnswer={(value) =>
+                    onAnswerFeatureParameterQuestion(annotation.id, value)
+                  }
+                  onResolve={() => onResolveAnnotation(annotation.id)}
+                />
+              );
+            }
+
             return (
               <AlternativeCard
                 key={annotation.id}
@@ -1819,7 +1973,9 @@ export default function UncertaintyMarksPanel({
                                           ? `${annotation.mode}: ${annotation.target.referencePathKey}`
                                           : annotation.type === "extrude"
                                             ? `Extrude: ${annotation.target.referencePathKey}`
-                                            : "Alternative"}
+                                            : annotation.type === "featureParameterQuestion"
+                                              ? `Parameter: ${annotation.featureName || annotation.featureId} / ${annotation.parameterId}`
+                                              : "Alternative"}
                     </span>
                     <button
                       type="button"

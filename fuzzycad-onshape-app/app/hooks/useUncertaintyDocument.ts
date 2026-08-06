@@ -12,12 +12,14 @@ import {
   setDistanceAnswer,
   setDistanceConfidence,
   setDistanceMoveMode,
+  setFeatureParameterQuestionAnswer,
   setMoveQuestionAnswer,
   setSizeAxisAnswer,
   toBendPreviews,
   toBooleanPreviews,
   toDistancePreviews,
   toExtrudePreviews,
+  toFeatureParameterQuestionSummaries,
   toFilletPreviews,
   toFuzzyConfidenceAnnotations,
   toMovePreviews,
@@ -28,6 +30,7 @@ import {
   updateUncertaintyAnnotationComment,
   upsertBend,
   upsertDistance,
+  upsertFeatureParameterQuestion,
   upsertMove,
   upsertMoveQuestion,
   upsertRotate,
@@ -35,6 +38,7 @@ import {
   upsertSizeAnnotation,
   upsertSizeProposal,
   type BendAxisDirection,
+  type FeatureParameterValueType,
   type FuzzyCADUncertaintyDocument,
   type FuzzyCADUncertaintySource,
   type MoveQuestionAxisDirection,
@@ -119,6 +123,11 @@ export function useUncertaintyDocument(source: FuzzyCADUncertaintySource) {
 
   const extrudePreviews = useMemo(
     () => toExtrudePreviews(uncertaintyDocumentWithCurrentSource),
+    [uncertaintyDocumentWithCurrentSource],
+  );
+
+  const featureParameterQuestionSummaries = useMemo(
+    () => toFeatureParameterQuestionSummaries(uncertaintyDocumentWithCurrentSource),
     [uncertaintyDocumentWithCurrentSource],
   );
 
@@ -420,6 +429,39 @@ export function useUncertaintyDocument(source: FuzzyCADUncertaintySource) {
     );
   }
 
+  function upsertFeatureParameterQuestionMark(input: {
+    featureId: string;
+    featureName: string;
+    featureType: string;
+    parameterId: string;
+    valueType: FeatureParameterValueType;
+    currentValue: string;
+    author?: string;
+  }) {
+    setUncertaintyDocument((previous) =>
+      upsertFeatureParameterQuestion(
+        {
+          ...previous,
+          source,
+        },
+        input,
+      ),
+    );
+  }
+
+  function answerFeatureParameterQuestionMark(annotationId: string, resolvedValue: string) {
+    setUncertaintyDocument((previous) =>
+      setFeatureParameterQuestionAnswer(
+        {
+          ...previous,
+          source,
+        },
+        annotationId,
+        resolvedValue,
+      ),
+    );
+  }
+
   function addFilletMark(input: {
     pathKey: string;
     kind: FilletKind;
@@ -533,5 +575,8 @@ export function useUncertaintyDocument(source: FuzzyCADUncertaintySource) {
     addBooleanMark,
     addExtrudeMark,
     extrudePreviews,
+    featureParameterQuestionSummaries,
+    upsertFeatureParameterQuestionMark,
+    answerFeatureParameterQuestionMark,
   };
 }

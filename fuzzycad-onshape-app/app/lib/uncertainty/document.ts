@@ -279,6 +279,38 @@ export type MoveQuestionUncertaintyAnnotation = BaseAnnotationFields & {
   resolvedDeltaMeters: number | null;
 };
 
+/**
+ * "Feature parameter (needs input)": questions one existing value-typed
+ * parameter (Quantity/Boolean/Enum/String) already in the Part Studio's
+ * feature tree -- an Extrude depth, a Fillet radius, a Sketch dimension --
+ * instead of proposing new geometry. Created from the Onshape "Element
+ * right panel" extension, which lives inside Onshape's own UI next to its
+ * native feature editor, not the 3D viewer -- there is no mesh this mark
+ * points at, so target.pathKeys/referencePathKey hold a synthetic key
+ * (see makeFeatureParameterQuestionPathKey) purely so the shared
+ * BaseAnnotationFields shape holds; nothing tries to resolve it against
+ * real geometry, and the main app's panel renders it as a plain list item.
+ * Mirrors Distance/MoveQuestion's question/answer split: resolvedValue
+ * stays null until someone with the relevant domain knowledge answers,
+ * and answering doesn't resolve the mark by itself.
+ */
+export type FeatureParameterValueType =
+  | "BTMParameterQuantity"
+  | "BTMParameterBoolean"
+  | "BTMParameterEnum"
+  | "BTMParameterString";
+
+export type FeatureParameterQuestionUncertaintyAnnotation = BaseAnnotationFields & {
+  type: "featureParameterQuestion";
+  featureId: string;
+  featureName: string;
+  featureType: string;
+  parameterId: string;
+  valueType: FeatureParameterValueType;
+  currentValue: string;
+  resolvedValue: string | null;
+};
+
 export type FuzzyCADUncertaintyAnnotation =
   | SizeUncertaintyAnnotation
   | ProposalUncertaintyAnnotation
@@ -291,7 +323,8 @@ export type FuzzyCADUncertaintyAnnotation =
   | MoveQuestionUncertaintyAnnotation
   | FilletUncertaintyAnnotation
   | BooleanUncertaintyAnnotation
-  | ExtrudeUncertaintyAnnotation;
+  | ExtrudeUncertaintyAnnotation
+  | FeatureParameterQuestionUncertaintyAnnotation;
 
 export function createEmptyUncertaintyDocument(
   source: FuzzyCADUncertaintySource,
@@ -1892,6 +1925,168 @@ export function toExtrudePreviews(
       facePointWorld: annotation.facePointWorld,
       faceIndex: annotation.faceIndex,
       offsetMeters: annotation.offsetMeters,
+      status: annotation.status,
+    }));
+}
+
+export function makeFeatureParameterQuestionPathKey(featureId: string, parameterId: string) {
+  return `feature:${featureId}:${parameterId}`;
+}
+
+export function makeFeatureParameterQuestionAnnotationId(featureId: string, parameterId: string) {
+  return `featureParameterQuestion:${featureId}:${parameterId}`;
+}
+
+function createFeatureParameterQuestionAnnotation(input: {
+  featureId: string;
+  featureName: string;
+  featureType: string;
+  parameterId: string;
+  valueType: FeatureParameterValueType;
+  currentValue: string;
+  resolvedValue?: string | null;
+  comment?: string;
+  author?: string;
+  assignee?: string;
+  status?: AnnotationStatus;
+  createdAt?: string;
+  updatedAt?: string;
+}): FeatureParameterQuestionUncertaintyAnnotation | null {
+  if (!input.featureId || !input.parameterId) {
+    return null;
+  }
+
+  const now = new Date().toISOString();
+  const pathKey = makeFeatureParameterQuestionPathKey(input.featureId, input.parameterId);
+
+  return {
+    id: makeFeatureParameterQuestionAnnotationId(input.featureId, input.parameterId),
+    type: "featureParameterQuestion",
+    target: {
+      pathKeys: [pathKey],
+      referencePathKey: pathKey,
+      scope: "single",
+    },
+    featureId: input.featureId,
+    featureName: input.featureName,
+    featureType: input.featureType,
+    parameterId: input.parameterId,
+    valueType: input.valueType,
+    currentValue: input.currentValue,
+    resolvedValue: input.resolvedValue ?? null,
+    comment: input.comment,
+    author: input.author,
+    assignee: input.assignee,
+    status: input.status ?? "open",
+    createdAt: input.createdAt ?? now,
+    updatedAt: input.updatedAt ?? now,
+  };
+}
+
+/** One open question per (featureId, parameterId) -- re-marking replaces the recorded current value but keeps any existing answer. */
+export function upsertFeatureParameterQuestion(
+  document: FuzzyCADUncertaintyDocument,
+  input: {
+    featureId: string;
+    featureName: string;
+    featureType: string;
+    parameterId: string;
+    valueType: FeatureParameterValueType;
+    currentValue: string;
+    author?: string;
+  },
+): FuzzyCADUncertaintyDocument {
+  const id = makeFeatureParameterQuestionAnnotationId(input.featureId, input.parameterId);
+  const existing = document.annotations.find((annotation) => annotation.id === id);
+  const existingQuestion = existing?.type === "featureParameterQuestion" ? existing : null;
+
+  const nextAnnotation = createFeatureParameterQuestionAnnotation({
+    featureId: input.featureId,
+    featureName: input.featureName,
+    featureType: input.featureType,
+    parameterId: input.parameterId,
+    valueType: input.valueType,
+    currentValue: input.currentValue,
+    resolvedValue: existingQuestion?.resolvedValue,
+    comment: existing?.comment,
+    author: existing?.author ?? input.author,
+    assignee: existing?.assignee,
+    status: "open",
+    createdAt: existing?.createdAt,
+  });
+
+  if (!nextAnnotation) {
+    return document;
+  }
+
+  return {
+    ...document,
+    annotations: [
+      ...document.annotations.filter((annotation) => annotation.id !== id),
+      nextAnnotation,
+    ],
+  };
+}
+
+/**
+ * Someone with the relevant domain knowledge answers with the actual
+ * value this parameter should be. Mirrors setMoveQuestionAnswer /
+ * setDistanceAnswer -- records the answer but does not resolve the mark
+ * by itself.
+ */
+export function setFeatureParameterQuestionAnswer(
+  document: FuzzyCADUncertaintyDocument,
+  annotationId: string,
+  resolvedValue: string,
+): FuzzyCADUncertaintyDocument {
+  const now = new Date().toISOString();
+
+  return {
+    ...document,
+    annotations: document.annotations.map((annotation) => {
+      if (annotation.id !== annotationId || annotation.type !== "featureParameterQuestion") {
+        return annotation;
+      }
+
+      return {
+        ...annotation,
+        resolvedValue,
+        updatedAt: now,
+      };
+    }),
+  };
+}
+
+export type FeatureParameterQuestionSummary = {
+  id: string;
+  featureId: string;
+  featureName: string;
+  featureType: string;
+  parameterId: string;
+  valueType: FeatureParameterValueType;
+  currentValue: string;
+  resolvedValue: string | null;
+  status: AnnotationStatus;
+};
+
+/** All feature-parameter questions, for the main app's list-only panel -- no mesh/3D representation, unlike every other annotation type. */
+export function toFeatureParameterQuestionSummaries(
+  document: FuzzyCADUncertaintyDocument,
+): FeatureParameterQuestionSummary[] {
+  return document.annotations
+    .filter(
+      (annotation): annotation is FeatureParameterQuestionUncertaintyAnnotation =>
+        annotation.type === "featureParameterQuestion",
+    )
+    .map((annotation) => ({
+      id: annotation.id,
+      featureId: annotation.featureId,
+      featureName: annotation.featureName,
+      featureType: annotation.featureType,
+      parameterId: annotation.parameterId,
+      valueType: annotation.valueType,
+      currentValue: annotation.currentValue,
+      resolvedValue: annotation.resolvedValue,
       status: annotation.status,
     }));
 }

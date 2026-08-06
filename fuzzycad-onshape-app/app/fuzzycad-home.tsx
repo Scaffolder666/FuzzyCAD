@@ -474,6 +474,7 @@ export default function FuzzyCADHome() {
     addBooleanMark,
     addExtrudeMark,
     extrudePreviews,
+    answerFeatureParameterQuestionMark,
   } = useUncertaintyDocument(currentUncertaintySource);
 
   const appearanceMarkingQuery = useMemo(
@@ -3107,6 +3108,7 @@ if (result.ok && result.state) {
           onAnswerMoveQuestion={(annotationId, deltaMm) =>
             answerMoveQuestionMark(annotationId, deltaMm / 1000)
           }
+          onAnswerFeatureParameterQuestion={answerFeatureParameterQuestionMark}
           onSaveToOnshape={() => void saveProjectStateToOnshape()}
           savingToOnshape={savingToOnshape}
           onPushAcceptedChanges={() => void pushAcceptedChangesToOnshape()}
