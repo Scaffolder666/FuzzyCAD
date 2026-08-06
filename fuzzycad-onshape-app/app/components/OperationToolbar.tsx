@@ -284,12 +284,19 @@ const toolGroups: ToolGroup[] = [
         label: "Scale",
         title: "Grow or shrink this part uniformly and save the change",
         icon: <ScaleIcon />,
+        // Hidden for now: write-back still goes through the STEP export/
+        // OCCT-edit/import path, unverified live this session (unlike
+        // Move, which is confirmed live via the native transform Feature
+        // API). Un-hide once that's confirmed or migrated to the same
+        // native path.
+        hidden: true,
       },
       {
         id: "rotate",
         label: "Rotate",
         title: "Click a part, then another part to rotate around, and save the change",
         icon: <RotateIcon />,
+        hidden: true,
         variants: [
           {
             id: "rotate",
@@ -317,18 +324,32 @@ const toolGroups: ToolGroup[] = [
         label: "Fillet",
         title: "Click near an edge to mark it for a rounded (fillet) or beveled (chamfer) break",
         icon: <FilletIcon />,
+        // Hidden for now: the OCCT write-back had a real crashing bug
+        // (Message_ProgressRange wasn't bound in this build) fixed this
+        // session, but not yet re-verified live end to end. Un-hide once
+        // confirmed, or migrated to a native addPartStudioFeature path.
+        hidden: true,
       },
       {
         id: "extrude",
         label: "Extrude",
         title: "Click near a face to push/pull it — grow or carve material along its normal",
         icon: <ExtrudeIcon />,
+        // Hidden for now: same Message_ProgressRange crash + a face-
+        // orientation bug were both fixed this session, but live retest
+        // after the fix still didn't show a visible change. Don't
+        // re-expose until that's actually confirmed working.
+        hidden: true,
       },
       {
         id: "booleanUnion",
         label: "Boolean",
         title: "Pick two parts to combine, cut, or intersect",
         icon: <BooleanIcon />,
+        // Hidden for now: same Message_ProgressRange crash fixed this
+        // session (synthetic-box test confirmed the fix), but never
+        // live-verified against a real document.
+        hidden: true,
         variants: [
           {
             id: "booleanUnion",
@@ -505,7 +526,7 @@ export default function OperationToolbar({
           <div key={group.key} className={styles.toolGroup}>
             <span className={styles.toolGroupLabel}>{group.label}</span>
             <div className={styles.toolGroupButtons}>
-              {group.tools.map(renderButton)}
+              {group.tools.filter((tool) => !tool.hidden).map(renderButton)}
             </div>
           </div>
         ))}
