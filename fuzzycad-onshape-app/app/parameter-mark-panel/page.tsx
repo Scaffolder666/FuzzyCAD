@@ -91,7 +91,10 @@ function overallState(
   annotation: FeatureParameterQuestionUncertaintyAnnotation,
 ): OverallState {
   if (annotation.status === "resolved") return "resolved";
-  return annotation.resolvedValue ? "proposed" : "needsInput";
+  // A ghost "Proposed Extrude" instance IS the proposal -- its depth is a
+  // real, concrete value the moment it's inserted, unlike the old
+  // "someone still has to type an answer" resolvedValue flow.
+  return annotation.resolvedValue || annotation.proposedFeatureId ? "proposed" : "needsInput";
 }
 
 function isValidUncertaintyDocument(value: unknown): value is FuzzyCADUncertaintyDocument {
