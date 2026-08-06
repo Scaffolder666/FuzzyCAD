@@ -42,7 +42,17 @@ export const fuzzycadProposedExtrude = defineFeature(function(context is Context
         definition.oppositeDirection is boolean;
     }
     {
-        var direction = evOwnerSketchPlane(context, { "entity" : definition.entities }).normal;
+        // evOwnerSketchPlane requires the entity to trace back to an owning
+        // sketch FEATURE and throws CANNOT_RESOLVE_PLANE for a selection that
+        // doesn't (e.g. a face on an existing solid) -- confirmed live.
+        // evFaceTangentPlane instead reads the normal directly off the face
+        // geometry itself, so it works uniformly whether "entities" is a
+        // sketch region or a solid face.
+        const facesToExtrude = evaluateQuery(context, definition.entities);
+        var direction = evFaceTangentPlane(context, {
+                "face" : facesToExtrude[0],
+                "parameter" : vector(0.5, 0.5)
+            }).normal;
         if (definition.oppositeDirection)
         {
             direction = -direction;
