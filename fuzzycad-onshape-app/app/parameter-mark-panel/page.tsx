@@ -16,6 +16,7 @@ import {
   type FuzzyCADUncertaintyDocument,
 } from "../lib/uncertainty/document";
 import {
+  fetchFeatureCreatedFaceIds,
   fetchFeatureCreatedPartIds,
   fetchOnshapePartStudioParts,
   loadFuzzycadProjectState,
@@ -126,6 +127,7 @@ function ParameterMarkPanelInner() {
   const [featurePartIds, setFeaturePartIds] = useState<Record<string, string[]>>({});
   const [expandedPartId, setExpandedPartId] = useState<string | null>(null);
   const nextHighlightIdRef = useRef(1);
+  const featureFaceIdsCacheRef = useRef<Map<string, string[]>>(new Map());
 
   useEffect(() => {
     function applyStoredContext() {
@@ -358,11 +360,71 @@ function ParameterMarkPanelInner() {
     );
   }
 
+  /**
+   * Highlights only the specific face(s) a given feature produced
+   * (qCreatedBy(..., EntityType.FACE), same mechanism as highlightPart
+   * above but narrower) instead of the whole part -- "Depth: 5 mm" means
+   * nothing on its own when a part was built from several stacked
+   * features. Fetched lazily, one featureId at a time, right when it's
+   * clicked, and cached in a ref after that so re-clicking the same
+   * feature doesn't refetch. Deliberately NOT prefetched in bulk on load
+   * for every feature: that's what caused parts to intermittently vanish
+   * from the list the first time this was built -- one failed request in
+   * a large batched Promise.all voided the entire update, including the
+   * unrelated part list. A single on-click fetch can't do that; if it
+   * fails, this feature's click just falls back to the whole-part
+   * highlight, and nothing else on the page is affected.
+   */
+  async function highlightFeature(featureId: string, fallbackPartId: string) {
+    if (!context) return;
+
+    let faceIds = featureFaceIdsCacheRef.current.get(featureId);
+    if (faceIds === undefined) {
+      try {
+        const result = await fetchFeatureCreatedFaceIds(
+          {
+            documentId: context.documentId,
+            workspaceId: context.workspaceId,
+            partStudioElementId: context.elementId,
+            server: context.server,
+          },
+          featureId,
+        );
+        faceIds = result.entityIds ?? [];
+      } catch {
+        faceIds = [];
+      }
+      featureFaceIdsCacheRef.current.set(featureId, faceIds);
+    }
+
+    if (faceIds.length === 0) {
+      highlightPart(fallbackPartId);
+      return;
+    }
+
+    const messageId = `highlight-${nextHighlightIdRef.current++}`;
+    window.parent.postMessage(
+      {
+        documentId: context.documentId,
+        workspaceId: context.workspaceId,
+        elementId: context.elementId,
+        messageName: "requestSelectionHighlight",
+        messageId,
+        selections: faceIds.map((faceId) => ({
+          selectionType: "ENTITY",
+          selectionId: faceId,
+          entityType: "FACE",
+        })),
+      },
+      context.server,
+    );
+  }
+
   /** Marks (if not already) and opens the detail view in one step -- no separate mark-then-fill click. */
   async function openDetail(entry: ValueParameterEntry, partId: string | null) {
     setSelected(entry);
     if (partId) {
-      highlightPart(partId);
+      void highlightFeature(entry.featureId, partId);
     }
 
     if (findAnnotation(entry)) {
@@ -632,7 +694,7 @@ function ParameterMarkPanelInner() {
         onClick={() => {
           if (state === "unmarked") return;
           setSelected(entry);
-          highlightPart(part.partId);
+          void highlightFeature(entry.featureId, part.partId);
         }}
         style={state !== "unmarked" ? { cursor: "pointer" } : undefined}
       >
@@ -700,7 +762,12 @@ function ParameterMarkPanelInner() {
 
                       return (
                         <div key={group.featureId}>
-                          <div className={styles.featureSubheader}>
+                          <div
+                            className={styles.featureSubheader}
+                            style={{ cursor: "pointer" }}
+                            onClick={() => void highlightFeature(group.featureId, part.partId)}
+                            title="Click to highlight just this feature's surfaces in Onshape"
+                          >
                             {group.featureName || featureTypeLabel(group.featureType)}
                           </div>
                           {group.activeParameters.length === 0 ? (
