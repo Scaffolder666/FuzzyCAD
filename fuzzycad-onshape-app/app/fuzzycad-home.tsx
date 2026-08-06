@@ -796,9 +796,21 @@ export default function FuzzyCADHome() {
       // caller of loadElements() after the user had already picked a
       // Part Studio would silently snap the selection back to "the first
       // one in the list" out from under them.
+      //
+      // When there IS no prior selection, prefer the tab's own `elementId`
+      // (the Part Studio the FuzzyCAD Panel was actually opened from) over
+      // "whichever Part Studio happens to be first in the document" -- the
+      // right-panel extension (parameter-mark-panel) reads this same value
+      // via onshapeRightPanelContext.ts, so defaulting to partStudios[0]
+      // silently pointed it at the wrong Part Studio in any multi-studio
+      // document where the launch tab wasn't first.
       setSelectedPartStudioId((current) => {
         if (current && partStudios.some((element) => element.id === current)) {
           return current;
+        }
+
+        if (elementId && partStudios.some((element) => element.id === elementId)) {
+          return elementId;
         }
 
         return partStudios[0]?.id ?? current;
