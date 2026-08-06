@@ -337,6 +337,40 @@ export async function updatePartStudioFeatureSuppressed(
 }
 
 /**
+ * Inserts a "FuzzyCAD Proposed Extrude" custom feature ghost, copying the
+ * original Extrude's own "entities" query verbatim server-side so the
+ * ghost extrudes the same profile -- confirmed live (see
+ * partstudio-add-custom-feature/route.ts). The original feature is never
+ * modified.
+ */
+export async function addPartStudioProposedExtrude(
+  query: PartStudioQuery,
+  body: { name?: string; originalFeatureId: string; depthMm: number; oppositeDirection?: boolean },
+): Promise<ApiResult> {
+  const res = await fetch(`/api/onshape/partstudio-add-custom-feature`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...query, ...body }),
+  });
+
+  return res.json() as Promise<ApiResult>;
+}
+
+/** Removes one feature (e.g. a ghost proposal) from a Part Studio's feature tree in place. */
+export async function deletePartStudioFeature(
+  query: PartStudioQuery,
+  body: { featureId: string },
+): Promise<ApiResult> {
+  const res = await fetch(`/api/onshape/partstudio-delete-feature`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...query, ...body }),
+  });
+
+  return res.json() as Promise<ApiResult>;
+}
+
+/**
  * An edited-and-re-exported STEP file (opencascade.js's STEPControl_Writer
  * output) is verbose CAD text, not the binary STL gzipBlob's doc comment
  * describes — but it compresses just as well, and hits the exact same
