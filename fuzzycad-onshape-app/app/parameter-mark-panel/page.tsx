@@ -16,7 +16,6 @@ import {
   type FuzzyCADUncertaintyDocument,
 } from "../lib/uncertainty/document";
 import {
-  fetchFeatureCreatedFaceIds,
   fetchFeatureCreatedPartIds,
   fetchOnshapePartStudioParts,
   loadFuzzycadProjectState,
@@ -125,7 +124,6 @@ function ParameterMarkPanelInner() {
   const [saving, setSaving] = useState(false);
   const [partList, setPartList] = useState<PartEntry[]>([]);
   const [featurePartIds, setFeaturePartIds] = useState<Record<string, string[]>>({});
-  const [featureFaceIds, setFeatureFaceIds] = useState<Record<string, string[]>>({});
   const [expandedPartId, setExpandedPartId] = useState<string | null>(null);
   const nextHighlightIdRef = useRef(1);
 
@@ -228,10 +226,9 @@ function ParameterMarkPanelInner() {
 
       const uniqueFeatureIds = Array.from(new Set(parameters!.map((entry) => entry.featureId)));
 
-      const [partsRes, createdByResults, createdFaceResults] = await Promise.all([
+      const [partsRes, ...createdByResults] = await Promise.all([
         fetchOnshapePartStudioParts(query),
-        Promise.all(uniqueFeatureIds.map((featureId) => fetchFeatureCreatedPartIds(query, featureId))),
-        Promise.all(uniqueFeatureIds.map((featureId) => fetchFeatureCreatedFaceIds(query, featureId))),
+        ...uniqueFeatureIds.map((featureId) => fetchFeatureCreatedPartIds(query, featureId)),
       ]);
 
       if (cancelled) return;
@@ -250,13 +247,10 @@ function ParameterMarkPanelInner() {
       setPartList(parsedParts);
 
       const nextFeaturePartIds: Record<string, string[]> = {};
-      const nextFeatureFaceIds: Record<string, string[]> = {};
       uniqueFeatureIds.forEach((featureId, index) => {
         nextFeaturePartIds[featureId] = createdByResults[index]?.partIds ?? [];
-        nextFeatureFaceIds[featureId] = createdFaceResults[index]?.entityIds ?? [];
       });
       setFeaturePartIds(nextFeaturePartIds);
-      setFeatureFaceIds(nextFeatureFaceIds);
     }
 
     void loadPartMapping();
@@ -364,47 +358,11 @@ function ParameterMarkPanelInner() {
     );
   }
 
-  /**
-   * Highlights only the specific face(s) a given feature produced
-   * (featureFaceIds, from qCreatedBy(..., EntityType.FACE) -- see the
-   * loadPartMapping effect above), not the whole part. "Depth: 5 mm"
-   * means nothing on its own when a part was built by several features
-   * stacked together -- this is the answer to "which surface did THIS
-   * specific feature actually add or remove." Falls back to highlighting
-   * the whole part if no faces resolved (e.g. a sketch-only feature)
-   * so the click still does something.
-   */
-  function highlightFeature(featureId: string, fallbackPartId: string) {
-    const faceIds = featureFaceIds[featureId] ?? [];
-    if (faceIds.length === 0) {
-      highlightPart(fallbackPartId);
-      return;
-    }
-
-    if (!context) return;
-    const messageId = `highlight-${nextHighlightIdRef.current++}`;
-    window.parent.postMessage(
-      {
-        documentId: context.documentId,
-        workspaceId: context.workspaceId,
-        elementId: context.elementId,
-        messageName: "requestSelectionHighlight",
-        messageId,
-        selections: faceIds.map((faceId) => ({
-          selectionType: "ENTITY",
-          selectionId: faceId,
-          entityType: "FACE",
-        })),
-      },
-      context.server,
-    );
-  }
-
   /** Marks (if not already) and opens the detail view in one step -- no separate mark-then-fill click. */
   async function openDetail(entry: ValueParameterEntry, partId: string | null) {
     setSelected(entry);
     if (partId) {
-      highlightFeature(entry.featureId, partId);
+      highlightPart(partId);
     }
 
     if (findAnnotation(entry)) {
@@ -674,7 +632,7 @@ function ParameterMarkPanelInner() {
         onClick={() => {
           if (state === "unmarked") return;
           setSelected(entry);
-          highlightFeature(entry.featureId, part.partId);
+          highlightPart(part.partId);
         }}
         style={state !== "unmarked" ? { cursor: "pointer" } : undefined}
       >
@@ -742,12 +700,7 @@ function ParameterMarkPanelInner() {
 
                       return (
                         <div key={group.featureId}>
-                          <div
-                            className={styles.featureSubheader}
-                            style={{ cursor: "pointer" }}
-                            onClick={() => highlightFeature(group.featureId, part.partId)}
-                            title="Click to highlight just this feature's surfaces in Onshape"
-                          >
+                          <div className={styles.featureSubheader}>
                             {group.featureName || featureTypeLabel(group.featureType)}
                           </div>
                           {group.activeParameters.length === 0 ? (

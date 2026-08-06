@@ -7,29 +7,26 @@ export const runtime = "nodejs";
 // underscore (confirmed live, 2026-08-06).
 const FEATURE_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
 
-const ALLOWED_ENTITY_TYPES = new Set(["BODY", "FACE"]);
-
 /**
- * "Which part(s)/face(s) does this feature currently produce" -- resolved
- * via FeatureScript's qCreatedBy(), the only mechanism that links a
- * featureId to entity ids (neither the Features API nor the Part List
- * API carries that association directly). EntityType.BODY (the default,
- * confirmed live against a real document, 2026-08-06 -- see
- * partstudio-feature-parts-debug/route.ts for the two wrong turns this
- * took first) answers "which part" for the part-first Need Input list.
- * EntityType.FACE answers a narrower question: which specific surfaces
- * THIS feature touched, for highlighting just that feature's
- * contribution instead of the whole part -- same script shape, only the
- * EntityType swapped, but not yet independently live-verified the way
- * BODY was.
+ * "Which part(s) does this feature currently produce" -- resolved via
+ * FeatureScript's qCreatedBy(), the only mechanism that links a featureId
+ * to partId(s) (neither the Features API nor the Part List API carries
+ * that association directly). Confirmed live against a real document
+ * (2026-08-06) -- see partstudio-feature-parts-debug/route.ts for the
+ * two wrong turns this took (a leading "FeatureScript <version>;" pragma
+ * doesn't parse here; qCreatedBy() alone returns an unevaluated Query,
+ * not entity ids) before landing on the script below. The returned
+ * strings matched this Part Studio's partId format directly in that
+ * capture (e.g. "JHD") -- cross-check against the Part List API
+ * (partstudio-parts/route.ts) rather than assuming it always will.
  */
-function buildScript(featureId: string, entityType: string) {
+function buildScript(featureId: string) {
   return `function(context is Context, queries) {
-    return transientQueriesToStrings(evaluateQuery(context, qCreatedBy(makeId("${featureId}"), EntityType.${entityType})));
+    return transientQueriesToStrings(evaluateQuery(context, qCreatedBy(makeId("${featureId}"), EntityType.BODY)));
 }`;
 }
 
-function extractEntityIds(data: unknown): string[] {
+function extractPartIds(data: unknown): string[] {
   if (typeof data !== "object" || data === null) return [];
   const result = (data as Record<string, unknown>).result;
   if (typeof result !== "object" || result === null) return [];
@@ -38,17 +35,17 @@ function extractEntityIds(data: unknown): string[] {
   const value = (message as Record<string, unknown>).value;
   if (!Array.isArray(value)) return [];
 
-  const entityIds: string[] = [];
+  const partIds: string[] = [];
   for (const entry of value) {
     if (typeof entry !== "object" || entry === null) continue;
     const entryMessage = (entry as Record<string, unknown>).message;
     if (typeof entryMessage !== "object" || entryMessage === null) continue;
     const id = (entryMessage as Record<string, unknown>).value;
     if (typeof id === "string" && id.length > 0) {
-      entityIds.push(id);
+      partIds.push(id);
     }
   }
-  return entityIds;
+  return partIds;
 }
 
 export async function GET(req: NextRequest) {
@@ -58,7 +55,6 @@ export async function GET(req: NextRequest) {
   const workspaceId = params.get("workspaceId");
   const partStudioElementId = params.get("partStudioElementId");
   const featureId = params.get("featureId");
-  const entityType = params.get("entityType") || "BODY";
 
   const accessToken = req.cookies.get("onshape_access_token")?.value;
 
@@ -71,10 +67,6 @@ export async function GET(req: NextRequest) {
 
   if (!FEATURE_ID_PATTERN.test(featureId)) {
     return NextResponse.json({ error: "featureId has an unexpected shape" }, { status: 400 });
-  }
-
-  if (!ALLOWED_ENTITY_TYPES.has(entityType)) {
-    return NextResponse.json({ error: "entityType must be BODY or FACE" }, { status: 400 });
   }
 
   if (!accessToken) {
@@ -95,16 +87,15 @@ export async function GET(req: NextRequest) {
         Accept: "application/json",
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ script: buildScript(featureId, entityType) }),
+      body: JSON.stringify({ script: buildScript(featureId) }),
     },
     { route: "/api/onshape/partstudio-feature-created-parts", operation: "evaluate-featurescript" },
   );
 
   const data = await parseJsonOrText(res);
-  const entityIds = res.ok ? extractEntityIds(data) : [];
 
   return NextResponse.json(
-    { ok: res.ok, status: res.status, entityIds, partIds: entityIds },
+    { ok: res.ok, status: res.status, partIds: res.ok ? extractPartIds(data) : [] },
     { status: 200 },
   );
 }

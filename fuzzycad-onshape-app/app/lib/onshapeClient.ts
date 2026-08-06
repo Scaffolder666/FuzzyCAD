@@ -286,19 +286,6 @@ export async function fetchFeatureCreatedPartIds(
   return res.json() as Promise<{ ok: boolean; status: number; partIds: string[] }>;
 }
 
-/** Which face(s) a given feature currently produced -- for highlighting just that feature's contribution instead of the whole part. Same route, entityType=FACE. */
-export async function fetchFeatureCreatedFaceIds(
-  query: PartStudioQuery,
-  featureId: string,
-): Promise<{ ok: boolean; status: number; entityIds: string[] }> {
-  const params = makePartStudioParams(query);
-  params.set("featureId", featureId);
-  params.set("entityType", "FACE");
-  const res = await fetch(`/api/onshape/partstudio-feature-created-parts?${params.toString()}`);
-
-  return res.json() as Promise<{ ok: boolean; status: number; entityIds: string[] }>;
-}
-
 /**
  * In-place write-back for an accepted Move mark: adds a native "transform"
  * feature straight into the Part Studio's own feature tree via Onshape's
