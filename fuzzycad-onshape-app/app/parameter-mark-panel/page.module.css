@@ -6,6 +6,34 @@
   max-width: 100%;
 }
 
+/*
+ * Detail (comments + answer) shows next to the list, not as a separate
+ * page you navigate into -- an Overleaf-style side-by-side layout. Onshape's
+ * own side panels (feature tree, etc.) can be collapsed to give this room;
+ * we don't collapse to a single column on narrow widths.
+ */
+.splitLayout {
+  display: flex;
+  align-items: flex-start;
+  gap: 20px;
+}
+
+.listColumn {
+  flex: 1 1 320px;
+  min-width: 0;
+}
+
+.detailColumn {
+  flex: 1 1 340px;
+  min-width: 260px;
+  border-left: 1px solid #e3e3e6;
+  padding-left: 20px;
+}
+
+.detailPanel {
+  min-width: 0;
+}
+
 .tabBar {
   display: flex;
   gap: 4px;

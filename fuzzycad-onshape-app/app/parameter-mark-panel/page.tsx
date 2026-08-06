@@ -552,43 +552,6 @@ function ParameterMarkPanelInner() {
     );
   }
 
-  if (selected) {
-    const annotation = findAnnotation(selected);
-    return (
-      <DetailView
-        entry={selected}
-        annotation={annotation}
-        saving={saving}
-        onBack={() => setSelected(null)}
-        onSaveAnswer={(value) =>
-          withSavedDocument((doc) =>
-            setFeatureParameterQuestionAnswer(doc, annotationIdFor(selected), value),
-          )
-        }
-        onSaveRange={(min, max) =>
-          withSavedDocument((doc) =>
-            setFeatureParameterQuestionRange(doc, annotationIdFor(selected), min, max),
-          )
-        }
-        onAddComment={(text) =>
-          withSavedDocument((doc) =>
-            addFeatureParameterQuestionComment(doc, annotationIdFor(selected), text),
-          )
-        }
-        onResolve={() => resolveMark(selected)}
-        onReopen={() =>
-          withSavedDocument((doc) => reopenUncertaintyAnnotation(doc, annotationIdFor(selected)))
-        }
-        onReject={() =>
-          void rejectMark(selected).then((deleted) => {
-            if (deleted) setSelected(null);
-          })
-        }
-        onLivePreview={(value) => void livePreviewValue(selected, value)}
-      />
-    );
-  }
-
   return (
     <div className={styles.page}>
       <div className={styles.tabBar}>
@@ -653,6 +616,8 @@ function ParameterMarkPanelInner() {
         </div>
       ) : null}
 
+      <div className={styles.splitLayout}>
+      <div className={styles.listColumn}>
       {activeTab === "overall" ? (
         <>
           <div className={styles.header}>
@@ -817,6 +782,44 @@ function ParameterMarkPanelInner() {
           )}
         </>
       )}
+      </div>
+
+      {selected ? (
+        <div className={styles.detailColumn}>
+          <DetailView
+            entry={selected}
+            annotation={findAnnotation(selected)}
+            saving={saving}
+            onBack={() => setSelected(null)}
+            onSaveAnswer={(value) =>
+              withSavedDocument((doc) =>
+                setFeatureParameterQuestionAnswer(doc, annotationIdFor(selected), value),
+              )
+            }
+            onSaveRange={(min, max) =>
+              withSavedDocument((doc) =>
+                setFeatureParameterQuestionRange(doc, annotationIdFor(selected), min, max),
+              )
+            }
+            onAddComment={(text) =>
+              withSavedDocument((doc) =>
+                addFeatureParameterQuestionComment(doc, annotationIdFor(selected), text),
+              )
+            }
+            onResolve={() => resolveMark(selected)}
+            onReopen={() =>
+              withSavedDocument((doc) => reopenUncertaintyAnnotation(doc, annotationIdFor(selected)))
+            }
+            onReject={() =>
+              void rejectMark(selected).then((deleted) => {
+                if (deleted) setSelected(null);
+              })
+            }
+            onLivePreview={(value) => void livePreviewValue(selected, value)}
+          />
+        </div>
+      ) : null}
+      </div>
     </div>
   );
 }
@@ -896,9 +899,9 @@ function DetailView({
   }, [answerDraft, resolved, onLivePreview]);
 
   return (
-    <div className={styles.page}>
+    <div className={styles.detailPanel}>
       <button type="button" className={styles.backButton} onClick={onBack}>
-        &larr; Back to list
+        &times; Close
       </button>
       <div className={styles.detailHeader}>
         <h1 className={styles.detailTitle}>
