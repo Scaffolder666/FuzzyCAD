@@ -5,6 +5,7 @@ import {
   addFeatureParameterQuestionComment,
   createEmptyUncertaintyDocument,
   makeFeatureParameterQuestionAnnotationId,
+  removeUncertaintyAnnotationById,
   reopenUncertaintyAnnotation,
   resolveUncertaintyAnnotation,
   setFeatureParameterQuestionAnswer,
@@ -67,6 +68,21 @@ function paramState(
 ): ParamState {
   if (!annotation) return "unmarked";
   return annotation.resolvedValue ? "answered" : "needsInput";
+}
+
+/**
+ * Overall needs a finer-grained status than the Need input tab's
+ * "answered" (which conflates "someone proposed a value" with "the owner
+ * confirmed it") -- kept separate so the Need input tab's already-working
+ * behavior doesn't change.
+ */
+type OverallState = "needsInput" | "proposed" | "resolved";
+
+function overallState(
+  annotation: FeatureParameterQuestionUncertaintyAnnotation,
+): OverallState {
+  if (annotation.status === "resolved") return "resolved";
+  return annotation.resolvedValue ? "proposed" : "needsInput";
 }
 
 function isValidUncertaintyDocument(value: unknown): value is FuzzyCADUncertaintyDocument {
@@ -277,6 +293,22 @@ function ParameterMarkPanelInner() {
     return Array.from(byFeature.values());
   }, [parameters]);
 
+  /** Same feature-grouping as featureGroups, but only the parameters someone has actually marked -- Overall is a review list, not a browse-everything list. */
+  const overallGroups = useMemo<FeatureGroup[]>(() => {
+    if (!uncertaintyDoc) return [];
+    const markedIds = new Set(
+      uncertaintyDoc.annotations
+        .filter((annotation) => annotation.type === "featureParameterQuestion")
+        .map((annotation) => annotation.id),
+    );
+    return featureGroups
+      .map((group) => ({
+        ...group,
+        parameters: group.parameters.filter((entry) => markedIds.has(annotationIdFor(entry))),
+      }))
+      .filter((group) => group.parameters.length > 0);
+  }, [featureGroups, uncertaintyDoc]);
+
   /**
    * Asks Onshape's own UI to open its native feature edit dialog -- the
    * same highlight + direction-arrows affordance you get clicking a
@@ -474,6 +506,41 @@ function ParameterMarkPanelInner() {
     await withSavedDocument((doc) => resolveUncertaintyAnnotation(doc, annotationIdFor(entry)));
   }
 
+  /**
+   * Rejecting deletes the mark entirely -- no answer, no comment thread,
+   * nothing kept. Also restores the real Onshape parameter back to
+   * whatever it was before this mark existed, in case livePreviewValue
+   * already pushed an unconfirmed value while someone was still editing.
+   */
+  async function rejectMark(entry: ValueParameterEntry): Promise<boolean> {
+    if (!context) return false;
+    const annotation = findAnnotation(entry);
+    if (!annotation) return false;
+
+    const confirmed = window.confirm(
+      "Delete this mark? Its proposed value and comments will be lost.",
+    );
+    if (!confirmed) return false;
+
+    setSaving(true);
+    await updatePartStudioFeatureSuppressed(
+      {
+        documentId: context.documentId,
+        workspaceId: context.workspaceId,
+        partStudioElementId: context.elementId,
+        server: context.server,
+      },
+      {
+        featureId: entry.featureId,
+        parameterUpdates: [{ parameterId: entry.parameterId, expression: annotation.currentValue }],
+      },
+    );
+    setSaving(false);
+
+    await withSavedDocument((doc) => removeUncertaintyAnnotationById(doc, annotationIdFor(entry)));
+    return true;
+  }
+
   if (!context) {
     return (
       <div className={styles.page}>
@@ -511,6 +578,11 @@ function ParameterMarkPanelInner() {
         onResolve={() => resolveMark(selected)}
         onReopen={() =>
           withSavedDocument((doc) => reopenUncertaintyAnnotation(doc, annotationIdFor(selected)))
+        }
+        onReject={() =>
+          void rejectMark(selected).then((deleted) => {
+            if (deleted) setSelected(null);
+          })
         }
         onLivePreview={(value) => void livePreviewValue(selected, value)}
       />
@@ -582,13 +654,95 @@ function ParameterMarkPanelInner() {
       ) : null}
 
       {activeTab === "overall" ? (
-        <div className={styles.header}>
-          <h1 className={styles.title}>Overall</h1>
-          <p className={styles.emptyState}>
-            Not built yet -- will combine Need input and Proposed marks with Comment +
-            Accept/Reject on each card.
-          </p>
-        </div>
+        <>
+          <div className={styles.header}>
+            <h1 className={styles.title}>Overall</h1>
+            <p className={styles.status}>status: {status}</p>
+          </div>
+          {overallGroups.length === 0 ? (
+            <p className={styles.emptyState}>No marks yet -- mark a parameter from Need input first.</p>
+          ) : (
+            <div className={styles.list}>
+              {overallGroups.map((group) => (
+                <div key={group.featureId} className={styles.featureCard}>
+                  <div
+                    className={styles.featureHeader}
+                    onClick={() => openFeatureDialog(group.featureId)}
+                    title="Click to highlight this feature in Onshape"
+                  >
+                    <span className={styles.cardTitle}>{group.featureName || group.featureId}</span>
+                    <span className={styles.cardTypeTag}>({group.featureType})</span>
+                  </div>
+                  <div className={styles.paramList}>
+                    {group.parameters.map((entry) => {
+                      const annotation = findAnnotation(entry)!;
+                      const state = overallState(annotation);
+
+                      return (
+                        <div
+                          key={entry.parameterId}
+                          className={styles.paramRow}
+                          style={{ cursor: "pointer" }}
+                          onClick={() => {
+                            setSelected(entry);
+                            openFeatureDialog(entry.featureId);
+                          }}
+                        >
+                          <div className={styles.cardValue}>
+                            {entry.parameterId}: {formatFeatureParameterValue(entry.typeName, entry.message)}
+                            {state !== "needsInput" ? (
+                              <span className={styles.proposedValueInline}>
+                                {" "}
+                                &rarr; {annotation.resolvedValue}
+                              </span>
+                            ) : null}
+                          </div>
+                          <div className={styles.rowActions}>
+                            {state === "needsInput" ? (
+                              <span className={styles.tagNeedsInput}>Needs input</span>
+                            ) : state === "proposed" ? (
+                              <span className={styles.tagProposed}>Proposed</span>
+                            ) : (
+                              <span className={styles.tagAnswered}>Resolved</span>
+                            )}
+                            {state !== "resolved" ? (
+                              <>
+                                {state === "proposed" ? (
+                                  <button
+                                    type="button"
+                                    className={styles.acceptButton}
+                                    disabled={saving}
+                                    onClick={(event) => {
+                                      event.stopPropagation();
+                                      void resolveMark(entry);
+                                    }}
+                                  >
+                                    Accept
+                                  </button>
+                                ) : null}
+                                <button
+                                  type="button"
+                                  className={styles.rejectButton}
+                                  disabled={saving}
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    void rejectMark(entry);
+                                  }}
+                                >
+                                  Reject
+                                </button>
+                              </>
+                            ) : null}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </>
       ) : activeTab === "proposed" ? (
         <div className={styles.header}>
           <h1 className={styles.title}>Proposed</h1>
@@ -677,6 +831,7 @@ function DetailView({
   onAddComment,
   onResolve,
   onReopen,
+  onReject,
   onLivePreview,
 }: {
   entry: ValueParameterEntry;
@@ -688,6 +843,7 @@ function DetailView({
   onAddComment: (text: string) => void;
   onResolve: () => void;
   onReopen: () => void;
+  onReject: () => void;
   onLivePreview: (value: string) => void;
 }) {
   const currentValueLabel = formatFeatureParameterValue(entry.typeName, entry.message);
@@ -889,14 +1045,26 @@ function DetailView({
         <div className={styles.sectionLabel}>Status</div>
         <div className={styles.rangeLockedRow}>
           <span>{resolved ? "Resolved" : "Open"}</span>
-          <button
-            type="button"
-            className={styles.secondaryButton}
-            disabled={saving}
-            onClick={resolved ? onReopen : onResolve}
-          >
-            {resolved ? "Reopen to edit range" : "Mark resolved"}
-          </button>
+          <div className={styles.rowActions}>
+            {!resolved ? (
+              <button
+                type="button"
+                className={styles.rejectButton}
+                disabled={saving}
+                onClick={onReject}
+              >
+                Reject
+              </button>
+            ) : null}
+            <button
+              type="button"
+              className={styles.secondaryButton}
+              disabled={saving}
+              onClick={resolved ? onReopen : onResolve}
+            >
+              {resolved ? "Reopen to edit range" : "Mark resolved"}
+            </button>
+          </div>
         </div>
         {!resolved && annotation?.resolvedValue ? (
           <div className={styles.rangeLockedNote}>

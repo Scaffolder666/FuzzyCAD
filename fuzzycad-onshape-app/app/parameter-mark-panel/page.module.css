@@ -167,6 +167,63 @@
   flex-shrink: 0;
 }
 
+.tagProposed {
+  color: #1d4fd1;
+  background: #e6ecff;
+  border-radius: 12px;
+  padding: 2px 9px;
+  font-size: 11.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.proposedValueInline {
+  color: #1d4fd1;
+  font-weight: 600;
+}
+
+.rowActions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.acceptButton {
+  border: 1px solid #1a8a4a;
+  background: #1a8a4a;
+  color: #fff;
+  border-radius: 6px;
+  padding: 5px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.acceptButton:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.rejectButton {
+  border: 1px solid #d5d5db;
+  background: #fff;
+  color: #b3261e;
+  border-radius: 6px;
+  padding: 5px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.rejectButton:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
 .needInputButton {
   border: 1px solid #3d5afe;
   background: #3d5afe;
