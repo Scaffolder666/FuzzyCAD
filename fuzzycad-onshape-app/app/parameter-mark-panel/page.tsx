@@ -4,7 +4,10 @@ import { Suspense, useEffect, useState } from "react";
 import {
   createEmptyUncertaintyDocument,
   makeFeatureParameterQuestionAnnotationId,
+  setFeatureParameterQuestionAnswer,
+  updateUncertaintyAnnotationComment,
   upsertFeatureParameterQuestion,
+  type FeatureParameterQuestionUncertaintyAnnotation,
   type FeatureParameterValueType,
   type FuzzyCADUncertaintyDocument,
 } from "../lib/uncertainty/document";
@@ -26,6 +29,8 @@ type ValueParameterEntry = {
   message: Record<string, unknown>;
 };
 
+type Draft = { answer: string; comment: string };
+
 function isValidUncertaintyDocument(value: unknown): value is FuzzyCADUncertaintyDocument {
   return (
     !!value &&
@@ -35,13 +40,15 @@ function isValidUncertaintyDocument(value: unknown): value is FuzzyCADUncertaint
 }
 
 /**
- * Production "Element right panel" page: lists every value-typed parameter
- * (Quantity/Boolean/Enum/String) across the active Part Studio's feature
- * tree and lets someone mark one as uncertain, writing a
- * FeatureParameterQuestion annotation straight into the project's saved
- * uncertainty document -- no dependency on the main app's React state,
- * since the document is persisted server-side (fuzzycad-project-state.json
- * in the Onshape document) and read/modified/saved here directly.
+ * Production "Element right panel" page: lists every numeric parameter
+ * (BTMParameterQuantity -- depths, radii, thicknesses, etc; Boolean/Enum/
+ * String structural flags are excluded as noise, not real design
+ * decisions) across the active Part Studio's feature tree, and lets
+ * someone mark one as uncertain, propose an alternative value, and leave
+ * a comment. Writes straight into the project's saved uncertainty
+ * document -- no dependency on the main app's live React state, since
+ * that document is persisted server-side (GET/modify/PUT via the existing
+ * fuzzycad-project-state API).
  *
  * Gets documentId/workspaceId/elementId from localStorage, not Onshape's
  * postMessage system -- see onshapeRightPanelContext.ts for why (confirmed
@@ -53,7 +60,8 @@ function ParameterMarkPanelInner() {
   const [context, setContext] = useState<SharedOnshapeContext | null>(null);
   const [status, setStatus] = useState("waiting for Onshape context...");
   const [parameters, setParameters] = useState<ValueParameterEntry[] | null>(null);
-  const [markedIds, setMarkedIds] = useState<Set<string>>(new Set());
+  const [uncertaintyDoc, setUncertaintyDoc] = useState<FuzzyCADUncertaintyDocument | null>(null);
+  const [drafts, setDrafts] = useState<Record<string, Draft>>({});
   const [savingId, setSavingId] = useState<string | null>(null);
 
   useEffect(() => {
@@ -107,18 +115,16 @@ function ParameterMarkPanelInner() {
       const paramsData = await paramsRes.json();
 
       if (Array.isArray(paramsData.valueParameters)) {
-        setParameters(paramsData.valueParameters as ValueParameterEntry[]);
+        const numericOnly = (paramsData.valueParameters as ValueParameterEntry[]).filter(
+          (entry) => entry.typeName === "BTMParameterQuantity",
+        );
+        setParameters(numericOnly);
       } else {
         setParameters([]);
       }
 
       if (stateRes.ok && isValidUncertaintyDocument(stateRes.state)) {
-        const existingIds = new Set(
-          stateRes.state.annotations
-            .filter((annotation) => annotation.type === "featureParameterQuestion")
-            .map((annotation) => annotation.id),
-        );
-        setMarkedIds(existingIds);
+        setUncertaintyDoc(stateRes.state);
       }
 
       setStatus(paramsRes.ok ? "ready" : `error loading parameters (HTTP ${paramsRes.status})`);
@@ -130,6 +136,13 @@ function ParameterMarkPanelInner() {
       cancelled = true;
     };
   }, [context]);
+
+  function findAnnotation(annotationId: string) {
+    return uncertaintyDoc?.annotations.find(
+      (annotation): annotation is FeatureParameterQuestionUncertaintyAnnotation =>
+        annotation.id === annotationId && annotation.type === "featureParameterQuestion",
+    );
+  }
 
   /**
    * Asks Onshape's own UI to open its native feature edit dialog -- the
@@ -206,7 +219,50 @@ function ParameterMarkPanelInner() {
       );
 
       if (saveRes.ok) {
-        setMarkedIds((previous) => new Set(previous).add(annotationId));
+        setUncertaintyDoc(nextDocument);
+      } else {
+        setStatus(`save failed (HTTP ${saveRes.status})`);
+      }
+    } finally {
+      setSavingId(null);
+    }
+  }
+
+  async function saveAnswer(annotationId: string) {
+    if (!context) return;
+
+    const draft = drafts[annotationId] ?? { answer: "", comment: "" };
+    setSavingId(annotationId);
+
+    try {
+      const stateRes = await loadFuzzycadProjectState({
+        documentId: context.documentId,
+        workspaceId: context.workspaceId,
+        server: context.server,
+      });
+
+      if (!stateRes.ok || !isValidUncertaintyDocument(stateRes.state)) {
+        setStatus("could not reload current marks before saving answer");
+        return;
+      }
+
+      let nextDocument = stateRes.state;
+      if (draft.answer.trim()) {
+        nextDocument = setFeatureParameterQuestionAnswer(
+          nextDocument,
+          annotationId,
+          draft.answer.trim(),
+        );
+      }
+      nextDocument = updateUncertaintyAnnotationComment(nextDocument, annotationId, draft.comment);
+
+      const saveRes = await saveFuzzycadProjectState(
+        { documentId: context.documentId, workspaceId: context.workspaceId, server: context.server },
+        nextDocument,
+      );
+
+      if (saveRes.ok) {
+        setUncertaintyDoc(nextDocument);
       } else {
         setStatus(`save failed (HTTP ${saveRes.status})`);
       }
@@ -231,7 +287,7 @@ function ParameterMarkPanelInner() {
       <h1 style={{ fontSize: 15, marginBottom: 4 }}>Mark a parameter as uncertain</h1>
       <p style={{ color: "#666", marginTop: 0 }}>status: {status}</p>
       {parameters === null ? null : parameters.length === 0 ? (
-        <p>No value-typed parameters found in this Part Studio&apos;s feature tree.</p>
+        <p>No numeric parameters found in this Part Studio&apos;s feature tree.</p>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {parameters.map((entry, i) => {
@@ -239,45 +295,100 @@ function ParameterMarkPanelInner() {
               entry.featureId,
               entry.parameterId,
             );
-            const marked = markedIds.has(annotationId);
+            const annotation = findAnnotation(annotationId);
+            const marked = !!annotation;
             const saving = savingId === annotationId;
+            const draft = drafts[annotationId] ?? {
+              answer: annotation?.resolvedValue ?? "",
+              comment: annotation?.comment ?? "",
+            };
+
+            function setDraft(patch: Partial<Draft>) {
+              setDrafts((previous) => ({
+                ...previous,
+                [annotationId]: { ...draft, ...patch },
+              }));
+            }
 
             return (
               <div
                 key={i}
-                onClick={() => openFeatureDialog(entry.featureId)}
-                title="Click to highlight this feature in Onshape"
-                style={{
-                  border: "1px solid #ddd",
-                  borderRadius: 8,
-                  padding: "8px 12px",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  gap: 8,
-                  cursor: "pointer",
-                }}
+                style={{ border: "1px solid #ddd", borderRadius: 8, padding: "8px 12px" }}
               >
-                <div>
-                  <div style={{ fontWeight: 600 }}>
-                    {entry.featureName || entry.featureId}{" "}
-                    <span style={{ fontWeight: 400, color: "#666" }}>({entry.featureType})</span>
-                  </div>
-                  <div style={{ color: "#444" }}>
-                    {entry.parameterId}: {formatFeatureParameterValue(entry.typeName, entry.message)}
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  disabled={marked || saving}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    void markUncertain(entry);
+                <div
+                  onClick={() => openFeatureDialog(entry.featureId)}
+                  title="Click to highlight this feature in Onshape"
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: 8,
+                    cursor: "pointer",
                   }}
-                  style={{ padding: "6px 10px", whiteSpace: "nowrap" }}
                 >
-                  {marked ? "Marked ✓" : saving ? "Saving..." : "Mark uncertain"}
-                </button>
+                  <div>
+                    <div style={{ fontWeight: 600 }}>
+                      {entry.featureName || entry.featureId}{" "}
+                      <span style={{ fontWeight: 400, color: "#666" }}>({entry.featureType})</span>
+                    </div>
+                    <div style={{ color: "#444" }}>
+                      {entry.parameterId}: {formatFeatureParameterValue(entry.typeName, entry.message)}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={marked || saving}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      void markUncertain(entry);
+                    }}
+                    style={{ padding: "6px 10px", whiteSpace: "nowrap" }}
+                  >
+                    {marked ? "Marked ✓" : saving ? "Saving..." : "Mark uncertain"}
+                  </button>
+                </div>
+
+                {marked ? (
+                  <div
+                    onClick={(event) => event.stopPropagation()}
+                    style={{
+                      marginTop: 8,
+                      paddingTop: 8,
+                      borderTop: "1px solid #eee",
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: 6,
+                    }}
+                  >
+                    <label style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                      <span style={{ color: "#666" }}>Proposed value</span>
+                      <input
+                        type="text"
+                        value={draft.answer}
+                        placeholder={entry.message?.expression ? String(entry.message.expression) : ""}
+                        onChange={(event) => setDraft({ answer: event.target.value })}
+                        style={{ padding: "4px 6px" }}
+                      />
+                    </label>
+                    <label style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                      <span style={{ color: "#666" }}>Comment</span>
+                      <textarea
+                        value={draft.comment}
+                        onChange={(event) => setDraft({ comment: event.target.value })}
+                        rows={2}
+                        style={{ padding: "4px 6px", resize: "vertical" }}
+                      />
+                    </label>
+                    <button
+                      type="button"
+                      disabled={saving}
+                      onClick={() => void saveAnswer(annotationId)}
+                      style={{ padding: "6px 10px", alignSelf: "flex-start" }}
+                    >
+                      {saving ? "Saving..." : "Save answer + comment"}
+                    </button>
+                  </div>
+                ) : null}
               </div>
             );
           })}
