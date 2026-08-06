@@ -2,6 +2,7 @@
 
 import { Suspense, useState } from "react";
 import { useSearchParams } from "next/navigation";
+import { formatFeatureParameterValue } from "../lib/featureParameterValue";
 
 type ValueParameterEntry = {
   featureId: unknown;
@@ -24,20 +25,7 @@ type ApiResult = {
   error?: string;
 };
 
-function formatValue(typeName: unknown, message: Record<string, unknown>): string {
-  switch (typeName) {
-    case "BTMParameterQuantity":
-      return String(message.expression ?? "");
-    case "BTMParameterBoolean":
-      return String(message.value ?? "");
-    case "BTMParameterEnum":
-      return `${String(message.enumName ?? "")}: ${String(message.value ?? "")}`;
-    case "BTMParameterString":
-      return String(message.value ?? "");
-    default:
-      return JSON.stringify(message);
-  }
-}
+const formatValue = formatFeatureParameterValue;
 
 /**
  * Visualizes every value-typed parameter across an ENTIRE Part Studio
