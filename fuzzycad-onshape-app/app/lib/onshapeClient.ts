@@ -274,6 +274,18 @@ export async function fetchOnshapePartStudioParts(
   return res.json() as Promise<ApiResult>;
 }
 
+/** Which partId(s) a given feature currently produces -- see partstudio-feature-created-parts/route.ts. */
+export async function fetchFeatureCreatedPartIds(
+  query: PartStudioQuery,
+  featureId: string,
+): Promise<{ ok: boolean; status: number; partIds: string[] }> {
+  const params = makePartStudioParams(query);
+  params.set("featureId", featureId);
+  const res = await fetch(`/api/onshape/partstudio-feature-created-parts?${params.toString()}`);
+
+  return res.json() as Promise<{ ok: boolean; status: number; partIds: string[] }>;
+}
+
 /**
  * In-place write-back for an accepted Move mark: adds a native "transform"
  * feature straight into the Part Studio's own feature tree via Onshape's

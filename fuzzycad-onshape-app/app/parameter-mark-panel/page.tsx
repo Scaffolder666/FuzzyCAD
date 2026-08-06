@@ -15,6 +15,8 @@ import {
   type FuzzyCADUncertaintyDocument,
 } from "../lib/uncertainty/document";
 import {
+  fetchFeatureCreatedPartIds,
+  fetchOnshapePartStudioParts,
   loadFuzzycadProjectState,
   saveFuzzycadProjectState,
   updatePartStudioFeatureSuppressed,
@@ -92,6 +94,7 @@ function ParameterMarkPanelInner() {
   const [uncertaintyDoc, setUncertaintyDoc] = useState<FuzzyCADUncertaintyDocument | null>(null);
   const [selected, setSelected] = useState<ValueParameterEntry | null>(null);
   const [saving, setSaving] = useState(false);
+  const [affectedPartNames, setAffectedPartNames] = useState<Record<string, string[]>>({});
 
   useEffect(() => {
     function applyStoredContext() {
@@ -165,6 +168,67 @@ function ParameterMarkPanelInner() {
       cancelled = true;
     };
   }, [context]);
+
+  /**
+   * Which part(s) each feature card actually affects -- neither the
+   * Features API nor the Part List API links featureId to partId, so
+   * this resolves it via qCreatedBy() (partstudio-feature-created-parts)
+   * per unique feature, then labels the ids using the Part List's names.
+   * Runs once parameters load rather than inside loadEverything so a
+   * slow/failed lookup here doesn't block the parameter list itself from
+   * showing.
+   */
+  useEffect(() => {
+    if (!context || !parameters || parameters.length === 0) {
+      return;
+    }
+
+    let cancelled = false;
+
+    async function loadAffectedParts() {
+      const query = {
+        documentId: context!.documentId,
+        workspaceId: context!.workspaceId,
+        partStudioElementId: context!.elementId,
+        server: context!.server,
+      };
+
+      const uniqueFeatureIds = Array.from(new Set(parameters!.map((entry) => entry.featureId)));
+
+      const [partsRes, ...createdByResults] = await Promise.all([
+        fetchOnshapePartStudioParts(query),
+        ...uniqueFeatureIds.map((featureId) => fetchFeatureCreatedPartIds(query, featureId)),
+      ]);
+
+      if (cancelled) return;
+
+      const partNameById = new Map<string, string>();
+      const rawParts = Array.isArray(partsRes?.data) ? (partsRes.data as unknown[]) : [];
+      for (const entry of rawParts) {
+        if (typeof entry !== "object" || entry === null) continue;
+        const record = entry as Record<string, unknown>;
+        const id = record.partId ?? record.id;
+        const name = record.name ?? record.partName;
+        if (typeof id === "string" && typeof name === "string") {
+          partNameById.set(id, name);
+        }
+      }
+
+      const next: Record<string, string[]> = {};
+      uniqueFeatureIds.forEach((featureId, index) => {
+        const partIds = createdByResults[index]?.partIds ?? [];
+        next[featureId] = partIds.map((partId) => partNameById.get(partId) ?? partId);
+      });
+
+      setAffectedPartNames(next);
+    }
+
+    void loadAffectedParts();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [context, parameters]);
 
   function annotationIdFor(entry: ValueParameterEntry) {
     return makeFeatureParameterQuestionAnnotationId(entry.featureId, entry.parameterId);
@@ -459,6 +523,11 @@ function ParameterMarkPanelInner() {
               >
                 <span className={styles.cardTitle}>{group.featureName || group.featureId}</span>
                 <span className={styles.cardTypeTag}>({group.featureType})</span>
+                {affectedPartNames[group.featureId]?.length ? (
+                  <span className={styles.cardTypeTag}>
+                    &rarr; {affectedPartNames[group.featureId].join(", ")}
+                  </span>
+                ) : null}
               </div>
               <div className={styles.paramList}>
                 {group.parameters.map((entry) => {
