@@ -25,7 +25,9 @@ export function(context is Context, queries) {
 }`;
 }
 
-const FEATURE_ID_PATTERN = /^[A-Za-z0-9]+$/;
+// Real featureIds look like "FKF8zbYi3YBEcRZ_0" -- alphanumeric plus
+// underscore (confirmed live, 2026-08-06).
+const FEATURE_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
 
 export async function GET(req: NextRequest) {
   const params = req.nextUrl.searchParams;
