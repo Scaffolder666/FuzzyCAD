@@ -25,14 +25,14 @@
 //     into the original solid -- the whole point is the proposed geometry
 //     sits *next to* the untouched original so both are visible at once.
 
-FeatureScript 2412;
-import(path : "onshape/std/geometry.fs", version : "2412.0");
+FeatureScript 3029;
+import(path : "onshape/std/common.fs", version : "3029.0");
 
 annotation { "Feature Type Name" : "FuzzyCAD Proposed Extrude" }
 export const fuzzycadProposedExtrude = defineFeature(function(context is Context, id is Id, definition is map)
     precondition
     {
-        annotation { "Name" : "Entities to extrude" }
+        annotation { "Name" : "Entities to extrude", "Filter" : EntityType.FACE }
         definition.entities is Query;
 
         annotation { "Name" : "Depth" }
