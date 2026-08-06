@@ -5,6 +5,7 @@ import {
   addFeatureParameterQuestionComment,
   createEmptyUncertaintyDocument,
   makeFeatureParameterQuestionAnnotationId,
+  removeUncertaintyAnnotationById,
   reopenUncertaintyAnnotation,
   resolveUncertaintyAnnotation,
   setFeatureParameterQuestionAnswer,
@@ -498,6 +499,54 @@ function ParameterMarkPanelInner() {
     await withSavedDocument((doc) => resolveUncertaintyAnnotation(doc, annotationIdFor(entry)));
   }
 
+  /**
+   * Reject: discard the mark entirely, no trace kept -- not a third
+   * status alongside open/resolved, just a delete. Also re-applies the
+   * mark's captured original expression, unconditionally, in case
+   * livePreviewValue already pushed an unconfirmed value into the real
+   * Onshape feature while someone was experimenting with the slider; the
+   * point of rejecting is "nothing changed," so the real feature has to
+   * end up back at its original value too, not just the annotation gone.
+   * Appearance restoration (once that's wired) falls out of this for
+   * free -- it keys off "does an open annotation still reference this
+   * part," and after this there won't be one.
+   */
+  async function rejectMark(entry: ValueParameterEntry) {
+    if (!context) return;
+    const annotation = findAnnotation(entry);
+    if (!annotation) return;
+
+    const confirmed = window.confirm(
+      `Discard this mark on ${entry.parameterId}? It will be restored to its original value (${annotation.currentValue}) and the mark removed.`,
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    setSaving(true);
+    const updateRes = await updatePartStudioFeatureSuppressed(
+      {
+        documentId: context.documentId,
+        workspaceId: context.workspaceId,
+        partStudioElementId: context.elementId,
+        server: context.server,
+      },
+      {
+        featureId: entry.featureId,
+        parameterUpdates: [{ parameterId: entry.parameterId, expression: annotation.currentValue }],
+      },
+    );
+    setSaving(false);
+
+    if (!updateRes.ok) {
+      setStatus(`failed to restore original value in Onshape (HTTP ${updateRes.status})`);
+      return;
+    }
+
+    await withSavedDocument((doc) => removeUncertaintyAnnotationById(doc, annotationIdFor(entry)));
+    setSelected(null);
+  }
+
   if (!context) {
     return (
       <div className={styles.page}>
@@ -533,6 +582,7 @@ function ParameterMarkPanelInner() {
           )
         }
         onResolve={() => resolveMark(selected)}
+        onReject={() => rejectMark(selected)}
         onReopen={() =>
           withSavedDocument((doc) => reopenUncertaintyAnnotation(doc, annotationIdFor(selected)))
         }
@@ -644,6 +694,7 @@ function DetailView({
   onSaveRange,
   onAddComment,
   onResolve,
+  onReject,
   onReopen,
   onLivePreview,
 }: {
@@ -655,6 +706,7 @@ function DetailView({
   onSaveRange: (min: number | null, max: number | null) => void;
   onAddComment: (text: string) => void;
   onResolve: () => void;
+  onReject: () => void;
   onReopen: () => void;
   onLivePreview: (value: string) => void;
 }) {
@@ -857,14 +909,26 @@ function DetailView({
         <div className={styles.sectionLabel}>Status</div>
         <div className={styles.rangeLockedRow}>
           <span>{resolved ? "Resolved" : "Open"}</span>
-          <button
-            type="button"
-            className={styles.secondaryButton}
-            disabled={saving}
-            onClick={resolved ? onReopen : onResolve}
-          >
-            {resolved ? "Reopen to edit range" : "Mark resolved"}
-          </button>
+          <div style={{ display: "flex", gap: 8 }}>
+            {resolved ? null : (
+              <button
+                type="button"
+                className={styles.secondaryButton}
+                disabled={saving}
+                onClick={onReject}
+              >
+                Reject
+              </button>
+            )}
+            <button
+              type="button"
+              className={styles.secondaryButton}
+              disabled={saving}
+              onClick={resolved ? onReopen : onResolve}
+            >
+              {resolved ? "Reopen to edit range" : "Mark resolved"}
+            </button>
+          </div>
         </div>
         {!resolved && annotation?.resolvedValue ? (
           <div className={styles.rangeLockedNote}>
