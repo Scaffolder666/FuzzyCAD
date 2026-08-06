@@ -131,6 +131,28 @@ function ParameterMarkPanelInner() {
     };
   }, [context]);
 
+  /**
+   * Asks Onshape's own UI to open its native feature edit dialog -- the
+   * same highlight + direction-arrows affordance you get clicking a
+   * feature in the tree -- so picking a row here shows the affected
+   * geometry without us re-implementing any B-rep highlighting ourselves.
+   * One-way: this extension type never receives a reply (confirmed live),
+   * so there's nothing to wait for here, just fire and forget.
+   */
+  function openFeatureDialog(featureId: string) {
+    if (!context) return;
+    window.parent.postMessage(
+      {
+        documentId: context.documentId,
+        workspaceId: context.workspaceId,
+        elementId: context.elementId,
+        messageName: "openFeatureDialog",
+        featureId,
+      },
+      context.server,
+    );
+  }
+
   async function markUncertain(entry: ValueParameterEntry) {
     if (!context) return;
 
@@ -214,6 +236,8 @@ function ParameterMarkPanelInner() {
             return (
               <div
                 key={i}
+                onClick={() => openFeatureDialog(entry.featureId)}
+                title="Click to highlight this feature in Onshape"
                 style={{
                   border: "1px solid #ddd",
                   borderRadius: 8,
@@ -222,6 +246,7 @@ function ParameterMarkPanelInner() {
                   alignItems: "center",
                   justifyContent: "space-between",
                   gap: 8,
+                  cursor: "pointer",
                 }}
               >
                 <div>
@@ -236,7 +261,10 @@ function ParameterMarkPanelInner() {
                 <button
                   type="button"
                   disabled={marked || saving}
-                  onClick={() => void markUncertain(entry)}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    void markUncertain(entry);
+                  }}
                   style={{ padding: "6px 10px", whiteSpace: "nowrap" }}
                 >
                   {marked ? "Marked ✓" : saving ? "Saving..." : "Mark uncertain"}
