@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import {
   addFeatureParameterQuestionComment,
   createEmptyUncertaintyDocument,
@@ -30,6 +30,22 @@ type ValueParameterEntry = {
   typeName: string;
   message: Record<string, unknown>;
 };
+
+type FeatureGroup = {
+  featureId: string;
+  featureName: string;
+  featureType: string;
+  parameters: ValueParameterEntry[];
+};
+
+type ParamState = "unmarked" | "needsInput" | "answered";
+
+function paramState(
+  annotation: FeatureParameterQuestionUncertaintyAnnotation | undefined,
+): ParamState {
+  if (!annotation) return "unmarked";
+  return annotation.resolvedValue ? "answered" : "needsInput";
+}
 
 function isValidUncertaintyDocument(value: unknown): value is FuzzyCADUncertaintyDocument {
   return (
@@ -151,6 +167,26 @@ function ParameterMarkPanelInner() {
         annotation.id === id && annotation.type === "featureParameterQuestion",
     );
   }
+
+  /** One card per feature instead of one per parameter -- an Extrude with 4 numeric fields was showing 4 near-identical cards that all highlighted the same feature. */
+  const featureGroups = useMemo<FeatureGroup[]>(() => {
+    if (!parameters) return [];
+    const byFeature = new Map<string, FeatureGroup>();
+    for (const entry of parameters) {
+      const existing = byFeature.get(entry.featureId);
+      if (existing) {
+        existing.parameters.push(entry);
+      } else {
+        byFeature.set(entry.featureId, {
+          featureId: entry.featureId,
+          featureName: entry.featureName,
+          featureType: entry.featureType,
+          parameters: [entry],
+        });
+      }
+    }
+    return Array.from(byFeature.values());
+  }, [parameters]);
 
   /**
    * Asks Onshape's own UI to open its native feature edit dialog -- the
@@ -320,58 +356,59 @@ function ParameterMarkPanelInner() {
         </p>
       ) : (
         <div className={styles.list}>
-          {parameters.map((entry, i) => {
-            const annotation = findAnnotation(entry);
-            const marked = !!annotation;
-
-            return (
+          {featureGroups.map((group) => (
+            <div key={group.featureId} className={styles.featureCard}>
               <div
-                key={i}
-                className={styles.card}
-                onClick={() => openFeatureDialog(entry.featureId)}
+                className={styles.featureHeader}
+                onClick={() => openFeatureDialog(group.featureId)}
                 title="Click to highlight this feature in Onshape"
               >
-                <div className={styles.cardRow}>
-                  <div>
-                    <div className={styles.cardTitle}>
-                      {entry.featureName || entry.featureId}
-                      <span className={styles.cardTypeTag}>({entry.featureType})</span>
-                    </div>
-                    <div className={styles.cardValue}>
-                      {entry.parameterId}: {formatFeatureParameterValue(entry.typeName, entry.message)}
-                    </div>
-                  </div>
-                  {marked ? (
-                    <span className={styles.markedTag}>Needs input ✓</span>
-                  ) : (
-                    <button
-                      type="button"
-                      className={styles.needInputButton}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        void openDetail(entry);
-                      }}
-                    >
-                      Need input
-                    </button>
-                  )}
-                  {marked ? (
-                    <button
-                      type="button"
-                      className={styles.secondaryButton}
-                      onClick={(event) => {
-                        event.stopPropagation();
+                <span className={styles.cardTitle}>{group.featureName || group.featureId}</span>
+                <span className={styles.cardTypeTag}>({group.featureType})</span>
+              </div>
+              <div className={styles.paramList}>
+                {group.parameters.map((entry) => {
+                  const annotation = findAnnotation(entry);
+                  const state = paramState(annotation);
+
+                  return (
+                    <div
+                      key={entry.parameterId}
+                      className={styles.paramRow}
+                      onClick={() => {
+                        if (state === "unmarked") return;
                         setSelected(entry);
                         openFeatureDialog(entry.featureId);
                       }}
+                      style={state !== "unmarked" ? { cursor: "pointer" } : undefined}
                     >
-                      Open
-                    </button>
-                  ) : null}
-                </div>
+                      <div className={styles.cardValue}>
+                        {entry.parameterId}: {formatFeatureParameterValue(entry.typeName, entry.message)}
+                      </div>
+                      {state === "unmarked" ? (
+                        <button
+                          type="button"
+                          className={styles.needInputButton}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            void openDetail(entry);
+                          }}
+                        >
+                          Need input
+                        </button>
+                      ) : state === "needsInput" ? (
+                        <span className={styles.tagNeedsInput}>Needs input</span>
+                      ) : (
+                        <span className={styles.tagAnswered}>
+                          Answered: {annotation!.resolvedValue}
+                        </span>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
-            );
-          })}
+            </div>
+          ))}
         </div>
       )}
     </div>
