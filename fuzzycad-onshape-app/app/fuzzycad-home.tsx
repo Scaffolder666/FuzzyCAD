@@ -2519,6 +2519,7 @@ if (result.ok && result.state) {
           filletPick={
             filletPickPathKey && filletPickEdgePointWorld
               ? {
+                  pathKey: filletPickPathKey,
                   edgePointWorld: filletPickEdgePointWorld,
                   kind: filletKind,
                   amountMm: filletAmountMm,

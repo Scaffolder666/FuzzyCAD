@@ -85,6 +85,7 @@ import {
 import {
   createBrepGhostMesh,
   updateBrepGhostMesh,
+  disposeBrepGhostMesh,
   STEP_MM_TO_THREE_M,
   type BrepGhostMesh,
 } from "./viewer/brepGhost";
@@ -352,7 +353,7 @@ type FuzzyCADGeometryViewerProps = {
   /** Answer an open distance flag directly from its 3D ruler. */
   onAnswerDistance?: (annotationId: string, distanceMm: number) => void;
   /** Pending edge pick for the "Fillet/Chamfer" tool — set once a part+edge point is clicked, cleared on save/cancel. No live geometry preview (BRepFilletAPI is too slow to re-solve every drag tick); just an edge marker + value entry. */
-  filletPick?: { edgePointWorld: [number, number, number]; kind: FilletKind; amountMm: number } | null;
+  filletPick?: { pathKey: string; edgePointWorld: [number, number, number]; kind: FilletKind; amountMm: number } | null;
   onFilletKindChange?: (kind: FilletKind) => void;
   onFilletAmountChange?: (amountMm: number) => void;
   onFilletConfirm?: () => void;
@@ -1185,7 +1186,7 @@ function Model({
   onAnswerMoveQuestion?: (annotationId: string, deltaMeters: number) => void;
   distancePreviews?: DistancePreview[];
   onAnswerDistance?: (annotationId: string, distanceMm: number) => void;
-  filletPick?: { edgePointWorld: [number, number, number]; kind: FilletKind; amountMm: number } | null;
+  filletPick?: { pathKey: string; edgePointWorld: [number, number, number]; kind: FilletKind; amountMm: number } | null;
   onFilletKindChange?: (kind: FilletKind) => void;
   onFilletAmountChange?: (amountMm: number) => void;
   onFilletConfirm?: () => void;
@@ -2197,6 +2198,77 @@ function Model({
     brepGhostSource,
     invalidate,
   ]);
+
+  // Fillet/Chamfer's ghost, unlike Move/Rotate/Scale's, has no cheap rigid-
+  // transform approximation to show instantly (a rounded edge can only be
+  // known by actually running OCCT) — so this is the ONLY preview tier,
+  // debounced so typing/toggling stays responsive while the worker
+  // round-trip runs ~250ms after the value settles. No preview-session
+  // group exists for this tool, so the ghost is added straight to `scene`
+  // and disposed explicitly (rather than via a session's group-traverse).
+  const brepFilletGhostRef = useRef<BrepGhostMesh | null>(null);
+  const brepFilletDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (!filletPick || !brepGhostSource) {
+      if (brepFilletGhostRef.current) {
+        scene.remove(brepFilletGhostRef.current);
+        disposeBrepGhostMesh(brepFilletGhostRef.current);
+        brepFilletGhostRef.current = null;
+        invalidate();
+      }
+      return;
+    }
+
+    if (brepGhostSource.status !== "ready") {
+      return;
+    }
+
+    const handle = brepGhostSource.getHandle(filletPick.pathKey);
+
+    if (handle === null) {
+      return;
+    }
+
+    const edgePointMm: [number, number, number] = [
+      filletPick.edgePointWorld[0] / STEP_MM_TO_THREE_M,
+      filletPick.edgePointWorld[1] / STEP_MM_TO_THREE_M,
+      filletPick.edgePointWorld[2] / STEP_MM_TO_THREE_M,
+    ];
+
+    if (brepFilletDebounceRef.current) {
+      clearTimeout(brepFilletDebounceRef.current);
+    }
+
+    brepFilletDebounceRef.current = setTimeout(() => {
+      getOcctClient()
+        .filletEdge(handle, edgePointMm, filletPick.kind, filletPick.amountMm, false)
+        .then(({ mesh, valid, resolved }) => {
+          if (!resolved || !valid) {
+            return;
+          }
+
+          if (!brepFilletGhostRef.current) {
+            const ghost = createBrepGhostMesh(mesh, "FuzzyCAD Fillet Preview (B-rep)");
+            brepFilletGhostRef.current = ghost;
+            scene.add(ghost);
+          } else {
+            updateBrepGhostMesh(brepFilletGhostRef.current, mesh);
+          }
+
+          invalidate();
+        })
+        .catch(() => {
+          // Best-effort — no ghost shown on failure, the orange edge marker still is.
+        });
+    }, 250);
+
+    return () => {
+      if (brepFilletDebounceRef.current) {
+        clearTimeout(brepFilletDebounceRef.current);
+      }
+    };
+  }, [filletPick, brepGhostSource, scene, invalidate]);
 
   // Every OTHER saved-but-still-OPEN rotate proposal (not the one currently
   // being dragged) shows as a static ghost at its saved angle. Resolved
