@@ -27,11 +27,7 @@ import {
   parseNumericMagnitude,
   substituteNumericMagnitude,
 } from "../lib/featureParameterValue";
-import {
-  featureTypeLabel,
-  isParameterActive,
-  parameterLabel,
-} from "../lib/featureParameterLabels";
+import { featureTypeLabel, parameterLabel } from "../lib/featureParameterLabels";
 import {
   ONSHAPE_CONTEXT_STORAGE_KEY,
   readSharedOnshapeContext,
@@ -53,8 +49,7 @@ type FeatureGroup = {
   featureId: string;
   featureName: string;
   featureType: string;
-  activeParameters: ValueParameterEntry[];
-  inactiveParameters: ValueParameterEntry[];
+  parameters: ValueParameterEntry[];
 };
 
 type PartEntry = {
@@ -67,6 +62,30 @@ type PartWithFeatures = PartEntry & {
 };
 
 type ParamState = "unmarked" | "needsInput" | "answered";
+
+// How many featurescript evaluations to have in flight at once when
+// resolving every feature's created part(s) -- see the loadPartMapping
+// effect below for why this exists at all.
+const FEATURE_MAPPING_CONCURRENCY = 5;
+
+async function mapWithConcurrencyLimit<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let nextIndex = 0;
+
+  async function worker() {
+    while (nextIndex < items.length) {
+      const index = nextIndex++;
+      results[index] = await fn(items[index]);
+    }
+  }
+
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, () => worker()));
+  return results;
+}
 
 function paramState(
   annotation: FeatureParameterQuestionUncertaintyAnnotation | undefined,
@@ -115,10 +134,6 @@ function ParameterMarkPanelInner() {
   const [context, setContext] = useState<SharedOnshapeContext | null>(null);
   const [status, setStatus] = useState("waiting for Onshape context...");
   const [parameters, setParameters] = useState<ValueParameterEntry[] | null>(null);
-  const [booleanParameters, setBooleanParameters] = useState<ValueParameterEntry[]>([]);
-  const [expandedInactiveFeatureIds, setExpandedInactiveFeatureIds] = useState<Set<string>>(
-    new Set(),
-  );
   const [uncertaintyDoc, setUncertaintyDoc] = useState<FuzzyCADUncertaintyDocument | null>(null);
   const [selected, setSelected] = useState<ValueParameterEntry | null>(null);
   const [saving, setSaving] = useState(false);
@@ -178,12 +193,12 @@ function ParameterMarkPanelInner() {
       const paramsData = await paramsRes.json();
 
       if (Array.isArray(paramsData.valueParameters)) {
-        const allParams = paramsData.valueParameters as ValueParameterEntry[];
-        setParameters(allParams.filter((entry) => entry.typeName === "BTMParameterQuantity"));
-        setBooleanParameters(allParams.filter((entry) => entry.typeName === "BTMParameterBoolean"));
+        const numericOnly = (paramsData.valueParameters as ValueParameterEntry[]).filter(
+          (entry) => entry.typeName === "BTMParameterQuantity",
+        );
+        setParameters(numericOnly);
       } else {
         setParameters([]);
-        setBooleanParameters([]);
       }
 
       if (stateRes.ok && isValidUncertaintyDocument(stateRes.state)) {
@@ -208,6 +223,18 @@ function ParameterMarkPanelInner() {
    * unique feature. Runs once parameters load rather than inside
    * loadEverything so a slow/failed lookup here doesn't block the
    * parameter list itself from being fetched.
+   *
+   * The per-feature fetches run FEATURE_MAPPING_CONCURRENCY at a time,
+   * not all at once. Confirmed live: a real Part Studio with dozens of
+   * features (Sketch/Extrude/Chamfer repeated many times) firing that
+   * many featurescript evaluations simultaneously came back with every
+   * single one empty -- Onshape's featurescript endpoint doesn't reject
+   * with an error our fetch would throw on (a non-2xx HTTP status still
+   * resolves normally, it just carries ok:false), so this failed
+   * completely silently: parts showed up fine (that fetch is separate
+   * and unaffected), but every part's feature list was empty, as if
+   * qCreatedBy had nothing to say. Batching keeps concurrent featurescript
+   * calls low enough that they actually succeed.
    */
   useEffect(() => {
     if (!context || !parameters) {
@@ -226,9 +253,11 @@ function ParameterMarkPanelInner() {
 
       const uniqueFeatureIds = Array.from(new Set(parameters!.map((entry) => entry.featureId)));
 
-      const [partsRes, ...createdByResults] = await Promise.all([
-        fetchOnshapePartStudioParts(query),
-        ...uniqueFeatureIds.map((featureId) => fetchFeatureCreatedPartIds(query, featureId)),
+      const [partsRes, createdByResults] = await Promise.all([
+        fetchOnshapePartStudioParts(query).catch(() => null),
+        mapWithConcurrencyLimit(uniqueFeatureIds, FEATURE_MAPPING_CONCURRENCY, (featureId) =>
+          fetchFeatureCreatedPartIds(query, featureId).catch(() => ({ partIds: [] as string[] })),
+        ),
       ]);
 
       if (cancelled) return;
@@ -275,42 +304,33 @@ function ParameterMarkPanelInner() {
   /**
    * One card per feature instead of one per parameter -- an Extrude with
    * 4 numeric fields was showing 4 near-identical cards that all
-   * highlighted the same feature. Each parameter is also split into
-   * active/inactive using its sibling boolean flags (isParameterActive)
-   * so a feature with e.g. 9 numeric parameters but only 1 actually in
-   * effect doesn't bury it under 8 no-op defaults.
+   * highlighted the same feature.
+   *
+   * Used to also split parameters into active/inactive by sibling
+   * boolean flags, hiding "inactive" ones by default. Dropped that: on a
+   * real multi-feature part it over-filtered (a part built from several
+   * Extrudes + a Chamfer came back "no adjustable parameters" even
+   * though it obviously had some) -- the boolean-prefix heuristic isn't
+   * reliable enough to hide rows on.
    */
   const featureGroups = useMemo<FeatureGroup[]>(() => {
     if (!parameters) return [];
-
-    const boolsByFeature = new Map<string, { parameterId: string; value: boolean }[]>();
-    for (const entry of booleanParameters) {
-      const list = boolsByFeature.get(entry.featureId) ?? [];
-      list.push({ parameterId: entry.parameterId, value: Boolean(entry.message.value) });
-      boolsByFeature.set(entry.featureId, list);
-    }
-
     const byFeature = new Map<string, FeatureGroup>();
     for (const entry of parameters) {
       const existing = byFeature.get(entry.featureId);
-      const group =
-        existing ??
-        ({
+      if (existing) {
+        existing.parameters.push(entry);
+      } else {
+        byFeature.set(entry.featureId, {
           featureId: entry.featureId,
           featureName: entry.featureName,
           featureType: entry.featureType,
-          activeParameters: [],
-          inactiveParameters: [],
-        } satisfies FeatureGroup);
-      if (!existing) {
-        byFeature.set(entry.featureId, group);
+          parameters: [entry],
+        });
       }
-
-      const active = isParameterActive(entry.parameterId, boolsByFeature.get(entry.featureId) ?? []);
-      (active ? group.activeParameters : group.inactiveParameters).push(entry);
     }
     return Array.from(byFeature.values());
-  }, [parameters, booleanParameters]);
+  }, [parameters]);
 
   /** This Part Studio's parts, each carrying only the feature groups that actually produced it (via featurePartIds -- see the loadPartMapping effect above). */
   const partsWithFeatures = useMemo<PartWithFeatures[]>(() => {
@@ -672,7 +692,7 @@ function ParameterMarkPanelInner() {
           {partsWithFeatures.map((part) => {
             const expanded = expandedPartId === part.partId;
             const paramCount = part.featureGroups.reduce(
-              (sum, group) => sum + group.activeParameters.length,
+              (sum, group) => sum + group.parameters.length,
               0,
             );
 
@@ -695,50 +715,14 @@ function ParameterMarkPanelInner() {
                 </div>
                 {expanded && part.featureGroups.length > 0 ? (
                   <div className={styles.paramList}>
-                    {part.featureGroups.map((group) => {
-                      const showInactive = expandedInactiveFeatureIds.has(group.featureId);
-
-                      return (
-                        <div key={group.featureId}>
-                          <div className={styles.featureSubheader}>
-                            {group.featureName || featureTypeLabel(group.featureType)}
-                          </div>
-                          {group.activeParameters.length === 0 ? (
-                            <div className={styles.cardValue} style={{ padding: "0 12px 8px" }}>
-                              Nothing currently in effect on this feature.
-                            </div>
-                          ) : (
-                            group.activeParameters.map((entry) => renderParamRow(entry, part))
-                          )}
-                          {group.inactiveParameters.length > 0 ? (
-                            <>
-                              <button
-                                type="button"
-                                className={styles.showInactiveButton}
-                                onClick={() =>
-                                  setExpandedInactiveFeatureIds((current) => {
-                                    const next = new Set(current);
-                                    if (next.has(group.featureId)) {
-                                      next.delete(group.featureId);
-                                    } else {
-                                      next.add(group.featureId);
-                                    }
-                                    return next;
-                                  })
-                                }
-                              >
-                                {showInactive
-                                  ? "Hide inactive parameters"
-                                  : `Show ${group.inactiveParameters.length} not currently active`}
-                              </button>
-                              {showInactive
-                                ? group.inactiveParameters.map((entry) => renderParamRow(entry, part))
-                                : null}
-                            </>
-                          ) : null}
+                    {part.featureGroups.map((group) => (
+                      <div key={group.featureId}>
+                        <div className={styles.featureSubheader}>
+                          {group.featureName || featureTypeLabel(group.featureType)}
                         </div>
-                      );
-                    })}
+                        {group.parameters.map((entry) => renderParamRow(entry, part))}
+                      </div>
+                    ))}
                   </div>
                 ) : null}
               </div>
