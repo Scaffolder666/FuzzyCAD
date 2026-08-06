@@ -23,10 +23,19 @@ export const runtime = "nodejs";
  * field as a single bare expression against the Part Studio's own
  * already-loaded std-library context, not a standalone document -- just
  * the function literal, no pragma/import/export.
+ *
+ * Also confirmed live: qCreatedBy() alone returns a Query -- a lazy,
+ * symbolic "entities created by this feature" descriptor -- not a
+ * resolved list of entities. transientQueriesToStrings() on that
+ * unevaluated Query just serializes the descriptor itself back
+ * (BTFSValueMap with entityType/featureId/queryType keys), not entity
+ * ids. Needs evaluateQuery(context, query) first to actually resolve it
+ * against this Context into concrete transient entities before
+ * stringifying.
  */
 function buildScript(featureId: string) {
   return `function(context is Context, queries) {
-    return transientQueriesToStrings(qCreatedBy(makeId("${featureId}"), EntityType.BODY));
+    return transientQueriesToStrings(evaluateQuery(context, qCreatedBy(makeId("${featureId}"), EntityType.BODY)));
 }`;
 }
 
