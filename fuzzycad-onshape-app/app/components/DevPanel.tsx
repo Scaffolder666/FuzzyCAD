@@ -10,14 +10,6 @@ type DevActionOptions = {
 
 type DevAction = (options?: DevActionOptions) => void | Promise<void>;
 
-type DevGraphStats = {
-  matched: number;
-  total: number;
-  scale: number;
-  clickedPathKey: string | null;
-  linkedCount: number | null;
-};
-
 type DebugResult = {
   title: string;
   value: unknown | null;
@@ -26,7 +18,6 @@ type DebugResult = {
 type DevPanelProps = {
   connectHref: string;
   selectedPartStudioId: string;
-  graphStats: DevGraphStats | null;
   meshGraph: MeshGraphNode[];
   debugResults: DebugResult[];
   allParams: [string, string][];
@@ -34,7 +25,6 @@ type DevPanelProps = {
   onLoadElements: DevAction;
   onLoadRawAssembly: DevAction;
   onLoadSummary: DevAction;
-  onBuildGraph: DevAction;
   onLoadGeometry: DevAction;
   onInspectZip: DevAction;
 };
@@ -42,7 +32,6 @@ type DevPanelProps = {
 export default function DevPanel({
   connectHref,
   selectedPartStudioId,
-  graphStats,
   meshGraph,
   debugResults,
   allParams,
@@ -50,7 +39,6 @@ export default function DevPanel({
   onLoadElements,
   onLoadRawAssembly,
   onLoadSummary,
-  onBuildGraph,
   onLoadGeometry,
   onInspectZip,
 }: DevPanelProps) {
@@ -157,24 +145,6 @@ export default function DevPanel({
 
           <button
             onClick={() => {
-              void onBuildGraph();
-            }}
-            disabled={!selectedPartStudioId}
-          >
-            Build Graph
-          </button>
-
-          <button
-            onClick={() => {
-              void onBuildGraph({ force: true });
-            }}
-            disabled={!selectedPartStudioId}
-          >
-            Force Build Graph
-          </button>
-
-          <button
-            onClick={() => {
               void onLoadGeometry();
             }}
             disabled={!selectedPartStudioId}
@@ -209,22 +179,6 @@ export default function DevPanel({
             Force Inspect ZIP
           </button>
         </div>
-
-        {graphStats ? (
-          <p className={styles.devStats}>
-            Matched: {graphStats.matched}/{graphStats.total} · scale{" "}
-            {graphStats.scale}
-            {graphStats.clickedPathKey ? (
-              <>
-                {" "}
-                · clicked {graphStats.clickedPathKey}
-                {graphStats.linkedCount !== null ? (
-                  <> · linked {graphStats.linkedCount}</>
-                ) : null}
-              </>
-            ) : null}
-          </p>
-        ) : null}
 
         {meshGraph.length > 0 ? (
           <p>

@@ -2,7 +2,6 @@
 
 import { useEffect, useRef } from "react";
 import type { FuzzyCADUncertaintyDocument } from "../lib/uncertainty/document";
-import type { PartNode } from "../lib/partGraph";
 import {
   fetchOnshapePartAppearance,
   setOnshapePartAppearance,
@@ -11,20 +10,14 @@ import {
 
 const MARK_COLOR: PartColor = { red: 255, green: 149, blue: 0 };
 
-type PartGraphLike = {
-  byPathKey: Map<string, PartNode>;
-};
-
 type AppearanceQuery = {
   documentId: string;
   workspaceId: string;
+  elementId: string;
   server: string;
 };
 
 type CachedOriginal = {
-  documentId: string;
-  elementId: string;
-  partId: string;
   color: PartColor | null;
   opacity: number | null;
 };
@@ -71,93 +64,72 @@ function extractAppearance(data: unknown): { color: PartColor | null; opacity: n
  *    no per-instance appearance endpoint found). A part instanced
  *    multiple times in the assembly recolors at every occurrence, not
  *    just the marked one.
- *  - Only parts living in the SAME document as the open assembly are
- *    marked — a part from a linked external document doesn't have a
- *    known workspace id here to write into, so it's silently skipped.
  *  - The "original color" cache is in-memory only, not persisted — a
  *    page reload while parts are still marked orange in Onshape won't
  *    remember what to restore them to; they stay orange until resolved.
  */
 export function useFuzzyMarkAppearance(
   document: FuzzyCADUncertaintyDocument,
-  partGraph: PartGraphLike | null,
   query: AppearanceQuery | null,
 ) {
   const cacheRef = useRef<Map<string, CachedOriginal>>(new Map());
 
   useEffect(() => {
-    if (!query || !partGraph) {
+    if (!query) {
       return;
     }
 
-    const openPathKeys = new Set<string>();
+    const openPartIds = new Set<string>();
 
     for (const annotation of document.annotations) {
       if (annotation.status !== "open") {
         continue;
       }
-      for (const pathKey of annotation.target.pathKeys) {
-        openPathKeys.add(pathKey);
+      for (const partId of annotation.target.pathKeys) {
+        openPartIds.add(partId);
       }
     }
 
     const cache = cacheRef.current;
 
-    for (const pathKey of openPathKeys) {
-      if (cache.has(pathKey)) {
-        continue;
-      }
-
-      const instance = partGraph.byPathKey.get(pathKey)?.instance;
-
-      if (
-        !instance?.sourceDocumentId ||
-        !instance.sourceElementId ||
-        !instance.sourcePartId ||
-        instance.sourceDocumentId !== query.documentId
-      ) {
+    for (const partId of openPartIds) {
+      if (cache.has(partId)) {
         continue;
       }
 
       const partQuery = {
-        documentId: instance.sourceDocumentId,
+        documentId: query.documentId,
         workspaceId: query.workspaceId,
-        elementId: instance.sourceElementId,
-        partId: instance.sourcePartId,
+        elementId: query.elementId,
+        partId,
         server: query.server,
       };
 
       // Reserve the slot immediately so a re-run of this effect before the
       // GET resolves doesn't fire a second overlapping request for the
       // same part.
-      cache.set(pathKey, {
-        documentId: partQuery.documentId,
-        elementId: partQuery.elementId,
-        partId: partQuery.partId,
-        color: null,
-        opacity: null,
-      });
+      cache.set(partId, { color: null, opacity: null });
 
       void (async () => {
         try {
           const current = await fetchOnshapePartAppearance(partQuery);
           const { color, opacity } = extractAppearance(current.data);
 
-          cache.set(pathKey, { ...partQuery, color, opacity });
+          cache.set(partId, { color, opacity });
 
           await setOnshapePartAppearance(partQuery, MARK_COLOR);
         } catch (err) {
-          console.warn(`[FuzzyCAD] appearance marking failed for ${pathKey}:`, err);
+          console.warn(`[FuzzyCAD] appearance marking failed for ${partId}:`, err);
         }
       })();
     }
 
-    for (const [pathKey, cached] of Array.from(cache.entries())) {
-      if (openPathKeys.has(pathKey)) {
+    for (const [partId, cached] of Array.from(cache.entries())) {
+      if (openPartIds.has(partId)) {
         continue;
       }
 
-      cache.delete(pathKey);
+      cache.delete(partId);
 
       if (!cached.color) {
         // Never resolved an original (skipped, or the GET failed/hadn't
@@ -167,17 +139,17 @@ export function useFuzzyMarkAppearance(
 
       void setOnshapePartAppearance(
         {
-          documentId: cached.documentId,
+          documentId: query.documentId,
           workspaceId: query.workspaceId,
-          elementId: cached.elementId,
-          partId: cached.partId,
+          elementId: query.elementId,
+          partId,
           server: query.server,
         },
         cached.color,
         cached.opacity ?? undefined,
       ).catch((err) => {
-        console.warn(`[FuzzyCAD] appearance restore failed for ${pathKey}:`, err);
+        console.warn(`[FuzzyCAD] appearance restore failed for ${partId}:`, err);
       });
     }
-  }, [document, partGraph, query]);
+  }, [document, query]);
 }

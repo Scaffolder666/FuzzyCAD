@@ -22,11 +22,9 @@ import type {
   RolePreviewPlan,
   RotateRolePlan,
 } from "./components/FuzzyCADGeometryViewer";
-import { usePartGraph } from "./hooks/usePartGraph";
 import { getSameGeometryGroup } from "./components/viewer/objectSummary";
 import {
   fetchFuzzycadAssemblySummary,
-  fetchFuzzycadRelationshipGraph,
   fetchOnshapeAssembly,
   fetchOnshapeAssemblyZipManifest,
   fetchOnshapeElements,
@@ -150,8 +148,6 @@ export default function FuzzyCADHome() {
   const [assemblyResult, setAssemblyResult] = useState<ApiResult | null>(null);
   const [assemblySummaryResult, setAssemblySummaryResult] =
     useState<ApiResult | null>(null);
-  const [relationshipGraphResult, setRelationshipGraphResult] =
-    useState<ApiResult | null>(null);
 
   const [selectedPartStudioId, setSelectedPartStudioId] = useState<string>("");
 
@@ -178,12 +174,6 @@ export default function FuzzyCADHome() {
     setFocusRequest({ pathKey, token: Date.now() });
   }
   const [lassoPathKeys, setLassoPathKeys] = useState<string[]>([]);
-
-  const { partGraph, linkedGroup, selectedGraphPathKey } = usePartGraph({
-    relationshipGraphResult,
-    meshGraph,
-    selectedMeshNode,
-  });
 
   // Lazily loads real B-rep data (STEP export + OCCT) to upgrade the
   // Move/Scale/Rotate ghost previews from mesh-clone approximations to
@@ -487,17 +477,19 @@ export default function FuzzyCADHome() {
   } = useUncertaintyDocument(currentUncertaintySource);
 
   const appearanceMarkingQuery = useMemo(
-    () => (documentId && workspaceId ? { documentId, workspaceId, server } : null),
-    [documentId, workspaceId, server],
+    () =>
+      documentId && workspaceId && selectedPartStudioId
+        ? { documentId, workspaceId, elementId: selectedPartStudioId, server }
+        : null,
+    [documentId, workspaceId, selectedPartStudioId, server],
   );
 
   // Colors the real part orange in Onshape while it has an open mark, and
   // reverts it once resolved/deleted — see useFuzzyMarkAppearance.ts for
-  // the known scope limits (part-level not per-occurrence, same-document
-  // parts only, in-memory original-color cache).
+  // the known scope limits (part-level not per-occurrence, in-memory
+  // original-color cache).
   useFuzzyMarkAppearance(
     uncertaintyDocumentWithCurrentSource,
-    partGraph,
     appearanceMarkingQuery,
   );
 
@@ -820,18 +812,6 @@ export default function FuzzyCADHome() {
     setAssemblySummaryResult(data);
   }
 
-  async function buildRelationshipGraph(options: LoadOptions = {}) {
-    const data = await fetchFuzzycadRelationshipGraph({
-      documentId: documentId || "",
-      workspaceId: workspaceId || "",
-      assemblyElementId: selectedPartStudioId,
-      server,
-      force: options.force,
-    });
-
-    setRelationshipGraphResult(data);
-  }
-
   async function loadSelectedPartStudio() {
     if (!selectedPartStudioId) {
       return;
@@ -840,10 +820,6 @@ export default function FuzzyCADHome() {
     setBusy(true);
 
     try {
-      // No buildRelationshipGraph() call here anymore — that builds the
-      // Onshape mate graph, which has no meaning for a Part Studio (see
-      // Phase 5 of the Assembly -> Part Studio migration plan). Part
-      // identity for the loaded geometry is resolved separately (Phase 3).
       await loadPartStudioGeometry();
       await loadProjectStateFromOnshape();
     } finally {
@@ -2569,16 +2545,6 @@ if (result.ok && result.state) {
     setGeometryZipManifest(null);
   }
 
-  const devGraphStats = partGraph
-    ? {
-        matched: partGraph.residualStats.matched,
-        total: partGraph.residualStats.total,
-        scale: partGraph.scale,
-        clickedPathKey: selectedGraphPathKey,
-        linkedCount: linkedGroup ? linkedGroup.length : null,
-      }
-    : null;
-
   const connected = oauthStatus === "connected" || partStudioElements.length > 0;
 
   return (
@@ -3288,10 +3254,8 @@ if (result.ok && result.state) {
         <DevPanel
           connectHref={connectHref}
           selectedPartStudioId={selectedPartStudioId}
-          graphStats={devGraphStats}
           meshGraph={meshGraph}
           debugResults={[
-            { title: "Relationship Graph", value: relationshipGraphResult },
             { title: "Assembly Summary", value: assemblySummaryResult },
             { title: "Raw Assembly", value: assemblyResult },
             { title: "Elements", value: elementsResult },
@@ -3338,7 +3302,6 @@ if (result.ok && result.state) {
           onLoadElements={loadElements}
           onLoadRawAssembly={loadAssemblyDefinition}
           onLoadSummary={loadAssemblySummary}
-          onBuildGraph={buildRelationshipGraph}
           onLoadGeometry={loadPartStudioGeometry}
           onInspectZip={inspectAssemblyGeometryZip}
         />
