@@ -64,6 +64,30 @@ type PartWithFeatures = PartEntry & {
 
 type ParamState = "unmarked" | "needsInput" | "answered";
 
+// How many featurescript evaluations to have in flight at once when
+// resolving every feature's created part(s) -- see the loadPartMapping
+// effect below for why this exists at all.
+const FEATURE_MAPPING_CONCURRENCY = 5;
+
+async function mapWithConcurrencyLimit<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let nextIndex = 0;
+
+  async function worker() {
+    while (nextIndex < items.length) {
+      const index = nextIndex++;
+      results[index] = await fn(items[index]);
+    }
+  }
+
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, () => worker()));
+  return results;
+}
+
 function paramState(
   annotation: FeatureParameterQuestionUncertaintyAnnotation | undefined,
 ): ParamState {
@@ -201,6 +225,18 @@ function ParameterMarkPanelInner() {
    * unique feature. Runs once parameters load rather than inside
    * loadEverything so a slow/failed lookup here doesn't block the
    * parameter list itself from being fetched.
+   *
+   * The per-feature fetches run FEATURE_MAPPING_CONCURRENCY at a time,
+   * not all at once. Confirmed live: a real Part Studio with dozens of
+   * features (Sketch/Extrude/Chamfer repeated many times) firing that
+   * many featurescript evaluations simultaneously came back with every
+   * single one empty -- Onshape's featurescript endpoint doesn't reject
+   * with an error our fetch would throw on (a non-2xx HTTP status still
+   * resolves normally, it just carries ok:false), so this failed
+   * completely silently: parts showed up fine (that fetch is separate
+   * and unaffected), but every part's feature list was empty, as if
+   * qCreatedBy had nothing to say. Batching keeps concurrent featurescript
+   * calls low enough that they actually succeed.
    */
   useEffect(() => {
     if (!context || !parameters) {
@@ -219,9 +255,11 @@ function ParameterMarkPanelInner() {
 
       const uniqueFeatureIds = Array.from(new Set(parameters!.map((entry) => entry.featureId)));
 
-      const [partsRes, ...createdByResults] = await Promise.all([
-        fetchOnshapePartStudioParts(query),
-        ...uniqueFeatureIds.map((featureId) => fetchFeatureCreatedPartIds(query, featureId)),
+      const [partsRes, createdByResults] = await Promise.all([
+        fetchOnshapePartStudioParts(query).catch(() => null),
+        mapWithConcurrencyLimit(uniqueFeatureIds, FEATURE_MAPPING_CONCURRENCY, (featureId) =>
+          fetchFeatureCreatedPartIds(query, featureId).catch(() => ({ partIds: [] as string[] })),
+        ),
       ]);
 
       if (cancelled) return;
