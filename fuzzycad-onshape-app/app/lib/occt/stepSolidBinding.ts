@@ -31,7 +31,7 @@ export type PartIdBindingResult = {
  * brepGhost.ts (a viewer component module) from this lib-level file.
  */
 const STEP_MM_TO_THREE_M = 1 / 1000;
-const THREE_M_TO_STEP_MM = 1 / STEP_MM_TO_THREE_M;
+export const THREE_M_TO_STEP_MM = 1 / STEP_MM_TO_THREE_M;
 const STEP_TO_THREE_ROTATION = new THREE.Quaternion().setFromAxisAngle(
   new THREE.Vector3(1, 0, 0),
   -Math.PI / 2,

@@ -4,8 +4,10 @@ import { useState } from "react";
 import type {
   AlternativeUncertaintyAnnotation,
   BendUncertaintyAnnotation,
+  BooleanUncertaintyAnnotation,
   DistanceMoveMode,
   DistanceUncertaintyAnnotation,
+  FilletUncertaintyAnnotation,
   FuzzyCADUncertaintyAnnotation,
   FuzzyCADUncertaintyDocument,
   MoveQuestionUncertaintyAnnotation,
@@ -106,16 +108,18 @@ function matchesFilter(
   filter: FilterKey,
 ) {
   if (filter === "proposal") {
-    // Move, Scale, Rotate, and Bend are all kinds of proposed change (a
-    // position, a size, an orientation, or a curvature instead of one
-    // dimension) — they share the "Proposed" filter rather than getting
-    // their own top-level tab.
+    // Move, Scale, Rotate, Bend, Fillet, and Boolean are all kinds of
+    // proposed change (a position, a size, an orientation, a curvature, an
+    // edge break, or a combine/cut instead of one dimension) — they share
+    // the "Proposed" filter rather than getting their own top-level tab.
     return (
       annotation.type === "proposal" ||
       annotation.type === "move" ||
       annotation.type === "scale" ||
       annotation.type === "rotate" ||
-      annotation.type === "bend"
+      annotation.type === "bend" ||
+      annotation.type === "fillet" ||
+      annotation.type === "boolean"
     );
   }
 
@@ -968,6 +972,163 @@ function BendCard({
   );
 }
 
+function FilletCard({
+  annotation,
+  selected,
+  hovered,
+  onSelect,
+  onDelete,
+  onCommentChange,
+  onResolve,
+}: {
+  annotation: FilletUncertaintyAnnotation;
+  selected: boolean;
+  hovered: boolean;
+  onSelect: () => void;
+  onDelete: () => void;
+  onCommentChange: (comment: string) => void;
+  onResolve: () => void;
+}) {
+  return (
+    <article
+      className={`${styles.card} ${selected ? styles.cardSelected : ""} ${
+        hovered ? styles.cardHovered : ""
+      }`}
+      onClick={onSelect}
+    >
+      <div className={styles.cardHeader}>
+        <span className={`${styles.kindPill} ${styles.kindPillFillet}`}>
+          Proposed {annotation.kind}
+        </span>
+      </div>
+
+      <div className={styles.cardTitle}>{annotation.target.referencePathKey}</div>
+
+      <div className={styles.valueLine}>
+        <span className={styles.valueOld}>{annotation.previousValueLabel}</span>
+        <span className={styles.valueArrow}>&rarr;</span>
+        <span className={styles.valueNew}>{annotation.proposedValueLabel}</span>
+      </div>
+
+      {annotation.author ? (
+        <div className={styles.metaRow}>proposed by {annotation.author}</div>
+      ) : null}
+
+      <textarea
+        className={styles.comment}
+        value={annotation.comment ?? ""}
+        placeholder="Add a comment..."
+        onClick={(event) => event.stopPropagation()}
+        onChange={(event) => onCommentChange(event.target.value)}
+      />
+
+      <div className={styles.actions}>
+        <button
+          type="button"
+          className={styles.resolveButton}
+          onClick={(event) => {
+            event.stopPropagation();
+            onResolve();
+          }}
+        >
+          Accept
+        </button>
+        <button
+          type="button"
+          className={styles.deleteButton}
+          onClick={(event) => {
+            event.stopPropagation();
+            onDelete();
+          }}
+        >
+          Reject
+        </button>
+      </div>
+    </article>
+  );
+}
+
+function BooleanCard({
+  annotation,
+  selected,
+  hovered,
+  onSelect,
+  onDelete,
+  onCommentChange,
+  onResolve,
+}: {
+  annotation: BooleanUncertaintyAnnotation;
+  selected: boolean;
+  hovered: boolean;
+  onSelect: () => void;
+  onDelete: () => void;
+  onCommentChange: (comment: string) => void;
+  onResolve: () => void;
+}) {
+  return (
+    <article
+      className={`${styles.card} ${selected ? styles.cardSelected : ""} ${
+        hovered ? styles.cardHovered : ""
+      }`}
+      onClick={onSelect}
+    >
+      <div className={styles.cardHeader}>
+        <span className={`${styles.kindPill} ${styles.kindPillBoolean}`}>
+          Proposed {annotation.mode}
+        </span>
+      </div>
+
+      <div className={styles.cardTitle}>
+        {annotation.target.referencePathKey}
+        <span className={styles.proposalModeTag}>
+          with {annotation.otherPathKey}
+        </span>
+      </div>
+
+      <div className={styles.valueLine}>
+        <span className={styles.valueOld}>{annotation.previousValueLabel}</span>
+        <span className={styles.valueArrow}>&rarr;</span>
+        <span className={styles.valueNew}>{annotation.proposedValueLabel}</span>
+      </div>
+
+      {annotation.author ? (
+        <div className={styles.metaRow}>proposed by {annotation.author}</div>
+      ) : null}
+
+      <textarea
+        className={styles.comment}
+        value={annotation.comment ?? ""}
+        placeholder="Add a comment..."
+        onClick={(event) => event.stopPropagation()}
+        onChange={(event) => onCommentChange(event.target.value)}
+      />
+
+      <div className={styles.actions}>
+        <button
+          type="button"
+          className={styles.resolveButton}
+          onClick={(event) => {
+            event.stopPropagation();
+            onResolve();
+          }}
+        >
+          Accept
+        </button>
+        <button
+          type="button"
+          className={styles.deleteButton}
+          onClick={(event) => {
+            event.stopPropagation();
+            onDelete();
+          }}
+        >
+          Reject
+        </button>
+      </div>
+    </article>
+  );
+}
+
 function MoveQuestionCard({
   annotation,
   selected,
@@ -1451,6 +1612,40 @@ export default function UncertaintyMarksPanel({
               );
             }
 
+            if (annotation.type === "fillet") {
+              return (
+                <FilletCard
+                  key={annotation.id}
+                  annotation={annotation}
+                  selected={selected}
+                  hovered={hovered}
+                  onSelect={() => onSelectAnnotation(annotation.id)}
+                  onDelete={() => onDeleteAnnotation(annotation.id)}
+                  onCommentChange={(comment) =>
+                    onCommentChange(annotation.id, comment)
+                  }
+                  onResolve={() => onResolveAnnotation(annotation.id)}
+                />
+              );
+            }
+
+            if (annotation.type === "boolean") {
+              return (
+                <BooleanCard
+                  key={annotation.id}
+                  annotation={annotation}
+                  selected={selected}
+                  hovered={hovered}
+                  onSelect={() => onSelectAnnotation(annotation.id)}
+                  onDelete={() => onDeleteAnnotation(annotation.id)}
+                  onCommentChange={(comment) =>
+                    onCommentChange(annotation.id, comment)
+                  }
+                  onResolve={() => onResolveAnnotation(annotation.id)}
+                />
+              );
+            }
+
             if (annotation.type === "moveQuestion") {
               return (
                 <MoveQuestionCard
@@ -1523,7 +1718,11 @@ export default function UncertaintyMarksPanel({
                                     ? `Bend: ${annotation.target.referencePathKey}`
                                     : annotation.type === "moveQuestion"
                                       ? `Move range: ${annotation.target.referencePathKey}`
-                                      : "Alternative"}
+                                      : annotation.type === "fillet"
+                                        ? `${annotation.kind === "chamfer" ? "Chamfer" : "Fillet"}: ${annotation.target.referencePathKey}`
+                                        : annotation.type === "boolean"
+                                          ? `${annotation.mode}: ${annotation.target.referencePathKey}`
+                                          : "Alternative"}
                     </span>
                     <button
                       type="button"

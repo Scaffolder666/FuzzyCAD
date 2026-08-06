@@ -40,7 +40,7 @@ import {
   saveFuzzycadProject,
 } from "./lib/onshapeClient";
 import { getOcctClient } from "./lib/occt/occtClient";
-import { bindSolidsToPartIdsByBoundingBox, threeWorldDirectionToStep, threeWorldPointToStep, threeWorldVectorToStep } from "./lib/occt/stepSolidBinding";
+import { bindSolidsToPartIdsByBoundingBox, threeWorldDirectionToStep, threeWorldPointToStep, threeWorldVectorToStep, THREE_M_TO_STEP_MM } from "./lib/occt/stepSolidBinding";
 import { getRotateAxisUnitVector } from "./components/viewer/rotatePreview";
 import type { OperationTool } from "./lib/operations/types";
 import OperationToolbar from "./components/OperationToolbar";
@@ -67,7 +67,9 @@ import {
   makeSizeAnnotationId,
   BEND_CONTROL_POINT_COUNT,
   type BendAxisDirection,
+  type BooleanOpMode,
   type DistanceMoveMode,
+  type FilletKind,
   type FuzzyCADUncertaintyAnnotation,
   type MoveQuestionAxisDirection,
   type ProposalAxisIndex,
@@ -337,6 +339,27 @@ export default function FuzzyCADHome() {
     string | null
   >(null);
 
+  // "Fillet/Chamfer" tool: one click on a part captures both its pathKey
+  // and the clicked world point in the same gesture (unlike Distance/
+  // Rotate's two-click flows) — then the FilletHandle overlay appears for
+  // adjusting kind/amount before saving. No live geometry preview (see
+  // FilletHandle.tsx); the real OCCT op only runs at accept/push time.
+  const [filletPickPathKey, setFilletPickPathKey] = useState<string | null>(
+    null,
+  );
+  const [filletPickEdgePointWorld, setFilletPickEdgePointWorld] = useState<
+    [number, number, number] | null
+  >(null);
+  const [filletKind, setFilletKind] = useState<FilletKind>("fillet");
+  const [filletAmountMm, setFilletAmountMm] = useState(2);
+
+  // "Boolean" tool: same two-click flow as Distance (mode is fixed by
+  // which toolbar variant — Union/Subtract/Intersect — is active, so
+  // there's nothing else to configure once both parts are picked).
+  const [booleanFirstPathKey, setBooleanFirstPathKey] = useState<
+    string | null
+  >(null);
+
   const [heightPreviewOpen, setHeightPreviewOpen] = useState(false);
   const [pendingHeightAxis, setPendingHeightAxis] =
     useState<OperationAxis>("y");
@@ -418,6 +441,8 @@ export default function FuzzyCADHome() {
     rotatePreviews,
     bendPreviews,
     moveQuestionPreviews,
+    filletPreviews,
+    booleanPreviews,
     resetUncertaintyDocument,
     upsertSizeMark,
     removeSizeMarks,
@@ -439,6 +464,8 @@ export default function FuzzyCADHome() {
     upsertBendMark,
     upsertMoveQuestionMark,
     answerMoveQuestionMark,
+    addFilletMark,
+    addBooleanMark,
   } = useUncertaintyDocument(currentUncertaintySource);
 
   const appearanceMarkingQuery = useMemo(
@@ -1385,6 +1412,140 @@ export default function FuzzyCADHome() {
     setActiveTool("select");
   }
 
+  function startFillet() {
+    setActiveTool("fillet");
+    resetSizeOperationState();
+    setLassoPathKeys([]);
+
+    // The real fillet/chamfer op only runs at accept/push time (see
+    // pushAcceptedChangesToOnshape) but needs a resolved OCCT handle by
+    // then — kick off the same lazy B-rep load Move/Rotate/Scale use.
+    if (documentId && workspaceId && selectedPartStudioId) {
+      brepGhostSource.ensureLoaded({
+        documentId,
+        workspaceId,
+        assemblyElementId: selectedPartStudioId,
+        server,
+      });
+    }
+  }
+
+  /** Click routing while the Fillet tool is active: a single click on a
+   * part captures both its pathKey and the clicked world point (near the
+   * edge to round/bevel) in one gesture, then the FilletHandle overlay
+   * appears for adjusting kind/amount before saving. */
+  function handleFilletPick(pathKey: string | null) {
+    if (!pathKey || filletPickPathKey) {
+      return;
+    }
+
+    const worldPoint = lastWorldPointRef.current;
+
+    if (!worldPoint) {
+      return;
+    }
+
+    setHighlightedPathKey(pathKey);
+    setFilletPickPathKey(pathKey);
+    setFilletPickEdgePointWorld(worldPoint);
+    setFilletKind("fillet");
+    setFilletAmountMm(2);
+  }
+
+  function applyFillet() {
+    if (!filletPickPathKey || !filletPickEdgePointWorld) {
+      return;
+    }
+
+    addFilletMark({
+      pathKey: filletPickPathKey,
+      kind: filletKind,
+      edgePointWorld: filletPickEdgePointWorld,
+      radiusMeters: filletAmountMm / 1000,
+      previousValueLabel: "sharp edge",
+      proposedValueLabel: `${filletKind} ${filletAmountMm.toFixed(1)}mm`,
+    });
+
+    setFilletPickPathKey(null);
+    setFilletPickEdgePointWorld(null);
+  }
+
+  function cancelFillet() {
+    setFilletPickPathKey(null);
+    setFilletPickEdgePointWorld(null);
+    setActiveTool("select");
+  }
+
+  function startBoolean() {
+    resetSizeOperationState();
+    setLassoPathKeys([]);
+    setBooleanFirstPathKey(null);
+
+    if (documentId && workspaceId && selectedPartStudioId) {
+      brepGhostSource.ensureLoaded({
+        documentId,
+        workspaceId,
+        assemblyElementId: selectedPartStudioId,
+        server,
+      });
+    }
+  }
+
+  const BOOLEAN_TOOL_MODES: Partial<Record<OperationTool, BooleanOpMode>> = {
+    booleanUnion: "union",
+    booleanSubtract: "subtract",
+    booleanIntersect: "intersect",
+  };
+
+  const BOOLEAN_TOOL_LABELS: Partial<Record<OperationTool, string>> = {
+    booleanUnion: "merge",
+    booleanSubtract: "cut away with",
+    booleanIntersect: "intersect with",
+  };
+
+  /** Click routing while a Boolean tool variant is active: first click
+   * picks part A, second click (a different part) picks B and saves
+   * immediately — same shape as Distance's flow. Which op (union/subtract
+   * /intersect) is fixed by which toolbar variant is active. */
+  function handleBooleanPick(pathKey: string | null) {
+    if (!pathKey) {
+      return;
+    }
+
+    const mode = BOOLEAN_TOOL_MODES[activeTool];
+
+    if (!mode) {
+      return;
+    }
+
+    setHighlightedPathKey(pathKey);
+
+    if (!booleanFirstPathKey) {
+      setBooleanFirstPathKey(pathKey);
+      return;
+    }
+
+    if (pathKey === booleanFirstPathKey) {
+      return;
+    }
+
+    const pathKeyA = booleanFirstPathKey;
+    setBooleanFirstPathKey(null);
+
+    addBooleanMark({
+      pathKey: pathKeyA,
+      mode,
+      otherPathKey: pathKey,
+      previousValueLabel: "separate parts",
+      proposedValueLabel: `${mode} with ${pathKey}`,
+    });
+  }
+
+  function cancelBoolean() {
+    setBooleanFirstPathKey(null);
+    setActiveTool("select");
+  }
+
   function startRotate() {
     setActiveTool("rotate");
     resetSizeOperationState();
@@ -1808,8 +1969,16 @@ async function pushAcceptedChangesToOnshape() {
   const resolvedMoves = movePreviews.filter((preview) => preview.status === "resolved");
   const resolvedScales = scalePreviews.filter((preview) => preview.status === "resolved");
   const resolvedRotates = rotatePreviews.filter((preview) => preview.status === "resolved");
+  const resolvedFillets = filletPreviews.filter((preview) => preview.status === "resolved");
+  const resolvedBooleans = booleanPreviews.filter((preview) => preview.status === "resolved");
 
-  if (resolvedMoves.length === 0 && resolvedScales.length === 0 && resolvedRotates.length === 0) {
+  if (
+    resolvedMoves.length === 0 &&
+    resolvedScales.length === 0 &&
+    resolvedRotates.length === 0 &&
+    resolvedFillets.length === 0 &&
+    resolvedBooleans.length === 0
+  ) {
     setPushBlockedSummary(null);
     return;
   }
@@ -1850,7 +2019,12 @@ async function pushAcceptedChangesToOnshape() {
       }
     }
 
-    if (resolvedScales.length === 0 && resolvedRotates.length === 0) {
+    if (
+      resolvedScales.length === 0 &&
+      resolvedRotates.length === 0 &&
+      resolvedFillets.length === 0 &&
+      resolvedBooleans.length === 0
+    ) {
       setPushBlockedSummary(blocked.length > 0 ? blocked : null);
       return;
     }
@@ -1964,6 +2138,45 @@ async function pushAcceptedChangesToOnshape() {
           blocked.push(`${preview.pathKey}: scaled solid failed OCCT's validity check`);
         }
       });
+    }
+
+    for (const preview of resolvedFillets) {
+      const edgePointStep = threeWorldPointToStep(new THREE.Vector3(...preview.edgePointWorld));
+      const amountStep = preview.radiusMeters * THREE_M_TO_STEP_MM;
+
+      await applyToTargets([preview.pathKey], async (handle) => {
+        const result = await client.filletEdge(handle, edgePointStep, preview.kind, amountStep, true);
+        if (!result.resolved) {
+          blocked.push(`${preview.pathKey}: couldn't find an edge near the marked point`);
+        } else if (!result.valid) {
+          blocked.push(`${preview.pathKey}: ${preview.kind} produced an invalid solid`);
+        }
+      });
+    }
+
+    for (const preview of resolvedBooleans) {
+      const handleA = handleByPartId.get(preview.pathKey);
+      const handleB = handleByPartId.get(preview.otherPathKey);
+
+      if (handleA === undefined) {
+        blocked.push(`${preview.pathKey}: no matching STEP solid found`);
+        continue;
+      }
+      if (handleB === undefined) {
+        blocked.push(`${preview.otherPathKey}: no matching STEP solid found`);
+        continue;
+      }
+
+      const result = await client.booleanSolids(handleA, handleB, preview.mode, true);
+      if (!result.valid) {
+        blocked.push(`${preview.pathKey}: ${preview.mode} with ${preview.otherPathKey} produced an invalid solid`);
+      }
+      pushedPartIds.add(preview.pathKey);
+      pushedPartIds.add(preview.otherPathKey);
+      pushedHandles.add(handleA);
+      // handleB's geometry was folded into handleA and dropped from the
+      // worker's shape store (see occtWorker.ts's booleanSolids handler) —
+      // don't also try to export it standalone below.
     }
 
     // unmatchedPartIds only matters for partIds an accepted mark actually
@@ -2191,6 +2404,20 @@ if (result.ok && result.state) {
       return;
     }
 
+    if (activeTool === "fillet" && !filletPickPathKey) {
+      handleFilletPick(pathKey);
+      return;
+    }
+
+    if (
+      activeTool === "booleanUnion" ||
+      activeTool === "booleanSubtract" ||
+      activeTool === "booleanIntersect"
+    ) {
+      handleBooleanPick(pathKey);
+      return;
+    }
+
     setHighlightedPathKey(pathKey);
     leaveUncertaintyEditingState();
   }
@@ -2289,6 +2516,19 @@ if (result.ok && result.state) {
           onAnswerDistance={(annotationId, distanceMm) =>
             answerDistanceMark(annotationId, distanceMm / 1000)
           }
+          filletPick={
+            filletPickPathKey && filletPickEdgePointWorld
+              ? {
+                  edgePointWorld: filletPickEdgePointWorld,
+                  kind: filletKind,
+                  amountMm: filletAmountMm,
+                }
+              : null
+          }
+          onFilletKindChange={setFilletKind}
+          onFilletAmountChange={setFilletAmountMm}
+          onFilletConfirm={applyFillet}
+          onFilletCancel={cancelFillet}
           hoveredPathKey={hoveredPathKey}
           onHoveredPathKeyChange={setHoveredPathKey}
           focusRequest={focusRequest}
@@ -2388,6 +2628,21 @@ if (result.ok && result.state) {
 
             if (tool === "moveQuestion") {
               startMoveQuestion();
+              return;
+            }
+
+            if (tool === "fillet") {
+              startFillet();
+              return;
+            }
+
+            if (
+              tool === "booleanUnion" ||
+              tool === "booleanSubtract" ||
+              tool === "booleanIntersect"
+            ) {
+              startBoolean();
+              setActiveTool(tool);
               return;
             }
 
@@ -2510,6 +2765,33 @@ if (result.ok && result.state) {
             >
               Done
             </button>
+          </div>
+        ) : null}
+
+        {activeTool === "booleanUnion" ||
+        activeTool === "booleanSubtract" ||
+        activeTool === "booleanIntersect" ? (
+          <div className={styles.manipulationReadout}>
+            <span className={styles.manipulationValue}>
+              {booleanFirstPathKey
+                ? "Click the second part..."
+                : `Click a part to ${BOOLEAN_TOOL_LABELS[activeTool]}`}
+            </span>
+            <button
+              type="button"
+              className={styles.manipulationResetButton}
+              onClick={cancelBoolean}
+            >
+              Done
+            </button>
+          </div>
+        ) : null}
+
+        {activeTool === "fillet" && !filletPickPathKey ? (
+          <div className={styles.manipulationReadout}>
+            <span className={styles.manipulationValue}>
+              Click near an edge to mark it
+            </span>
           </div>
         ) : null}
 

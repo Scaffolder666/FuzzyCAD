@@ -41,6 +41,23 @@ type OcctWorkerRequest =
       angleRad: number;
       commit: boolean;
     }
+  | {
+      id: number;
+      type: "filletEdge";
+      handle: number;
+      edgePointWorld: [number, number, number];
+      kind: "fillet" | "chamfer";
+      amount: number;
+      commit: boolean;
+    }
+  | {
+      id: number;
+      type: "booleanSolids";
+      handleA: number;
+      handleB: number;
+      mode: "union" | "subtract" | "intersect";
+      commit: boolean;
+    }
   | { id: number; type: "exportAssemblyStep" }
   | { id: number; type: "exportSolidsStep"; handles: number[] };
 
@@ -65,6 +82,15 @@ type OcctWorkerResponse =
   | { id: number; type: "translateSolidResult"; handle: number; mesh: TessellatedShape; valid: boolean }
   | { id: number; type: "scaleSolidResult"; handle: number; mesh: TessellatedShape; valid: boolean }
   | { id: number; type: "rotateSolidResult"; handle: number; mesh: TessellatedShape; valid: boolean }
+  | {
+      id: number;
+      type: "filletEdgeResult";
+      handle: number;
+      mesh: TessellatedShape;
+      valid: boolean;
+      resolved: boolean;
+    }
+  | { id: number; type: "booleanSolidsResult"; handle: number; mesh: TessellatedShape; valid: boolean }
   | { id: number; type: "testStepBytesResult"; buffer: ArrayBuffer }
   | { id: number; type: "exportAssemblyStepResult"; buffer: ArrayBuffer }
   | { id: number; type: "exportSolidsStepResult"; buffer: ArrayBuffer }
@@ -106,7 +132,13 @@ type OpenCascadeInstance = {
     Current: () => TopoDS_Shape;
     delete: () => void;
   };
-  TopAbs_ShapeEnum: { TopAbs_FACE: number; TopAbs_SHAPE: number; TopAbs_SOLID: number };
+  TopAbs_ShapeEnum: {
+    TopAbs_FACE: number;
+    TopAbs_SHAPE: number;
+    TopAbs_SOLID: number;
+    TopAbs_EDGE: number;
+    TopAbs_VERTEX: number;
+  };
   TopAbs_Orientation: { TopAbs_FORWARD: number };
   BRepMesh_IncrementalMesh_2: new (
     shape: TopoDS_Shape,
@@ -129,6 +161,7 @@ type OpenCascadeInstance = {
         Triangle: (index: number) => { Value: (n: number) => number };
       };
     } | null;
+    Pnt: (vertex: TopoDS_Shape) => { X: () => number; Y: () => number; Z: () => number };
   };
   STEPControl_Reader_1: new () => {
     ReadFile: (path: string) => number;
@@ -143,7 +176,11 @@ type OpenCascadeInstance = {
   };
   IFSelect_ReturnStatus: { IFSelect_RetDone: number };
   STEPControl_StepModelType: { STEPControl_AsIs: number };
-  TopoDS: { Face_1: (shape: TopoDS_Shape) => TopoDS_Shape };
+  TopoDS: {
+    Face_1: (shape: TopoDS_Shape) => TopoDS_Shape;
+    Vertex_1: (shape: TopoDS_Shape) => TopoDS_Shape;
+    Edge_1: (shape: TopoDS_Shape) => TopoDS_Shape;
+  };
   gp_Vec_4: new (dx: number, dy: number, dz: number) => unknown;
   gp_Trsf_1: new () => {
     SetTranslation_1: (v: unknown) => void;
@@ -165,6 +202,38 @@ type OpenCascadeInstance = {
     IsValid_2: () => boolean;
     delete: () => void;
   };
+  Message_ProgressRange_1: new () => { delete: () => void };
+  ChFi3d_FilletShape: { ChFi3d_Rational: number };
+  BRepFilletAPI_MakeFillet: new (
+    shape: TopoDS_Shape,
+    filletShape: number,
+  ) => {
+    Add_2: (radius: number, edge: TopoDS_Shape) => void;
+    Build: (range: unknown) => void;
+    Shape: () => TopoDS_Shape;
+    delete: () => void;
+  };
+  BRepFilletAPI_MakeChamfer: new (shape: TopoDS_Shape) => {
+    Add_2: (distance: number, edge: TopoDS_Shape) => void;
+    Build: (range: unknown) => void;
+    Shape: () => TopoDS_Shape;
+    delete: () => void;
+  };
+  BRepAlgoAPI_Fuse_3: new (
+    s1: TopoDS_Shape,
+    s2: TopoDS_Shape,
+    range: unknown,
+  ) => { Shape: () => TopoDS_Shape; delete: () => void };
+  BRepAlgoAPI_Cut_3: new (
+    s1: TopoDS_Shape,
+    s2: TopoDS_Shape,
+    range: unknown,
+  ) => { Shape: () => TopoDS_Shape; delete: () => void };
+  BRepAlgoAPI_Common_3: new (
+    s1: TopoDS_Shape,
+    s2: TopoDS_Shape,
+    range: unknown,
+  ) => { Shape: () => TopoDS_Shape; delete: () => void };
 };
 
 let occtPromise: Promise<OpenCascadeInstance> | null = null;
@@ -376,6 +445,138 @@ function rotateShape(
   return result;
 }
 
+/**
+ * Finds the edge of `shape` whose two endpoints average closest to
+ * `pointWorld` — an approximation (true nearest-point-on-curve would need
+ * BRepExtrema_DistShapeShape, whose simplest constructor overloads all
+ * require extra Extrema_ExtFlag/Extrema_ExtAlgo enum arguments not worth
+ * the added surface area here) that's good enough given the input point
+ * already comes from a raycast against the displayed mesh right next to
+ * the edge the user actually clicked.
+ */
+function resolveNearestEdge(
+  oc: OpenCascadeInstance,
+  shape: TopoDS_Shape,
+  pointWorld: [number, number, number],
+): TopoDS_Shape | null {
+  const [px, py, pz] = pointWorld;
+  let best: TopoDS_Shape | null = null;
+  let bestDistSq = Infinity;
+
+  const edgeExplorer = new oc.TopExp_Explorer_2(
+    shape,
+    oc.TopAbs_ShapeEnum.TopAbs_EDGE,
+    oc.TopAbs_ShapeEnum.TopAbs_SHAPE,
+  );
+
+  while (edgeExplorer.More()) {
+    const edge = oc.TopoDS.Edge_1(edgeExplorer.Current());
+
+    let sumX = 0;
+    let sumY = 0;
+    let sumZ = 0;
+    let vertexCount = 0;
+
+    const vertexExplorer = new oc.TopExp_Explorer_2(
+      edge,
+      oc.TopAbs_ShapeEnum.TopAbs_VERTEX,
+      oc.TopAbs_ShapeEnum.TopAbs_SHAPE,
+    );
+    while (vertexExplorer.More()) {
+      const vertex = oc.TopoDS.Vertex_1(vertexExplorer.Current());
+      const pnt = oc.BRep_Tool.Pnt(vertex);
+      sumX += pnt.X();
+      sumY += pnt.Y();
+      sumZ += pnt.Z();
+      vertexCount += 1;
+      vertexExplorer.Next();
+    }
+    vertexExplorer.delete();
+
+    if (vertexCount > 0) {
+      const midX = sumX / vertexCount;
+      const midY = sumY / vertexCount;
+      const midZ = sumZ / vertexCount;
+      const distSq = (midX - px) ** 2 + (midY - py) ** 2 + (midZ - pz) ** 2;
+
+      if (distSq < bestDistSq) {
+        bestDistSq = distSq;
+        best = edge;
+      }
+    }
+
+    edgeExplorer.Next();
+  }
+
+  edgeExplorer.delete();
+  return best;
+}
+
+/**
+ * Rounds (fillet) or bevels (chamfer) one edge — the B-rep equivalent of
+ * the rigid gp_Trsf edits above, but a real topology-changing operation
+ * (BRepFilletAPI_MakeFillet/MakeChamfer) rather than a transform.
+ */
+function filletOrChamferShape(
+  oc: OpenCascadeInstance,
+  shape: TopoDS_Shape,
+  edge: TopoDS_Shape,
+  kind: "fillet" | "chamfer",
+  amount: number,
+): TopoDS_Shape {
+  const progress = new oc.Message_ProgressRange_1();
+
+  if (kind === "chamfer") {
+    const mkChamfer = new oc.BRepFilletAPI_MakeChamfer(shape);
+    mkChamfer.Add_2(amount, edge);
+    mkChamfer.Build(progress);
+    const result = mkChamfer.Shape();
+    mkChamfer.delete();
+    progress.delete();
+    return result;
+  }
+
+  const mkFillet = new oc.BRepFilletAPI_MakeFillet(shape, oc.ChFi3d_FilletShape.ChFi3d_Rational);
+  mkFillet.Add_2(amount, edge);
+  mkFillet.Build(progress);
+  const result = mkFillet.Shape();
+  mkFillet.delete();
+  progress.delete();
+  return result;
+}
+
+/** Combines two solids — a real BRepAlgoAPI boolean, not a transform. */
+function booleanShapes(
+  oc: OpenCascadeInstance,
+  shapeA: TopoDS_Shape,
+  shapeB: TopoDS_Shape,
+  mode: "union" | "subtract" | "intersect",
+): TopoDS_Shape {
+  const progress = new oc.Message_ProgressRange_1();
+
+  if (mode === "subtract") {
+    const op = new oc.BRepAlgoAPI_Cut_3(shapeA, shapeB, progress);
+    const result = op.Shape();
+    op.delete();
+    progress.delete();
+    return result;
+  }
+
+  if (mode === "intersect") {
+    const op = new oc.BRepAlgoAPI_Common_3(shapeA, shapeB, progress);
+    const result = op.Shape();
+    op.delete();
+    progress.delete();
+    return result;
+  }
+
+  const op = new oc.BRepAlgoAPI_Fuse_3(shapeA, shapeB, progress);
+  const result = op.Shape();
+  op.delete();
+  progress.delete();
+  return result;
+}
+
 /** Runs OCCT's own topology/geometry validity checker — confirms an edit didn't produce a broken solid. */
 function checkShapeValid(oc: OpenCascadeInstance, shape: TopoDS_Shape): boolean {
   const analyzer = new oc.BRepCheck_Analyzer(shape, true);
@@ -579,6 +780,88 @@ self.onmessage = async (event: MessageEvent<OcctWorkerRequest>) => {
 
       const mesh = tessellateShape(oc, transformed);
       const response: OcctWorkerResponse = { id, type: "rotateSolidResult", handle, mesh, valid };
+      self.postMessage(response, [mesh.positions.buffer, mesh.indices.buffer]);
+      return;
+    }
+
+    if (type === "filletEdge") {
+      const oc = await loadOcct();
+      const { handle, edgePointWorld, kind, amount, commit } = event.data;
+      const shape = shapeStore.get(handle);
+
+      if (!shape) {
+        throw new Error(`filletEdge: unknown handle ${handle}`);
+      }
+
+      const edge = resolveNearestEdge(oc, shape, edgePointWorld);
+
+      if (!edge) {
+        const mesh = tessellateShape(oc, shape);
+        const response: OcctWorkerResponse = {
+          id,
+          type: "filletEdgeResult",
+          handle,
+          mesh,
+          valid: true,
+          resolved: false,
+        };
+        self.postMessage(response, [mesh.positions.buffer, mesh.indices.buffer]);
+        return;
+      }
+
+      const transformed = filletOrChamferShape(oc, shape, edge, kind, amount);
+      const valid = checkShapeValid(oc, transformed);
+
+      if (commit) {
+        shapeStore.set(handle, transformed);
+      }
+
+      const mesh = tessellateShape(oc, transformed);
+      const response: OcctWorkerResponse = {
+        id,
+        type: "filletEdgeResult",
+        handle,
+        mesh,
+        valid,
+        resolved: true,
+      };
+      self.postMessage(response, [mesh.positions.buffer, mesh.indices.buffer]);
+      return;
+    }
+
+    if (type === "booleanSolids") {
+      const oc = await loadOcct();
+      const { handleA, handleB, mode, commit } = event.data;
+      const shapeA = shapeStore.get(handleA);
+      const shapeB = shapeStore.get(handleB);
+
+      if (!shapeA) {
+        throw new Error(`booleanSolids: unknown handle ${handleA}`);
+      }
+      if (!shapeB) {
+        throw new Error(`booleanSolids: unknown handle ${handleB}`);
+      }
+
+      const transformed = booleanShapes(oc, shapeA, shapeB, mode);
+      const valid = checkShapeValid(oc, transformed);
+
+      if (commit) {
+        shapeStore.set(handleA, transformed);
+        // shapeB's geometry is now folded into handleA's result — drop it
+        // so a later exportSolidsStep/exportAssemblyStep doesn't also emit
+        // it standalone (which would duplicate the merged/cut-away
+        // material in the STEP output).
+        shapeStore.delete(handleB);
+      }
+
+      const mesh = tessellateShape(oc, transformed);
+      const response: OcctWorkerResponse = {
+        id,
+        type: "booleanSolidsResult",
+        handle: handleA,
+        mesh,
+        valid,
+      };
       self.postMessage(response, [mesh.positions.buffer, mesh.indices.buffer]);
       return;
     }

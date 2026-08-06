@@ -1,5 +1,7 @@
 import { useMemo, useState } from "react";
 import {
+  addBoolean,
+  addFillet,
   createEmptyUncertaintyDocument,
   removeSizeAnnotationsForPathKeys,
   removeUncertaintyAnnotationById,
@@ -12,7 +14,9 @@ import {
   setMoveQuestionAnswer,
   setSizeAxisAnswer,
   toBendPreviews,
+  toBooleanPreviews,
   toDistancePreviews,
+  toFilletPreviews,
   toFuzzyConfidenceAnnotations,
   toMovePreviews,
   toMoveQuestionPreviews,
@@ -35,6 +39,8 @@ import {
   type ProposalAxisIndex,
   type ProposalAxisMode,
   type RotateAxisInput,
+  type FilletKind,
+  type BooleanOpMode,
 } from "../lib/uncertainty/document";
 import type {
   AxisConfidenceMap,
@@ -96,6 +102,16 @@ export function useUncertaintyDocument(source: FuzzyCADUncertaintySource) {
 
   const moveQuestionPreviews = useMemo(
     () => toMoveQuestionPreviews(uncertaintyDocumentWithCurrentSource),
+    [uncertaintyDocumentWithCurrentSource],
+  );
+
+  const filletPreviews = useMemo(
+    () => toFilletPreviews(uncertaintyDocumentWithCurrentSource),
+    [uncertaintyDocumentWithCurrentSource],
+  );
+
+  const booleanPreviews = useMemo(
+    () => toBooleanPreviews(uncertaintyDocumentWithCurrentSource),
     [uncertaintyDocumentWithCurrentSource],
   );
 
@@ -397,6 +413,45 @@ export function useUncertaintyDocument(source: FuzzyCADUncertaintySource) {
     );
   }
 
+  function addFilletMark(input: {
+    pathKey: string;
+    kind: FilletKind;
+    edgePointWorld: [number, number, number];
+    radiusMeters: number;
+    previousValueLabel: string;
+    proposedValueLabel: string;
+    author?: string;
+  }) {
+    setUncertaintyDocument((previous) =>
+      addFillet(
+        {
+          ...previous,
+          source,
+        },
+        input,
+      ),
+    );
+  }
+
+  function addBooleanMark(input: {
+    pathKey: string;
+    mode: BooleanOpMode;
+    otherPathKey: string;
+    previousValueLabel: string;
+    proposedValueLabel: string;
+    author?: string;
+  }) {
+    setUncertaintyDocument((previous) =>
+      addBoolean(
+        {
+          ...previous,
+          source,
+        },
+        input,
+      ),
+    );
+  }
+
   function selectAnnotationAlternativeOption(
     annotationId: string,
     optionId: string,
@@ -424,6 +479,8 @@ export function useUncertaintyDocument(source: FuzzyCADUncertaintySource) {
     rotatePreviews,
     bendPreviews,
     moveQuestionPreviews,
+    filletPreviews,
+    booleanPreviews,
     resetUncertaintyDocument,
     replaceUncertaintyDocument,
     upsertSizeMark,
@@ -445,5 +502,7 @@ export function useUncertaintyDocument(source: FuzzyCADUncertaintySource) {
     upsertBendMark,
     upsertMoveQuestionMark,
     answerMoveQuestionMark,
+    addFilletMark,
+    addBooleanMark,
   };
 }

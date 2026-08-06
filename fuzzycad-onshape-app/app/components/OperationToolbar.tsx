@@ -176,6 +176,25 @@ function BendIcon() {
   );
 }
 
+function FilletIcon() {
+  return (
+    <svg viewBox="0 0 32 32" aria-hidden="true">
+      <path d="M6 26V16C6 10.5 10.5 6 16 6H26" />
+      <path d="M6 26H26" strokeDasharray="2.5 2.5" />
+      <path d="M26 26V6" strokeDasharray="2.5 2.5" />
+    </svg>
+  );
+}
+
+function BooleanIcon() {
+  return (
+    <svg viewBox="0 0 32 32" aria-hidden="true">
+      <circle cx="12" cy="16" r="8" />
+      <circle cx="20" cy="16" r="8" />
+    </svg>
+  );
+}
+
 function AlternativeIcon() {
   return (
     <svg viewBox="0 0 32 32" aria-hidden="true">
@@ -280,6 +299,38 @@ const toolGroups: ToolGroup[] = [
         title: "Curve this part along one axis — one side lifts, the other dips",
         icon: <BendIcon />,
         disabledReason: "Local preview only — doesn't push to Onshape yet",
+      },
+      {
+        id: "fillet",
+        label: "Fillet",
+        title: "Click near an edge to mark it for a rounded (fillet) or beveled (chamfer) break",
+        icon: <FilletIcon />,
+      },
+      {
+        id: "booleanUnion",
+        label: "Boolean",
+        title: "Pick two parts to combine, cut, or intersect",
+        icon: <BooleanIcon />,
+        variants: [
+          {
+            id: "booleanUnion",
+            label: "Union",
+            title: "Pick two parts to merge into one",
+            icon: <BooleanIcon />,
+          },
+          {
+            id: "booleanSubtract",
+            label: "Subtract",
+            title: "Pick two parts — the second is cut away from the first",
+            icon: <BooleanIcon />,
+          },
+          {
+            id: "booleanIntersect",
+            label: "Intersect",
+            title: "Pick two parts — keep only where they overlap",
+            icon: <BooleanIcon />,
+          },
+        ],
       },
     ],
   },

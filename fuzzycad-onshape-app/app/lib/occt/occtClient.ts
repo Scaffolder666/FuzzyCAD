@@ -173,6 +173,48 @@ class OcctClient {
     return { mesh: response.mesh, valid: response.valid };
   }
 
+  /**
+   * commit=false: preview only, always from the last committed state.
+   * commit=true: replaces the stored solid. edgePointWorld is a
+   * world-space point near the edge to round/bevel — resolved to the
+   * actual nearest edge worker-side (see occtWorker.ts's
+   * resolveNearestEdge); `resolved` reports whether one was found.
+   */
+  async filletEdge(
+    handle: number,
+    edgePointWorld: [number, number, number],
+    kind: "fillet" | "chamfer",
+    amount: number,
+    commit: boolean,
+  ): Promise<{ mesh: { positions: Float32Array; indices: Uint32Array }; valid: boolean; resolved: boolean }> {
+    await this.ready();
+    const response = await this.send({ type: "filletEdge", handle, edgePointWorld, kind, amount, commit });
+    if (response.type !== "filletEdgeResult") {
+      throw new Error(`Unexpected response type: ${response.type}`);
+    }
+    return { mesh: response.mesh, valid: response.valid, resolved: response.resolved };
+  }
+
+  /**
+   * commit=false: preview only, always from the last committed state.
+   * commit=true: replaces handleA's stored solid with the result AND
+   * drops handleB (its geometry is now folded into handleA — see
+   * occtWorker.ts's booleanSolids handler).
+   */
+  async booleanSolids(
+    handleA: number,
+    handleB: number,
+    mode: "union" | "subtract" | "intersect",
+    commit: boolean,
+  ): Promise<{ mesh: { positions: Float32Array; indices: Uint32Array }; valid: boolean }> {
+    await this.ready();
+    const response = await this.send({ type: "booleanSolids", handleA, handleB, mode, commit });
+    if (response.type !== "booleanSolidsResult") {
+      throw new Error(`Unexpected response type: ${response.type}`);
+    }
+    return { mesh: response.mesh, valid: response.valid };
+  }
+
   /** Combines every currently-loaded solid (including any committed edits) into one compound and writes it out as STEP bytes. */
   async exportAssemblyStep(): Promise<ArrayBuffer> {
     await this.ready();

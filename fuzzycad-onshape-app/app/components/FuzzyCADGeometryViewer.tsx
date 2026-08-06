@@ -58,6 +58,7 @@ import MoveTriadHandle, { type MoveDelta } from "./viewer/MoveTriadHandle";
 import MovePlaneHandle from "./viewer/MovePlaneHandle";
 import ScaleHandle from "./viewer/ScaleHandle";
 import RotateHandle from "./viewer/RotateHandle";
+import FilletHandle from "./viewer/FilletHandle";
 import RotateProtractor from "./viewer/RotateProtractor";
 import BendControlPoints from "./viewer/BendControlPoints";
 import MoveRangeHandles from "./viewer/MoveRangeHandles";
@@ -226,6 +227,9 @@ export type BendPreview = {
 /** Structurally the same shape as document.ts's MoveQuestionAxisDirection — reuses RotateAxisDirection's runtime unit-vector helper since both are just world x/y/z. */
 export type MoveQuestionAxisDirection = RotateAxisDirection;
 
+/** Structurally the same shape as document.ts's FilletKind. */
+export type FilletKind = "fillet" | "chamfer";
+
 /** A plan for the "Move (needs input)" tool's active range-definition session — single object, no followers. */
 export type MoveQuestionRolePlan = {
   pathKey: string;
@@ -347,6 +351,12 @@ type FuzzyCADGeometryViewerProps = {
   distancePreviews?: DistancePreview[];
   /** Answer an open distance flag directly from its 3D ruler. */
   onAnswerDistance?: (annotationId: string, distanceMm: number) => void;
+  /** Pending edge pick for the "Fillet/Chamfer" tool — set once a part+edge point is clicked, cleared on save/cancel. No live geometry preview (BRepFilletAPI is too slow to re-solve every drag tick); just an edge marker + value entry. */
+  filletPick?: { edgePointWorld: [number, number, number]; kind: FilletKind; amountMm: number } | null;
+  onFilletKindChange?: (kind: FilletKind) => void;
+  onFilletAmountChange?: (amountMm: number) => void;
+  onFilletConfirm?: () => void;
+  onFilletCancel?: () => void;
   /** Path key currently under the mouse in the 3D view, for linking to the marks panel. */
   hoveredPathKey?: string | null;
   onHoveredPathKeyChange?: (pathKey: string | null) => void;
@@ -1107,6 +1117,11 @@ function Model({
   onAnswerMoveQuestion,
   distancePreviews,
   onAnswerDistance,
+  filletPick,
+  onFilletKindChange,
+  onFilletAmountChange,
+  onFilletConfirm,
+  onFilletCancel,
   hoveredPathKey,
   onHoveredPathKeyChange,
   focusRequest,
@@ -1170,6 +1185,11 @@ function Model({
   onAnswerMoveQuestion?: (annotationId: string, deltaMeters: number) => void;
   distancePreviews?: DistancePreview[];
   onAnswerDistance?: (annotationId: string, distanceMm: number) => void;
+  filletPick?: { edgePointWorld: [number, number, number]; kind: FilletKind; amountMm: number } | null;
+  onFilletKindChange?: (kind: FilletKind) => void;
+  onFilletAmountChange?: (amountMm: number) => void;
+  onFilletConfirm?: () => void;
+  onFilletCancel?: () => void;
   hoveredPathKey?: string | null;
   onHoveredPathKeyChange?: (pathKey: string | null) => void;
   focusRequest?: FocusRequest | null;
@@ -4094,6 +4114,18 @@ function Model({
         </>
       ) : null}
 
+      {filletPick ? (
+        <FilletHandle
+          edgePointWorld={new THREE.Vector3(...filletPick.edgePointWorld)}
+          kind={filletPick.kind}
+          amountMm={filletPick.amountMm}
+          onKindChange={(kind) => onFilletKindChange?.(kind)}
+          onAmountChange={(amountMm) => onFilletAmountChange?.(amountMm)}
+          onConfirm={() => onFilletConfirm?.()}
+          onCancel={() => onFilletCancel?.()}
+        />
+      ) : null}
+
       {persistentRotateFrames.map((frame) => (
         <RotateProtractor
           key={frame.key}
@@ -4271,6 +4303,11 @@ export default function FuzzyCADGeometryViewer({
   onAnswerMoveQuestion,
   distancePreviews,
   onAnswerDistance,
+  filletPick,
+  onFilletKindChange,
+  onFilletAmountChange,
+  onFilletConfirm,
+  onFilletCancel,
   hoveredPathKey,
   onHoveredPathKeyChange,
   focusRequest,
@@ -4391,6 +4428,11 @@ export default function FuzzyCADGeometryViewer({
                   onAnswerMoveQuestion={onAnswerMoveQuestion}
                   distancePreviews={distancePreviews}
                   onAnswerDistance={onAnswerDistance}
+                  filletPick={filletPick}
+                  onFilletKindChange={onFilletKindChange}
+                  onFilletAmountChange={onFilletAmountChange}
+                  onFilletConfirm={onFilletConfirm}
+                  onFilletCancel={onFilletCancel}
                   hoveredPathKey={hoveredPathKey}
                   onHoveredPathKeyChange={onHoveredPathKeyChange}
                   focusRequest={focusRequest}

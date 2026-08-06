@@ -11,4 +11,8 @@ export type OperationTool =
   | "rotateAxis"
   | "moveFace"
   | "bend"
-  | "moveQuestion";
+  | "moveQuestion"
+  | "fillet"
+  | "booleanUnion"
+  | "booleanSubtract"
+  | "booleanIntersect";

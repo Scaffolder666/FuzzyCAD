@@ -199,6 +199,44 @@ export type BendUncertaintyAnnotation = BaseAnnotationFields & {
 };
 
 /**
+ * "Fillet"/"Chamfer": marks one edge of a part as needing a rounded
+ * (fillet) or beveled (chamfer) break instead of a sharp corner.
+ * edgePointWorld is a world-space point the marker clicked near the edge —
+ * not a topology index — because OCCT's edge enumeration order isn't
+ * guaranteed stable across other accepted B-rep edits landing on the same
+ * part before this one is applied; the OCCT worker resolves it back to the
+ * nearest real edge at apply time (see occtWorker.ts's resolveNearestEdge).
+ */
+export type FilletKind = "fillet" | "chamfer";
+
+export type FilletUncertaintyAnnotation = BaseAnnotationFields & {
+  type: "fillet";
+  kind: FilletKind;
+  edgePointWorld: [number, number, number];
+  radiusMeters: number;
+  previousValueLabel: string;
+  proposedValueLabel: string;
+};
+
+/**
+ * "Boolean": marks the target part as needing to be combined with another
+ * existing part — union ("this should be one piece with that"), subtract
+ * ("this should be hollowed out by that shape"), or intersect. otherPathKey
+ * mirrors Distance's other-object-pick pattern. Authoring a standalone
+ * primitive (a box/cylinder with no corresponding real part) for a
+ * from-scratch hole or boss is a likely follow-up, not covered here.
+ */
+export type BooleanOpMode = "union" | "subtract" | "intersect";
+
+export type BooleanUncertaintyAnnotation = BaseAnnotationFields & {
+  type: "boolean";
+  mode: BooleanOpMode;
+  otherPathKey: string;
+  previousValueLabel: string;
+  proposedValueLabel: string;
+};
+
+/**
  * "Move (needs input)": instead of the flagger proposing an exact delta,
  * they fix a direction and a range — "somewhere between 4 and 10mm along
  * X" — and someone else with the relevant knowledge picks the actual
@@ -225,7 +263,9 @@ export type FuzzyCADUncertaintyAnnotation =
   | DistanceUncertaintyAnnotation
   | RotateUncertaintyAnnotation
   | BendUncertaintyAnnotation
-  | MoveQuestionUncertaintyAnnotation;
+  | MoveQuestionUncertaintyAnnotation
+  | FilletUncertaintyAnnotation
+  | BooleanUncertaintyAnnotation;
 
 export function createEmptyUncertaintyDocument(
   source: FuzzyCADUncertaintySource,
@@ -1519,6 +1559,211 @@ export function toMoveQuestionPreviews(
       rangeMinMeters: annotation.rangeMinMeters,
       rangeMaxMeters: annotation.rangeMaxMeters,
       resolvedDeltaMeters: annotation.resolvedDeltaMeters,
+    }));
+}
+
+function makeFilletAnnotationId(pathKey: string) {
+  const suffix =
+    typeof crypto !== "undefined" && "randomUUID" in crypto
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  return `fillet:${pathKey}:${suffix}`;
+}
+
+function createFilletAnnotation(input: {
+  pathKey: string;
+  kind: FilletKind;
+  edgePointWorld: [number, number, number];
+  radiusMeters: number;
+  previousValueLabel: string;
+  proposedValueLabel: string;
+  comment?: string;
+  author?: string;
+  assignee?: string;
+  status?: AnnotationStatus;
+  createdAt?: string;
+  updatedAt?: string;
+}): FilletUncertaintyAnnotation | null {
+  if (!input.pathKey) {
+    return null;
+  }
+
+  const now = new Date().toISOString();
+
+  return {
+    id: makeFilletAnnotationId(input.pathKey),
+    type: "fillet",
+    target: {
+      pathKeys: [input.pathKey],
+      referencePathKey: input.pathKey,
+      scope: "single",
+    },
+    kind: input.kind,
+    edgePointWorld: input.edgePointWorld,
+    radiusMeters: input.radiusMeters,
+    previousValueLabel: input.previousValueLabel,
+    proposedValueLabel: input.proposedValueLabel,
+    comment: input.comment,
+    author: input.author,
+    assignee: input.assignee,
+    status: input.status ?? "open",
+    createdAt: input.createdAt ?? now,
+    updatedAt: input.updatedAt ?? now,
+  };
+}
+
+/**
+ * Unlike Move/Rotate/Bend, a part can carry many independent fillets (one
+ * per edge) — each call always appends a new mark rather than replacing an
+ * existing one by pathKey.
+ */
+export function addFillet(
+  document: FuzzyCADUncertaintyDocument,
+  input: {
+    pathKey: string;
+    kind: FilletKind;
+    edgePointWorld: [number, number, number];
+    radiusMeters: number;
+    previousValueLabel: string;
+    proposedValueLabel: string;
+    author?: string;
+  },
+): FuzzyCADUncertaintyDocument {
+  const nextAnnotation = createFilletAnnotation({ ...input, status: "open" });
+
+  if (!nextAnnotation) {
+    return document;
+  }
+
+  return {
+    ...document,
+    annotations: [...document.annotations, nextAnnotation],
+  };
+}
+
+export type FilletPreview = {
+  id: string;
+  pathKey: string;
+  kind: FilletKind;
+  edgePointWorld: [number, number, number];
+  radiusMeters: number;
+  status: "open" | "resolved";
+};
+
+/** Open AND resolved fillet/chamfer proposals, for the 3D viewer to render as a persistent ghost. */
+export function toFilletPreviews(
+  document: FuzzyCADUncertaintyDocument,
+): FilletPreview[] {
+  return document.annotations
+    .filter(
+      (annotation): annotation is FilletUncertaintyAnnotation =>
+        annotation.type === "fillet",
+    )
+    .map((annotation) => ({
+      id: annotation.id,
+      pathKey: annotation.target.referencePathKey,
+      kind: annotation.kind,
+      edgePointWorld: annotation.edgePointWorld,
+      radiusMeters: annotation.radiusMeters,
+      status: annotation.status,
+    }));
+}
+
+function makeBooleanAnnotationId(pathKey: string) {
+  const suffix =
+    typeof crypto !== "undefined" && "randomUUID" in crypto
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  return `boolean:${pathKey}:${suffix}`;
+}
+
+function createBooleanAnnotation(input: {
+  pathKey: string;
+  mode: BooleanOpMode;
+  otherPathKey: string;
+  previousValueLabel: string;
+  proposedValueLabel: string;
+  comment?: string;
+  author?: string;
+  assignee?: string;
+  status?: AnnotationStatus;
+  createdAt?: string;
+  updatedAt?: string;
+}): BooleanUncertaintyAnnotation | null {
+  if (!input.pathKey || !input.otherPathKey) {
+    return null;
+  }
+
+  const now = new Date().toISOString();
+
+  return {
+    id: makeBooleanAnnotationId(input.pathKey),
+    type: "boolean",
+    target: {
+      pathKeys: [input.pathKey, input.otherPathKey],
+      referencePathKey: input.pathKey,
+      scope: "single",
+    },
+    mode: input.mode,
+    otherPathKey: input.otherPathKey,
+    previousValueLabel: input.previousValueLabel,
+    proposedValueLabel: input.proposedValueLabel,
+    comment: input.comment,
+    author: input.author,
+    assignee: input.assignee,
+    status: input.status ?? "open",
+    createdAt: input.createdAt ?? now,
+    updatedAt: input.updatedAt ?? now,
+  };
+}
+
+/** Unlike Move/Rotate/Bend, a part can carry more than one boolean op — each call always appends a new mark. */
+export function addBoolean(
+  document: FuzzyCADUncertaintyDocument,
+  input: {
+    pathKey: string;
+    mode: BooleanOpMode;
+    otherPathKey: string;
+    previousValueLabel: string;
+    proposedValueLabel: string;
+    author?: string;
+  },
+): FuzzyCADUncertaintyDocument {
+  const nextAnnotation = createBooleanAnnotation({ ...input, status: "open" });
+
+  if (!nextAnnotation) {
+    return document;
+  }
+
+  return {
+    ...document,
+    annotations: [...document.annotations, nextAnnotation],
+  };
+}
+
+export type BooleanPreview = {
+  id: string;
+  pathKey: string;
+  mode: BooleanOpMode;
+  otherPathKey: string;
+  status: "open" | "resolved";
+};
+
+/** Open AND resolved boolean proposals, for the 3D viewer to render as a persistent ghost. */
+export function toBooleanPreviews(
+  document: FuzzyCADUncertaintyDocument,
+): BooleanPreview[] {
+  return document.annotations
+    .filter(
+      (annotation): annotation is BooleanUncertaintyAnnotation =>
+        annotation.type === "boolean",
+    )
+    .map((annotation) => ({
+      id: annotation.id,
+      pathKey: annotation.target.referencePathKey,
+      mode: annotation.mode,
+      otherPathKey: annotation.otherPathKey,
+      status: annotation.status,
     }));
 }
 
