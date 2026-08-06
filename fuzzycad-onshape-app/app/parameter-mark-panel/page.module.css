@@ -31,6 +31,16 @@
   border-bottom-color: #3d5afe;
 }
 
+.connectLink {
+  color: #3d5afe;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.connectLink:hover {
+  text-decoration: underline;
+}
+
 .header {
   margin-bottom: 12px;
 }

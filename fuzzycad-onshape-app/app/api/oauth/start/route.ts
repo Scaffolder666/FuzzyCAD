@@ -17,9 +17,14 @@ export async function GET(req: NextRequest) {
   const elementId = req.nextUrl.searchParams.get("elementId") || "";
   const server =
     req.nextUrl.searchParams.get("server") || "https://cad.onshape.com";
+  // Where to land after the OAuth round-trip -- defaults to "/" (the main
+  // app) if omitted, same as before this existed. The right panel passes
+  // "/parameter-mark-panel" so connecting from there doesn't strand you
+  // on the main app's UI crammed into that narrow iframe.
+  const returnTo = req.nextUrl.searchParams.get("returnTo") || "";
 
   const state = Buffer.from(
-    JSON.stringify({ documentId, workspaceId, elementId, server })
+    JSON.stringify({ documentId, workspaceId, elementId, server, returnTo })
   ).toString("base64url");
 
   const url = new URL(`${oauthUrl}/oauth/authorize`);

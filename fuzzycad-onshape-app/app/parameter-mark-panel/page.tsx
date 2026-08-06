@@ -100,6 +100,12 @@ function ParameterMarkPanelInner() {
   const [uncertaintyDoc, setUncertaintyDoc] = useState<FuzzyCADUncertaintyDocument | null>(null);
   const [selected, setSelected] = useState<ValueParameterEntry | null>(null);
   const [saving, setSaving] = useState(false);
+  // Whether the last data load hit a 401 -- the right panel used to be
+  // able to connect only via the main FuzzyCAD Panel tab's "Connect
+  // Onshape" button (an OAuth cookie set once there works everywhere on
+  // this domain, main app or right panel alike, since cookies aren't
+  // scoped per iframe). This lets it happen from the right panel too.
+  const [notConnected, setNotConnected] = useState(false);
   // Need input is the only tab with real content right now (see
   // RIGHT_PANEL_TABS) -- defaulting here instead of "overall" so the
   // panel doesn't open on an empty placeholder.
@@ -154,6 +160,8 @@ function ParameterMarkPanelInner() {
       if (cancelled) return;
 
       const paramsData = await paramsRes.json();
+
+      setNotConnected(paramsRes.status === 401);
 
       if (Array.isArray(paramsData.valueParameters)) {
         const numericOnly = (paramsData.valueParameters as ValueParameterEntry[]).filter(
@@ -464,6 +472,29 @@ function ParameterMarkPanelInner() {
           </button>
         ))}
       </div>
+
+      {notConnected ? (
+        <div className={styles.header}>
+          <p className={styles.emptyState}>
+            Not connected to Onshape yet.{" "}
+            <a
+              href={`/api/oauth/start?documentId=${encodeURIComponent(
+                context.documentId,
+              )}&workspaceId=${encodeURIComponent(context.workspaceId)}&elementId=${encodeURIComponent(
+                context.elementId,
+              )}&server=${encodeURIComponent(context.server)}&returnTo=${encodeURIComponent(
+                "/parameter-mark-panel",
+              )}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className={styles.connectLink}
+            >
+              Connect Onshape
+            </a>
+            , then reopen this panel.
+          </p>
+        </div>
+      ) : null}
 
       {activeTab === "overall" ? (
         <div className={styles.header}>

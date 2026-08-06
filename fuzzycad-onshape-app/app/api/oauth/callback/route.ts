@@ -5,7 +5,16 @@ type OAuthState = {
   workspaceId?: string;
   elementId?: string;
   server?: string;
+  returnTo?: string;
 };
+
+// Only ever redirect back to a same-app relative path -- "/x" is fine,
+// "//evil.com" (browsers treat as protocol-relative) or "https://..." is
+// not, since state is attacker-controllable (it round-trips through the
+// OAuth provider's redirect, not something we ever sign or verify).
+function isSafeReturnPath(path: string | undefined): path is string {
+  return typeof path === "string" && path.startsWith("/") && !path.startsWith("//");
+}
 
 function decodeState(state: string | null): OAuthState {
   if (!state) {
@@ -73,7 +82,10 @@ export async function GET(req: NextRequest) {
 
   const parsedState = decodeState(state);
 
-  const redirectBack = new URL("/", req.nextUrl.origin);
+  const redirectBack = new URL(
+    isSafeReturnPath(parsedState.returnTo) ? parsedState.returnTo : "/",
+    req.nextUrl.origin,
+  );
 
   if (parsedState.documentId) {
     redirectBack.searchParams.set("documentId", parsedState.documentId);
