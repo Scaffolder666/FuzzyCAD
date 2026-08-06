@@ -16,16 +16,24 @@ export const runtime = "nodejs";
  * needs a live capture first, same as every other "confirmed live" Onshape
  * wire format in this codebase. Disposable once that capture is done.
  */
+/**
+ * Confirmed live against a real document: the featurescript eval endpoint
+ * rejects a "FeatureScript <version>; import(...); export function..."
+ * wrapper (PARSE error: "extraneous input 'FeatureScript'") -- it wants a
+ * bare function-literal expression instead. qCreatedBy() also returns an
+ * unevaluated Query, not entity ids, until it's run through
+ * evaluateQuery(context, ...); transientQueriesToStrings alone just
+ * echoes the query descriptor back.
+ */
 function buildScript(featureId: string) {
-  return `FeatureScript 2166;
-import(path : "onshape/std/geometry.fs", version : "2166.0");
-
-export function(context is Context, queries) {
-    return transientQueriesToStrings(qCreatedBy(makeId("${featureId}"), EntityType.BODY));
+  return `function(context is Context, queries) {
+    return transientQueriesToStrings(evaluateQuery(context, qCreatedBy(makeId("${featureId}"), EntityType.BODY)));
 }`;
 }
 
-const FEATURE_ID_PATTERN = /^[A-Za-z0-9]+$/;
+// Real featureIds can contain underscores (e.g. "FKF8zbYi3YBEcRZ_0") --
+// confirmed live after the plain-alphanumeric version rejected one.
+const FEATURE_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
 
 export async function GET(req: NextRequest) {
   const params = req.nextUrl.searchParams;
