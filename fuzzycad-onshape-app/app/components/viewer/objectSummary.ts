@@ -404,3 +404,66 @@ export function buildObjectSummaries(
 
   return summaries;
 }
+
+/**
+ * How close two sorted (rotation-invariant) bounding-box extents need to be
+ * to count as "the same duplicated part, just placed/rotated elsewhere" —
+ * tight on purpose, since this drives an automatic "move these together?"
+ * prompt, not a loose visual-similarity suggestion (see isSimilarObject
+ * above, which is deliberately much looser but only fires for elongated,
+ * rod-like shapes — axial-stretch-tool-specific, not a general duplicate
+ * detector).
+ */
+const SAME_GEOMETRY_TOLERANCE = 0.03;
+
+/**
+ * Finds other parts in the same Part Studio with essentially identical
+ * bounding-box dimensions to startPathKey's — e.g. 4 identical bolts, 3
+ * duplicated leg assemblies. Sorting each object's 3 extents before
+ * comparing makes the match rotation-invariant (a part lying on its side
+ * still matches its upright duplicate).
+ *
+ * Replaces the old mate-graph-based getSameSourceGroup (partGraph.ts),
+ * which depended on relationshipGraphResult — an Onshape Assembly mate
+ * graph that has no meaning for a Part Studio and, since the Assembly ->
+ * Part Studio migration, is never fetched at all (loadSelectedPartStudio
+ * deliberately dropped the buildRelationshipGraph() call). That silently
+ * made every "move/scale/rotate this together with its duplicates?"
+ * prompt permanently a no-op — partGraph was always null, so neighbors
+ * was always []. This version works entirely off objectSummaries, which
+ * is already computed locally for the loaded Part Studio — no extra
+ * Onshape API call needed.
+ */
+export function getSameGeometryGroup(
+  startPathKey: string,
+  objectSummaries: AxialStretchObjectSummary[],
+): string[] {
+  const start = objectSummaries.find((summary) => summary.pathKey === startPathKey);
+
+  if (!start) {
+    return [];
+  }
+
+  const startExtents = [...start.aabbSizeWorld].sort((a, b) => a - b);
+
+  if (startExtents[2] < EPSILON) {
+    return [];
+  }
+
+  return objectSummaries
+    .filter((candidate) => {
+      if (candidate.pathKey === startPathKey) {
+        return false;
+      }
+
+      const candidateExtents = [...candidate.aabbSizeWorld].sort((a, b) => a - b);
+
+      return startExtents.every((extent, index) => {
+        const other = candidateExtents[index];
+        const scale = Math.max(extent, other, EPSILON);
+
+        return Math.abs(extent - other) / scale <= SAME_GEOMETRY_TOLERANCE;
+      });
+    })
+    .map((candidate) => candidate.pathKey);
+}

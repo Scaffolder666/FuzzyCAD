@@ -23,7 +23,7 @@ import type {
   RotateRolePlan,
 } from "./components/FuzzyCADGeometryViewer";
 import { usePartGraph } from "./hooks/usePartGraph";
-import { getRelatedGroup } from "./lib/partGraph";
+import { getSameGeometryGroup } from "./components/viewer/objectSummary";
 import {
   fetchFuzzycadAssemblySummary,
   fetchFuzzycadRelationshipGraph,
@@ -1152,13 +1152,13 @@ export default function FuzzyCADHome() {
       );
     }
 
-    // Reuse the mate graph already fetched for the assembly (see
-    // usePartGraph), plus same-source-Part-Studio siblings, to find parts
-    // related to the one being moved, so the user can decide whether they
-    // should move together instead of silently leaving them disconnected.
-    const neighbors = partGraph
-      ? getRelatedGroup(pathKey, partGraph.byPathKey)
-      : [];
+    // Find other parts with essentially identical geometry (duplicates of
+    // the one being moved), so the user can decide whether they should
+    // move together instead of silently leaving them disconnected. Works
+    // off objectSummaries directly — no mate graph involved (a Part
+    // Studio has no mates; see getSameGeometryGroup's doc comment for why
+    // this replaced the old mate-graph-based lookup).
+    const neighbors = getSameGeometryGroup(pathKey, objectSummaries);
 
     if (neighbors.length > 0) {
       setMoveCandidatePathKeys(neighbors);
@@ -1302,9 +1302,7 @@ export default function FuzzyCADHome() {
     resetSizeOperationState();
     setLassoPathKeys([]);
 
-    const neighbors = partGraph
-      ? getRelatedGroup(pathKey, partGraph.byPathKey)
-      : [];
+    const neighbors = getSameGeometryGroup(pathKey, objectSummaries);
 
     if (neighbors.length > 0) {
       setScaleCandidatePathKeys(neighbors);
@@ -1781,8 +1779,8 @@ export default function FuzzyCADHome() {
 
   // Shared by both rotate-entry flows (borrow-a-pivot-from-another-object,
   // and pick-two-points-for-a-custom-axis): once the pivot/axis is known,
-  // check for mate-linked or same-source-Part-Studio siblings before
-  // committing the plan, same as Move/Scale.
+  // check for same-geometry duplicate parts before committing the plan,
+  // same as Move/Scale.
   function finalizeRotatePick(base: RotateBasePlan) {
     setRotateAxisDirection("y");
     setRotateAngleRad(0);
@@ -1791,11 +1789,9 @@ export default function FuzzyCADHome() {
       base.axisMode === "object"
         ? [base.pathKey, base.axisPathKey]
         : [base.pathKey];
-    const neighbors = partGraph
-      ? getRelatedGroup(base.pathKey, partGraph.byPathKey).filter(
-          (key) => !excludePathKeys.includes(key),
-        )
-      : [];
+    const neighbors = getSameGeometryGroup(base.pathKey, objectSummaries).filter(
+      (key) => !excludePathKeys.includes(key),
+    );
 
     if (neighbors.length > 0) {
       setPendingRotatePlan(base);
