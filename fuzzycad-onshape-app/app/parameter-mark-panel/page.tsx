@@ -28,6 +28,11 @@ import {
   substituteNumericMagnitude,
 } from "../lib/featureParameterValue";
 import {
+  featureTypeLabel,
+  isParameterActive,
+  parameterLabel,
+} from "../lib/featureParameterLabels";
+import {
   ONSHAPE_CONTEXT_STORAGE_KEY,
   readSharedOnshapeContext,
   type SharedOnshapeContext,
@@ -48,7 +53,8 @@ type FeatureGroup = {
   featureId: string;
   featureName: string;
   featureType: string;
-  parameters: ValueParameterEntry[];
+  activeParameters: ValueParameterEntry[];
+  inactiveParameters: ValueParameterEntry[];
 };
 
 type PartEntry = {
@@ -109,6 +115,10 @@ function ParameterMarkPanelInner() {
   const [context, setContext] = useState<SharedOnshapeContext | null>(null);
   const [status, setStatus] = useState("waiting for Onshape context...");
   const [parameters, setParameters] = useState<ValueParameterEntry[] | null>(null);
+  const [booleanParameters, setBooleanParameters] = useState<ValueParameterEntry[]>([]);
+  const [expandedInactiveFeatureIds, setExpandedInactiveFeatureIds] = useState<Set<string>>(
+    new Set(),
+  );
   const [uncertaintyDoc, setUncertaintyDoc] = useState<FuzzyCADUncertaintyDocument | null>(null);
   const [selected, setSelected] = useState<ValueParameterEntry | null>(null);
   const [saving, setSaving] = useState(false);
@@ -168,12 +178,12 @@ function ParameterMarkPanelInner() {
       const paramsData = await paramsRes.json();
 
       if (Array.isArray(paramsData.valueParameters)) {
-        const numericOnly = (paramsData.valueParameters as ValueParameterEntry[]).filter(
-          (entry) => entry.typeName === "BTMParameterQuantity",
-        );
-        setParameters(numericOnly);
+        const allParams = paramsData.valueParameters as ValueParameterEntry[];
+        setParameters(allParams.filter((entry) => entry.typeName === "BTMParameterQuantity"));
+        setBooleanParameters(allParams.filter((entry) => entry.typeName === "BTMParameterBoolean"));
       } else {
         setParameters([]);
+        setBooleanParameters([]);
       }
 
       if (stateRes.ok && isValidUncertaintyDocument(stateRes.state)) {
@@ -262,25 +272,45 @@ function ParameterMarkPanelInner() {
     );
   }
 
-  /** One card per feature instead of one per parameter -- an Extrude with 4 numeric fields was showing 4 near-identical cards that all highlighted the same feature. */
+  /**
+   * One card per feature instead of one per parameter -- an Extrude with
+   * 4 numeric fields was showing 4 near-identical cards that all
+   * highlighted the same feature. Each parameter is also split into
+   * active/inactive using its sibling boolean flags (isParameterActive)
+   * so a feature with e.g. 9 numeric parameters but only 1 actually in
+   * effect doesn't bury it under 8 no-op defaults.
+   */
   const featureGroups = useMemo<FeatureGroup[]>(() => {
     if (!parameters) return [];
+
+    const boolsByFeature = new Map<string, { parameterId: string; value: boolean }[]>();
+    for (const entry of booleanParameters) {
+      const list = boolsByFeature.get(entry.featureId) ?? [];
+      list.push({ parameterId: entry.parameterId, value: Boolean(entry.message.value) });
+      boolsByFeature.set(entry.featureId, list);
+    }
+
     const byFeature = new Map<string, FeatureGroup>();
     for (const entry of parameters) {
       const existing = byFeature.get(entry.featureId);
-      if (existing) {
-        existing.parameters.push(entry);
-      } else {
-        byFeature.set(entry.featureId, {
+      const group =
+        existing ??
+        ({
           featureId: entry.featureId,
           featureName: entry.featureName,
           featureType: entry.featureType,
-          parameters: [entry],
-        });
+          activeParameters: [],
+          inactiveParameters: [],
+        } satisfies FeatureGroup);
+      if (!existing) {
+        byFeature.set(entry.featureId, group);
       }
+
+      const active = isParameterActive(entry.parameterId, boolsByFeature.get(entry.featureId) ?? []);
+      (active ? group.activeParameters : group.inactiveParameters).push(entry);
     }
     return Array.from(byFeature.values());
-  }, [parameters]);
+  }, [parameters, booleanParameters]);
 
   /** This Part Studio's parts, each carrying only the feature groups that actually produced it (via featurePartIds -- see the loadPartMapping effect above). */
   const partsWithFeatures = useMemo<PartWithFeatures[]>(() => {
@@ -591,6 +621,44 @@ function ParameterMarkPanelInner() {
     );
   }
 
+  function renderParamRow(entry: ValueParameterEntry, part: PartWithFeatures) {
+    const annotation = findAnnotation(entry);
+    const state = paramState(annotation);
+
+    return (
+      <div
+        key={entry.parameterId}
+        className={styles.paramRow}
+        onClick={() => {
+          if (state === "unmarked") return;
+          setSelected(entry);
+          highlightPart(part.partId);
+        }}
+        style={state !== "unmarked" ? { cursor: "pointer" } : undefined}
+      >
+        <div className={styles.cardValue}>
+          {parameterLabel(entry.parameterId)}: {formatFeatureParameterValue(entry.typeName, entry.message)}
+        </div>
+        {state === "unmarked" ? (
+          <button
+            type="button"
+            className={styles.needInputButton}
+            onClick={(event) => {
+              event.stopPropagation();
+              void openDetail(entry, part.partId);
+            }}
+          >
+            Need input
+          </button>
+        ) : state === "needsInput" ? (
+          <span className={styles.tagNeedsInput}>Needs input</span>
+        ) : (
+          <span className={styles.tagAnswered}>Answered: {annotation!.resolvedValue}</span>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div className={styles.page}>
       <div className={styles.header}>
@@ -604,7 +672,7 @@ function ParameterMarkPanelInner() {
           {partsWithFeatures.map((part) => {
             const expanded = expandedPartId === part.partId;
             const paramCount = part.featureGroups.reduce(
-              (sum, group) => sum + group.parameters.length,
+              (sum, group) => sum + group.activeParameters.length,
               0,
             );
 
@@ -627,53 +695,50 @@ function ParameterMarkPanelInner() {
                 </div>
                 {expanded && part.featureGroups.length > 0 ? (
                   <div className={styles.paramList}>
-                    {part.featureGroups.map((group) => (
-                      <div key={group.featureId}>
-                        <div className={styles.featureSubheader}>
-                          {group.featureName || group.featureId} ({group.featureType})
-                        </div>
-                        {group.parameters.map((entry) => {
-                          const annotation = findAnnotation(entry);
-                          const state = paramState(annotation);
+                    {part.featureGroups.map((group) => {
+                      const showInactive = expandedInactiveFeatureIds.has(group.featureId);
 
-                          return (
-                            <div
-                              key={entry.parameterId}
-                              className={styles.paramRow}
-                              onClick={() => {
-                                if (state === "unmarked") return;
-                                setSelected(entry);
-                                highlightPart(part.partId);
-                              }}
-                              style={state !== "unmarked" ? { cursor: "pointer" } : undefined}
-                            >
-                              <div className={styles.cardValue}>
-                                {entry.parameterId}:{" "}
-                                {formatFeatureParameterValue(entry.typeName, entry.message)}
-                              </div>
-                              {state === "unmarked" ? (
-                                <button
-                                  type="button"
-                                  className={styles.needInputButton}
-                                  onClick={(event) => {
-                                    event.stopPropagation();
-                                    void openDetail(entry, part.partId);
-                                  }}
-                                >
-                                  Need input
-                                </button>
-                              ) : state === "needsInput" ? (
-                                <span className={styles.tagNeedsInput}>Needs input</span>
-                              ) : (
-                                <span className={styles.tagAnswered}>
-                                  Answered: {annotation!.resolvedValue}
-                                </span>
-                              )}
+                      return (
+                        <div key={group.featureId}>
+                          <div className={styles.featureSubheader}>
+                            {group.featureName || featureTypeLabel(group.featureType)}
+                          </div>
+                          {group.activeParameters.length === 0 ? (
+                            <div className={styles.cardValue} style={{ padding: "0 12px 8px" }}>
+                              Nothing currently in effect on this feature.
                             </div>
-                          );
-                        })}
-                      </div>
-                    ))}
+                          ) : (
+                            group.activeParameters.map((entry) => renderParamRow(entry, part))
+                          )}
+                          {group.inactiveParameters.length > 0 ? (
+                            <>
+                              <button
+                                type="button"
+                                className={styles.showInactiveButton}
+                                onClick={() =>
+                                  setExpandedInactiveFeatureIds((current) => {
+                                    const next = new Set(current);
+                                    if (next.has(group.featureId)) {
+                                      next.delete(group.featureId);
+                                    } else {
+                                      next.add(group.featureId);
+                                    }
+                                    return next;
+                                  })
+                                }
+                              >
+                                {showInactive
+                                  ? "Hide inactive parameters"
+                                  : `Show ${group.inactiveParameters.length} not currently active`}
+                              </button>
+                              {showInactive
+                                ? group.inactiveParameters.map((entry) => renderParamRow(entry, part))
+                                : null}
+                            </>
+                          ) : null}
+                        </div>
+                      );
+                    })}
                   </div>
                 ) : null}
               </div>
