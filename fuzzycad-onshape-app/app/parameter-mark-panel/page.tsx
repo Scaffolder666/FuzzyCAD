@@ -16,10 +16,7 @@ import {
   type FuzzyCADUncertaintyDocument,
 } from "../lib/uncertainty/document";
 import {
-  fetchFeatureCreatedFaceIds,
   fetchFeatureCreatedPartIds,
-  fetchOnshapeElements,
-  fetchOnshapeDocuments,
   fetchOnshapePartStudioParts,
   loadFuzzycadProjectState,
   saveFuzzycadProjectState,
@@ -30,14 +27,14 @@ import {
   parseNumericMagnitude,
   substituteNumericMagnitude,
 } from "../lib/featureParameterValue";
-import { featureTypeLabel, parameterLabel } from "../lib/featureParameterLabels";
+import {
+  featureTypeLabel,
+  isParameterActive,
+  parameterLabel,
+} from "../lib/featureParameterLabels";
 import {
   ONSHAPE_CONTEXT_STORAGE_KEY,
-  RIGHT_PANEL_SELECTED_CONTEXT_STORAGE_KEY,
-  clearRightPanelSelectedContext,
-  readRightPanelSelectedContext,
   readSharedOnshapeContext,
-  writeRightPanelSelectedContext,
   type SharedOnshapeContext,
 } from "../lib/onshapeRightPanelContext";
 import styles from "./page.module.css";
@@ -56,7 +53,8 @@ type FeatureGroup = {
   featureId: string;
   featureName: string;
   featureType: string;
-  parameters: ValueParameterEntry[];
+  activeParameters: ValueParameterEntry[];
+  inactiveParameters: ValueParameterEntry[];
 };
 
 type PartEntry = {
@@ -69,30 +67,6 @@ type PartWithFeatures = PartEntry & {
 };
 
 type ParamState = "unmarked" | "needsInput" | "answered";
-
-// How many featurescript evaluations to have in flight at once when
-// resolving every feature's created part(s) -- see the loadPartMapping
-// effect below for why this exists at all.
-const FEATURE_MAPPING_CONCURRENCY = 5;
-
-async function mapWithConcurrencyLimit<T, R>(
-  items: T[],
-  limit: number,
-  fn: (item: T) => Promise<R>,
-): Promise<R[]> {
-  const results: R[] = new Array(items.length);
-  let nextIndex = 0;
-
-  async function worker() {
-    while (nextIndex < items.length) {
-      const index = nextIndex++;
-      results[index] = await fn(items[index]);
-    }
-  }
-
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, () => worker()));
-  return results;
-}
 
 function paramState(
   annotation: FeatureParameterQuestionUncertaintyAnnotation | undefined,
@@ -141,6 +115,10 @@ function ParameterMarkPanelInner() {
   const [context, setContext] = useState<SharedOnshapeContext | null>(null);
   const [status, setStatus] = useState("waiting for Onshape context...");
   const [parameters, setParameters] = useState<ValueParameterEntry[] | null>(null);
+  const [booleanParameters, setBooleanParameters] = useState<ValueParameterEntry[]>([]);
+  const [expandedInactiveFeatureIds, setExpandedInactiveFeatureIds] = useState<Set<string>>(
+    new Set(),
+  );
   const [uncertaintyDoc, setUncertaintyDoc] = useState<FuzzyCADUncertaintyDocument | null>(null);
   const [selected, setSelected] = useState<ValueParameterEntry | null>(null);
   const [saving, setSaving] = useState(false);
@@ -148,18 +126,9 @@ function ParameterMarkPanelInner() {
   const [featurePartIds, setFeaturePartIds] = useState<Record<string, string[]>>({});
   const [expandedPartId, setExpandedPartId] = useState<string | null>(null);
   const nextHighlightIdRef = useRef(1);
-  const featureFaceIdsCacheRef = useRef<Map<string, string[]>>(new Map());
 
   useEffect(() => {
     function applyStoredContext() {
-      // The right panel's own picker takes priority: it's an explicit,
-      // current choice made in the right panel itself, not a hand-me-down
-      // from whatever the main tab happened to have open when it loaded.
-      const picked = readRightPanelSelectedContext();
-      if (picked) {
-        setContext(picked);
-        return;
-      }
       const stored = readSharedOnshapeContext();
       if (stored) {
         setContext(stored);
@@ -169,11 +138,7 @@ function ParameterMarkPanelInner() {
     applyStoredContext();
 
     function handleStorage(event: StorageEvent) {
-      if (
-        event.key === null ||
-        event.key === ONSHAPE_CONTEXT_STORAGE_KEY ||
-        event.key === RIGHT_PANEL_SELECTED_CONTEXT_STORAGE_KEY
-      ) {
+      if (event.key === null || event.key === ONSHAPE_CONTEXT_STORAGE_KEY) {
         applyStoredContext();
       }
     }
@@ -213,12 +178,12 @@ function ParameterMarkPanelInner() {
       const paramsData = await paramsRes.json();
 
       if (Array.isArray(paramsData.valueParameters)) {
-        const numericOnly = (paramsData.valueParameters as ValueParameterEntry[]).filter(
-          (entry) => entry.typeName === "BTMParameterQuantity",
-        );
-        setParameters(numericOnly);
+        const allParams = paramsData.valueParameters as ValueParameterEntry[];
+        setParameters(allParams.filter((entry) => entry.typeName === "BTMParameterQuantity"));
+        setBooleanParameters(allParams.filter((entry) => entry.typeName === "BTMParameterBoolean"));
       } else {
         setParameters([]);
+        setBooleanParameters([]);
       }
 
       if (stateRes.ok && isValidUncertaintyDocument(stateRes.state)) {
@@ -243,18 +208,6 @@ function ParameterMarkPanelInner() {
    * unique feature. Runs once parameters load rather than inside
    * loadEverything so a slow/failed lookup here doesn't block the
    * parameter list itself from being fetched.
-   *
-   * The per-feature fetches run FEATURE_MAPPING_CONCURRENCY at a time,
-   * not all at once. Confirmed live: a real Part Studio with dozens of
-   * features (Sketch/Extrude/Chamfer repeated many times) firing that
-   * many featurescript evaluations simultaneously came back with every
-   * single one empty -- Onshape's featurescript endpoint doesn't reject
-   * with an error our fetch would throw on (a non-2xx HTTP status still
-   * resolves normally, it just carries ok:false), so this failed
-   * completely silently: parts showed up fine (that fetch is separate
-   * and unaffected), but every part's feature list was empty, as if
-   * qCreatedBy had nothing to say. Batching keeps concurrent featurescript
-   * calls low enough that they actually succeed.
    */
   useEffect(() => {
     if (!context || !parameters) {
@@ -273,11 +226,9 @@ function ParameterMarkPanelInner() {
 
       const uniqueFeatureIds = Array.from(new Set(parameters!.map((entry) => entry.featureId)));
 
-      const [partsRes, createdByResults] = await Promise.all([
-        fetchOnshapePartStudioParts(query).catch(() => null),
-        mapWithConcurrencyLimit(uniqueFeatureIds, FEATURE_MAPPING_CONCURRENCY, (featureId) =>
-          fetchFeatureCreatedPartIds(query, featureId).catch(() => ({ partIds: [] as string[] })),
-        ),
+      const [partsRes, ...createdByResults] = await Promise.all([
+        fetchOnshapePartStudioParts(query),
+        ...uniqueFeatureIds.map((featureId) => fetchFeatureCreatedPartIds(query, featureId)),
       ]);
 
       if (cancelled) return;
@@ -324,36 +275,42 @@ function ParameterMarkPanelInner() {
   /**
    * One card per feature instead of one per parameter -- an Extrude with
    * 4 numeric fields was showing 4 near-identical cards that all
-   * highlighted the same feature.
-   *
-   * Used to also split parameters into active/inactive by sibling
-   * boolean flags, hiding "inactive" ones by default. Dropped that: on a
-   * real multi-feature part it over-filtered (a part built from several
-   * Extrudes + a Chamfer came back "no adjustable parameters" even
-   * though it obviously had some) -- the boolean-prefix heuristic isn't
-   * reliable enough to hide rows on. highlightFeature() (see below) makes
-   * the filtering unnecessary anyway: clicking a row now shows exactly
-   * where it is on the model, which answers "does this matter" far more
-   * reliably than guessing from parameter names ever could.
+   * highlighted the same feature. Each parameter is also split into
+   * active/inactive using its sibling boolean flags (isParameterActive)
+   * so a feature with e.g. 9 numeric parameters but only 1 actually in
+   * effect doesn't bury it under 8 no-op defaults.
    */
   const featureGroups = useMemo<FeatureGroup[]>(() => {
     if (!parameters) return [];
+
+    const boolsByFeature = new Map<string, { parameterId: string; value: boolean }[]>();
+    for (const entry of booleanParameters) {
+      const list = boolsByFeature.get(entry.featureId) ?? [];
+      list.push({ parameterId: entry.parameterId, value: Boolean(entry.message.value) });
+      boolsByFeature.set(entry.featureId, list);
+    }
+
     const byFeature = new Map<string, FeatureGroup>();
     for (const entry of parameters) {
       const existing = byFeature.get(entry.featureId);
-      if (existing) {
-        existing.parameters.push(entry);
-      } else {
-        byFeature.set(entry.featureId, {
+      const group =
+        existing ??
+        ({
           featureId: entry.featureId,
           featureName: entry.featureName,
           featureType: entry.featureType,
-          parameters: [entry],
-        });
+          activeParameters: [],
+          inactiveParameters: [],
+        } satisfies FeatureGroup);
+      if (!existing) {
+        byFeature.set(entry.featureId, group);
       }
+
+      const active = isParameterActive(entry.parameterId, boolsByFeature.get(entry.featureId) ?? []);
+      (active ? group.activeParameters : group.inactiveParameters).push(entry);
     }
     return Array.from(byFeature.values());
-  }, [parameters]);
+  }, [parameters, booleanParameters]);
 
   /** This Part Studio's parts, each carrying only the feature groups that actually produced it (via featurePartIds -- see the loadPartMapping effect above). */
   const partsWithFeatures = useMemo<PartWithFeatures[]>(() => {
@@ -401,71 +358,11 @@ function ParameterMarkPanelInner() {
     );
   }
 
-  /**
-   * Highlights only the specific face(s) a given feature produced
-   * (qCreatedBy(..., EntityType.FACE), same mechanism as highlightPart
-   * above but narrower) instead of the whole part -- "Depth: 5 mm" means
-   * nothing on its own when a part was built from several stacked
-   * features. Fetched lazily, one featureId at a time, right when it's
-   * clicked, and cached in a ref after that so re-clicking the same
-   * feature doesn't refetch. Deliberately NOT prefetched in bulk on load
-   * for every feature: that's what caused parts to intermittently vanish
-   * from the list the first time this was built -- one failed request in
-   * a large batched Promise.all voided the entire update, including the
-   * unrelated part list. A single on-click fetch can't do that; if it
-   * fails, this feature's click just falls back to the whole-part
-   * highlight, and nothing else on the page is affected.
-   */
-  async function highlightFeature(featureId: string, fallbackPartId: string) {
-    if (!context) return;
-
-    let faceIds = featureFaceIdsCacheRef.current.get(featureId);
-    if (faceIds === undefined) {
-      try {
-        const result = await fetchFeatureCreatedFaceIds(
-          {
-            documentId: context.documentId,
-            workspaceId: context.workspaceId,
-            partStudioElementId: context.elementId,
-            server: context.server,
-          },
-          featureId,
-        );
-        faceIds = result.entityIds ?? [];
-      } catch {
-        faceIds = [];
-      }
-      featureFaceIdsCacheRef.current.set(featureId, faceIds);
-    }
-
-    if (faceIds.length === 0) {
-      highlightPart(fallbackPartId);
-      return;
-    }
-
-    const messageId = `highlight-${nextHighlightIdRef.current++}`;
-    window.parent.postMessage(
-      {
-        documentId: context.documentId,
-        workspaceId: context.workspaceId,
-        elementId: context.elementId,
-        messageName: "requestSelectionHighlight",
-        messageId,
-        selections: faceIds.map((faceId) => ({
-          selectionType: "ENTITY",
-          selectionId: faceId,
-          entityType: "FACE",
-        })),
-      },
-      context.server,
-    );
-  }
-
   /** Marks (if not already) and opens the detail view in one step -- no separate mark-then-fill click. */
   async function openDetail(entry: ValueParameterEntry, partId: string | null) {
     setSelected(entry);
     if (partId) {
-      void highlightFeature(entry.featureId, partId);
+      highlightPart(partId);
     }
 
     if (findAnnotation(entry)) {
@@ -683,12 +580,10 @@ function ParameterMarkPanelInner() {
   if (!context) {
     return (
       <div className={styles.page}>
-        <DocumentPicker
-          onSelect={(picked) => {
-            writeRightPanelSelectedContext(picked);
-            setContext({ ...picked, updatedAt: Date.now() });
-          }}
-        />
+        <p>Waiting for Onshape context...</p>
+        <p style={{ color: "#666" }}>
+          Open the FuzzyCAD Panel tab once in this browser first, then reopen this panel.
+        </p>
       </div>
     );
   }
@@ -737,7 +632,7 @@ function ParameterMarkPanelInner() {
         onClick={() => {
           if (state === "unmarked") return;
           setSelected(entry);
-          void highlightFeature(entry.featureId, part.partId);
+          highlightPart(part.partId);
         }}
         style={state !== "unmarked" ? { cursor: "pointer" } : undefined}
       >
@@ -769,16 +664,6 @@ function ParameterMarkPanelInner() {
       <div className={styles.header}>
         <h1 className={styles.title}>Need input</h1>
         <p className={styles.status}>status: {status}</p>
-        <button
-          type="button"
-          className={styles.switchDocumentButton}
-          onClick={() => {
-            clearRightPanelSelectedContext();
-            setContext(null);
-          }}
-        >
-          Switch document
-        </button>
       </div>
       {parameters === null ? null : partList.length === 0 ? (
         <p className={styles.emptyState}>Loading this Part Studio&apos;s parts...</p>
@@ -787,7 +672,7 @@ function ParameterMarkPanelInner() {
           {partsWithFeatures.map((part) => {
             const expanded = expandedPartId === part.partId;
             const paramCount = part.featureGroups.reduce(
-              (sum, group) => sum + group.parameters.length,
+              (sum, group) => sum + group.activeParameters.length,
               0,
             );
 
@@ -810,19 +695,50 @@ function ParameterMarkPanelInner() {
                 </div>
                 {expanded && part.featureGroups.length > 0 ? (
                   <div className={styles.paramList}>
-                    {part.featureGroups.map((group) => (
-                      <div key={group.featureId}>
-                        <div
-                          className={styles.featureSubheader}
-                          style={{ cursor: "pointer" }}
-                          onClick={() => void highlightFeature(group.featureId, part.partId)}
-                          title="Click to highlight just this feature's surfaces in Onshape"
-                        >
-                          {group.featureName || featureTypeLabel(group.featureType)}
+                    {part.featureGroups.map((group) => {
+                      const showInactive = expandedInactiveFeatureIds.has(group.featureId);
+
+                      return (
+                        <div key={group.featureId}>
+                          <div className={styles.featureSubheader}>
+                            {group.featureName || featureTypeLabel(group.featureType)}
+                          </div>
+                          {group.activeParameters.length === 0 ? (
+                            <div className={styles.cardValue} style={{ padding: "0 12px 8px" }}>
+                              Nothing currently in effect on this feature.
+                            </div>
+                          ) : (
+                            group.activeParameters.map((entry) => renderParamRow(entry, part))
+                          )}
+                          {group.inactiveParameters.length > 0 ? (
+                            <>
+                              <button
+                                type="button"
+                                className={styles.showInactiveButton}
+                                onClick={() =>
+                                  setExpandedInactiveFeatureIds((current) => {
+                                    const next = new Set(current);
+                                    if (next.has(group.featureId)) {
+                                      next.delete(group.featureId);
+                                    } else {
+                                      next.add(group.featureId);
+                                    }
+                                    return next;
+                                  })
+                                }
+                              >
+                                {showInactive
+                                  ? "Hide inactive parameters"
+                                  : `Show ${group.inactiveParameters.length} not currently active`}
+                              </button>
+                              {showInactive
+                                ? group.inactiveParameters.map((entry) => renderParamRow(entry, part))
+                                : null}
+                            </>
+                          ) : null}
                         </div>
-                        {group.parameters.map((entry) => renderParamRow(entry, part))}
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 ) : null}
               </div>
@@ -1084,212 +1000,6 @@ function DetailView({
             Resolving will write {annotation.resolvedValue} into the real Onshape feature.
           </div>
         ) : null}
-      </div>
-    </div>
-  );
-}
-
-type PickerDocument = { id: string; name: string; workspaceId: string | null };
-type PickerElement = { id: string; name: string };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
-
-function parsePickerDocuments(raw: unknown): PickerDocument[] {
-  const items = isRecord(raw) && Array.isArray(raw.items) ? raw.items : Array.isArray(raw) ? raw : [];
-  const documents: PickerDocument[] = [];
-  for (const entry of items) {
-    if (!isRecord(entry)) continue;
-    const id = entry.id;
-    const name = entry.name;
-    if (typeof id !== "string" || typeof name !== "string") continue;
-    const defaultWorkspace = entry.defaultWorkspace;
-    const workspaceId =
-      isRecord(defaultWorkspace) && typeof defaultWorkspace.id === "string" ? defaultWorkspace.id : null;
-    documents.push({ id, name, workspaceId });
-  }
-  return documents;
-}
-
-function parsePickerElements(raw: unknown): PickerElement[] {
-  const items = Array.isArray(raw) ? raw : [];
-  const elements: PickerElement[] = [];
-  for (const entry of items) {
-    if (!isRecord(entry)) continue;
-    const id = entry.id;
-    const name = entry.name;
-    const elementType = entry.elementType;
-    if (typeof id !== "string" || typeof name !== "string" || elementType !== "PARTSTUDIO") continue;
-    elements.push({ id, name });
-  }
-  return elements;
-}
-
-/**
- * Lets the right panel establish its own Onshape context instead of only
- * ever getting one handed down by the main FuzzyCAD Panel tab -- see
- * onshapeRightPanelContext.ts. Two-step: pick a document (search or
- * recent list, GET /api/documents), then pick a Part Studio within it
- * (reuses the same elements endpoint the main app uses, filtered to
- * elementType PARTSTUDIO). Whatever's picked is handed back via onSelect
- * for the caller to persist and use immediately -- this component holds
- * no context of its own beyond the two-step picking flow.
- */
-function DocumentPicker({
-  onSelect,
-}: {
-  onSelect: (context: { documentId: string; workspaceId: string; elementId: string; server: string }) => void;
-}) {
-  const server = "https://cad.onshape.com";
-  const [query, setQuery] = useState("");
-  const [status, setStatus] = useState("idle");
-  const [documents, setDocuments] = useState<PickerDocument[]>([]);
-  const [selectedDocument, setSelectedDocument] = useState<PickerDocument | null>(null);
-  const [elements, setElements] = useState<PickerElement[]>([]);
-
-  async function searchDocuments() {
-    setStatus("loading documents...");
-    const res = await fetchOnshapeDocuments({ server, q: query || undefined });
-    if (!res.ok) {
-      setStatus(
-        res.status === 401
-          ? "Not connected to Onshape yet -- open the main FuzzyCAD Panel tab once to connect, then come back."
-          : `Failed to load documents (HTTP ${res.status})`,
-      );
-      setDocuments([]);
-      return;
-    }
-    setDocuments(parsePickerDocuments(res.data));
-    setStatus("ready");
-  }
-
-  // Effect-local copy of the initial load rather than calling the
-  // render-scope searchDocuments() above -- keeps this a plain "fetch
-  // once on mount" effect matching every other loader in this file,
-  // instead of invoking an externally-defined function whose own
-  // setState calls the linter can't statically follow.
-  useEffect(() => {
-    let cancelled = false;
-
-    async function loadInitialDocuments() {
-      setStatus("loading documents...");
-      const res = await fetchOnshapeDocuments({ server, q: undefined });
-      if (cancelled) return;
-      if (!res.ok) {
-        setStatus(
-          res.status === 401
-            ? "Not connected to Onshape yet -- open the main FuzzyCAD Panel tab once to connect, then come back."
-            : `Failed to load documents (HTTP ${res.status})`,
-        );
-        setDocuments([]);
-        return;
-      }
-      setDocuments(parsePickerDocuments(res.data));
-      setStatus("ready");
-    }
-
-    void loadInitialDocuments();
-
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  async function pickDocument(doc: PickerDocument) {
-    if (!doc.workspaceId) {
-      setStatus(`"${doc.name}" has no default workspace to read from.`);
-      return;
-    }
-    setSelectedDocument(doc);
-    setStatus("loading Part Studios...");
-    const res = await fetchOnshapeElements({ documentId: doc.id, workspaceId: doc.workspaceId, server });
-    if (!res.ok) {
-      setStatus(`Failed to load elements (HTTP ${res.status})`);
-      setElements([]);
-      return;
-    }
-    const partStudios = parsePickerElements(res.data);
-    setElements(partStudios);
-    setStatus(partStudios.length === 0 ? "This document has no Part Studios." : "ready");
-  }
-
-  if (selectedDocument) {
-    return (
-      <div>
-        <button
-          type="button"
-          className={styles.backButton}
-          onClick={() => {
-            setSelectedDocument(null);
-            setElements([]);
-          }}
-        >
-          &larr; Back to documents
-        </button>
-        <div className={styles.header}>
-          <h1 className={styles.title}>{selectedDocument.name}</h1>
-          <p className={styles.status}>status: {status}</p>
-        </div>
-        <div className={styles.list}>
-          {elements.map((element) => (
-            <div
-              key={element.id}
-              className={styles.featureCard}
-              style={{ cursor: "pointer" }}
-              onClick={() =>
-                onSelect({
-                  documentId: selectedDocument.id,
-                  workspaceId: selectedDocument.workspaceId!,
-                  elementId: element.id,
-                  server,
-                })
-              }
-            >
-              <div className={styles.featureHeader}>
-                <span className={styles.cardTitle}>{element.name}</span>
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div>
-      <div className={styles.header}>
-        <h1 className={styles.title}>Pick a document</h1>
-        <p className={styles.status}>status: {status}</p>
-      </div>
-      <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
-        <input
-          type="text"
-          className={styles.valueInput}
-          placeholder="Search documents..."
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") void searchDocuments();
-          }}
-        />
-        <button type="button" className={styles.secondaryButton} onClick={() => void searchDocuments()}>
-          Search
-        </button>
-      </div>
-      <div className={styles.list}>
-        {documents.map((doc) => (
-          <div
-            key={doc.id}
-            className={styles.featureCard}
-            style={{ cursor: "pointer" }}
-            onClick={() => void pickDocument(doc)}
-          >
-            <div className={styles.featureHeader}>
-              <span className={styles.cardTitle}>{doc.name}</span>
-            </div>
-          </div>
-        ))}
       </div>
     </div>
   );

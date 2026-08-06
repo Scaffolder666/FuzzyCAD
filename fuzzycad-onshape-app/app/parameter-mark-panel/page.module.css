@@ -22,17 +22,6 @@
   font-size: 12px;
 }
 
-.switchDocumentButton {
-  border: none;
-  background: none;
-  color: #3d5afe;
-  font-size: 11.5px;
-  font-weight: 600;
-  cursor: pointer;
-  padding: 0;
-  margin-top: 4px;
-}
-
 .emptyState {
   color: #666;
   padding: 24px 8px;
@@ -90,6 +79,16 @@
   text-transform: uppercase;
   letter-spacing: 0.02em;
   color: #999;
+}
+
+.showInactiveButton {
+  border: none;
+  background: none;
+  color: #3d5afe;
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 4px 12px;
 }
 
 .paramRow {

@@ -207,20 +207,6 @@ export async function fetchOnshapeElements(
   return res.json() as Promise<ApiResult>;
 }
 
-/** Lets the right panel pick its own document instead of depending on the main tab -- see documents/route.ts. */
-export async function fetchOnshapeDocuments(query: {
-  server: string;
-  q?: string;
-}): Promise<ApiResult> {
-  const params = new URLSearchParams({ server: query.server });
-  if (query.q) {
-    params.set("q", query.q);
-  }
-  const res = await fetch(`/api/onshape/documents?${params.toString()}`);
-
-  return res.json() as Promise<ApiResult>;
-}
-
 export async function fetchOnshapeAssembly(
   query: AssemblyQuery,
 ): Promise<ApiResult> {
@@ -298,19 +284,6 @@ export async function fetchFeatureCreatedPartIds(
   const res = await fetch(`/api/onshape/partstudio-feature-created-parts?${params.toString()}`);
 
   return res.json() as Promise<{ ok: boolean; status: number; partIds: string[] }>;
-}
-
-/** Which face(s) a given feature currently produced -- for highlighting just that feature's contribution instead of the whole part. Same route, entityType=FACE. */
-export async function fetchFeatureCreatedFaceIds(
-  query: PartStudioQuery,
-  featureId: string,
-): Promise<{ ok: boolean; status: number; entityIds: string[] }> {
-  const params = makePartStudioParams(query);
-  params.set("featureId", featureId);
-  params.set("entityType", "FACE");
-  const res = await fetch(`/api/onshape/partstudio-feature-created-parts?${params.toString()}`);
-
-  return res.json() as Promise<{ ok: boolean; status: number; entityIds: string[] }>;
 }
 
 /**
