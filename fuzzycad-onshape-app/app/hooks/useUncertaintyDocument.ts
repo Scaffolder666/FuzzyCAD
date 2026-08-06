@@ -462,6 +462,7 @@ export function useUncertaintyDocument(source: FuzzyCADUncertaintySource) {
   function addExtrudeMark(input: {
     pathKey: string;
     facePointWorld: [number, number, number];
+    faceIndex?: number;
     offsetMeters: number;
     previousValueLabel: string;
     proposedValueLabel: string;

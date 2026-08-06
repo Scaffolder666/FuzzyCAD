@@ -4,6 +4,8 @@ import type { AxialStretchObjectSummary } from "../operations/axialStretchTypes"
 export type StepSolidMesh = {
   positions: Float32Array;
   indices: Uint32Array;
+  /** One entry per triangle — see occtWorker.ts's tessellateShape for the exact face-index convention. */
+  faceIds: Uint32Array;
 };
 
 export type PartIdBoundSolid = {

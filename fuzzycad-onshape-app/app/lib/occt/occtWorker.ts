@@ -63,6 +63,14 @@ type OcctWorkerRequest =
       type: "extrudeFace";
       handle: number;
       facePointWorld: [number, number, number];
+      /**
+       * Exact face-explorer index (see tessellateShape's per-triangle
+       * faceIds output), from a raycast against a face-tagged overlay
+       * mesh. When present, resolution is exact (getFaceByIndex) and
+       * facePointWorld is used only as a display fallback; when absent,
+       * falls back to resolveNearestFace's distance guess.
+       */
+      faceIndex?: number;
       offsetMm: number;
       commit: boolean;
     }
@@ -72,6 +80,14 @@ type OcctWorkerRequest =
 type TessellatedShape = {
   positions: Float32Array;
   indices: Uint32Array;
+  /**
+   * One entry per triangle (indices.length / 3), valued by that
+   * triangle's source face's sequential TopExp_Explorer(TopAbs_FACE)
+   * index — the same order getFaceByIndex counts in, so a raycast hit's
+   * intersection.faceIndex (three.js's per-triangle index) can be looked
+   * up here to resolve the exact OCCT face, no distance-guessing.
+   */
+  faceIds: Uint32Array;
 };
 
 type OcctWorkerResponse =
@@ -327,12 +343,15 @@ function tessellateShape(oc: OpenCascadeInstance, shape: TopoDS_Shape): Tessella
 
   const positions: number[] = [];
   const indices: number[] = [];
+  const faceIds: number[] = [];
 
   const explorer = new oc.TopExp_Explorer_2(
     shape,
     oc.TopAbs_ShapeEnum.TopAbs_FACE,
     oc.TopAbs_ShapeEnum.TopAbs_SHAPE,
   );
+
+  let faceIndex = 0;
 
   while (explorer.More()) {
     const face = oc.TopoDS.Face_1(explorer.Current());
@@ -357,10 +376,12 @@ function tessellateShape(oc: OpenCascadeInstance, shape: TopoDS_Shape): Tessella
         const n2 = triangle.Value(2) - 1 + vertexOffset;
         const n3 = triangle.Value(3) - 1 + vertexOffset;
         indices.push(n1, n2, n3);
+        faceIds.push(faceIndex);
       }
     }
 
     location.delete();
+    faceIndex += 1;
     explorer.Next();
   }
 
@@ -370,7 +391,36 @@ function tessellateShape(oc: OpenCascadeInstance, shape: TopoDS_Shape): Tessella
   return {
     positions: Float32Array.from(positions),
     indices: Uint32Array.from(indices),
+    faceIds: Uint32Array.from(faceIds),
   };
+}
+
+/** Same face-explorer order tessellateShape's faceIds counts in — the exact-selection counterpart to resolveNearestFace's guess. */
+function getFaceByIndex(
+  oc: OpenCascadeInstance,
+  shape: TopoDS_Shape,
+  faceIndex: number,
+): TopoDS_Shape | null {
+  const explorer = new oc.TopExp_Explorer_2(
+    shape,
+    oc.TopAbs_ShapeEnum.TopAbs_FACE,
+    oc.TopAbs_ShapeEnum.TopAbs_SHAPE,
+  );
+
+  let current = 0;
+  let found: TopoDS_Shape | null = null;
+
+  while (explorer.More()) {
+    if (current === faceIndex) {
+      found = oc.TopoDS.Face_1(explorer.Current());
+      break;
+    }
+    current += 1;
+    explorer.Next();
+  }
+
+  explorer.delete();
+  return found;
 }
 
 /**
@@ -543,6 +593,33 @@ function resolveNearestEdge(
  * panels/plates this tool is meant for; a curved face's "normal" here is
  * just whatever that first corner happens to give.
  */
+/** A face's boundary vertex points, in explorer order — shared by resolveNearestFace's per-face scan and getFaceNormal's exact lookup. */
+function collectFaceVertexPoints(
+  oc: OpenCascadeInstance,
+  face: TopoDS_Shape,
+): [number, number, number][] {
+  const points: [number, number, number][] = [];
+  const vertexExplorer = new oc.TopExp_Explorer_2(
+    face,
+    oc.TopAbs_ShapeEnum.TopAbs_VERTEX,
+    oc.TopAbs_ShapeEnum.TopAbs_SHAPE,
+  );
+  while (vertexExplorer.More()) {
+    const vertex = oc.TopoDS.Vertex_1(vertexExplorer.Current());
+    const pnt = oc.BRep_Tool.Pnt(vertex);
+    points.push([pnt.X(), pnt.Y(), pnt.Z()]);
+    vertexExplorer.Next();
+  }
+  vertexExplorer.delete();
+  return points;
+}
+
+/** Exact counterpart to resolveNearestFace's per-face normal guess, for a face already resolved by getFaceByIndex. */
+function getFaceNormal(oc: OpenCascadeInstance, face: TopoDS_Shape): [number, number, number] {
+  const points = collectFaceVertexPoints(oc, face);
+  return computeNormalFromPoints(points) ?? [0, 0, 1];
+}
+
 function resolveNearestFace(
   oc: OpenCascadeInstance,
   shape: TopoDS_Shape,
@@ -561,20 +638,7 @@ function resolveNearestFace(
 
   while (faceExplorer.More()) {
     const face = oc.TopoDS.Face_1(faceExplorer.Current());
-
-    const points: [number, number, number][] = [];
-    const vertexExplorer = new oc.TopExp_Explorer_2(
-      face,
-      oc.TopAbs_ShapeEnum.TopAbs_VERTEX,
-      oc.TopAbs_ShapeEnum.TopAbs_SHAPE,
-    );
-    while (vertexExplorer.More()) {
-      const vertex = oc.TopoDS.Vertex_1(vertexExplorer.Current());
-      const pnt = oc.BRep_Tool.Pnt(vertex);
-      points.push([pnt.X(), pnt.Y(), pnt.Z()]);
-      vertexExplorer.Next();
-    }
-    vertexExplorer.delete();
+    const points = collectFaceVertexPoints(oc, face);
 
     if (points.length > 0) {
       let sumX = 0;
@@ -841,7 +905,7 @@ self.onmessage = async (event: MessageEvent<OcctWorkerRequest>) => {
       const shape = stepBytesToShape(oc, event.data.buffer);
       const mesh = tessellateShape(oc, shape);
       const response: OcctWorkerResponse = { id, type: "loadStepResult", mesh };
-      self.postMessage(response, [mesh.positions.buffer, mesh.indices.buffer]);
+      self.postMessage(response, [mesh.positions.buffer, mesh.indices.buffer, mesh.faceIds.buffer]);
       return;
     }
 
@@ -852,7 +916,7 @@ self.onmessage = async (event: MessageEvent<OcctWorkerRequest>) => {
       const response: OcctWorkerResponse = { id, type: "loadStepSolidsResult", meshes };
       self.postMessage(
         response,
-        meshes.flatMap((m) => [m.positions.buffer, m.indices.buffer]),
+        meshes.flatMap((m) => [m.positions.buffer, m.indices.buffer, m.faceIds.buffer]),
       );
       return;
     }
@@ -872,7 +936,7 @@ self.onmessage = async (event: MessageEvent<OcctWorkerRequest>) => {
       const response: OcctWorkerResponse = { id, type: "loadAssemblySolidsResult", solids };
       self.postMessage(
         response,
-        solids.flatMap((s) => [s.mesh.positions.buffer, s.mesh.indices.buffer]),
+        solids.flatMap((s) => [s.mesh.positions.buffer, s.mesh.indices.buffer, s.mesh.faceIds.buffer]),
       );
       return;
     }
@@ -895,7 +959,7 @@ self.onmessage = async (event: MessageEvent<OcctWorkerRequest>) => {
 
       const mesh = tessellateShape(oc, transformed);
       const response: OcctWorkerResponse = { id, type: "translateSolidResult", handle, mesh, valid };
-      self.postMessage(response, [mesh.positions.buffer, mesh.indices.buffer]);
+      self.postMessage(response, [mesh.positions.buffer, mesh.indices.buffer, mesh.faceIds.buffer]);
       return;
     }
 
@@ -917,7 +981,7 @@ self.onmessage = async (event: MessageEvent<OcctWorkerRequest>) => {
 
       const mesh = tessellateShape(oc, transformed);
       const response: OcctWorkerResponse = { id, type: "scaleSolidResult", handle, mesh, valid };
-      self.postMessage(response, [mesh.positions.buffer, mesh.indices.buffer]);
+      self.postMessage(response, [mesh.positions.buffer, mesh.indices.buffer, mesh.faceIds.buffer]);
       return;
     }
 
@@ -939,7 +1003,7 @@ self.onmessage = async (event: MessageEvent<OcctWorkerRequest>) => {
 
       const mesh = tessellateShape(oc, transformed);
       const response: OcctWorkerResponse = { id, type: "rotateSolidResult", handle, mesh, valid };
-      self.postMessage(response, [mesh.positions.buffer, mesh.indices.buffer]);
+      self.postMessage(response, [mesh.positions.buffer, mesh.indices.buffer, mesh.faceIds.buffer]);
       return;
     }
 
@@ -964,7 +1028,7 @@ self.onmessage = async (event: MessageEvent<OcctWorkerRequest>) => {
           valid: true,
           resolved: false,
         };
-        self.postMessage(response, [mesh.positions.buffer, mesh.indices.buffer]);
+        self.postMessage(response, [mesh.positions.buffer, mesh.indices.buffer, mesh.faceIds.buffer]);
         return;
       }
 
@@ -984,7 +1048,7 @@ self.onmessage = async (event: MessageEvent<OcctWorkerRequest>) => {
         valid,
         resolved: true,
       };
-      self.postMessage(response, [mesh.positions.buffer, mesh.indices.buffer]);
+      self.postMessage(response, [mesh.positions.buffer, mesh.indices.buffer, mesh.faceIds.buffer]);
       return;
     }
 
@@ -1021,20 +1085,23 @@ self.onmessage = async (event: MessageEvent<OcctWorkerRequest>) => {
         mesh,
         valid,
       };
-      self.postMessage(response, [mesh.positions.buffer, mesh.indices.buffer]);
+      self.postMessage(response, [mesh.positions.buffer, mesh.indices.buffer, mesh.faceIds.buffer]);
       return;
     }
 
     if (type === "extrudeFace") {
       const oc = await loadOcct();
-      const { handle, facePointWorld, offsetMm, commit } = event.data;
+      const { handle, facePointWorld, faceIndex, offsetMm, commit } = event.data;
       const shape = shapeStore.get(handle);
 
       if (!shape) {
         throw new Error(`extrudeFace: unknown handle ${handle}`);
       }
 
-      const resolved = resolveNearestFace(oc, shape, facePointWorld);
+      const exactFace = faceIndex !== undefined ? getFaceByIndex(oc, shape, faceIndex) : null;
+      const resolved = exactFace
+        ? { face: exactFace, normal: getFaceNormal(oc, exactFace) }
+        : resolveNearestFace(oc, shape, facePointWorld);
 
       if (!resolved) {
         const mesh = tessellateShape(oc, shape);
@@ -1046,7 +1113,7 @@ self.onmessage = async (event: MessageEvent<OcctWorkerRequest>) => {
           valid: true,
           resolved: false,
         };
-        self.postMessage(response, [mesh.positions.buffer, mesh.indices.buffer]);
+        self.postMessage(response, [mesh.positions.buffer, mesh.indices.buffer, mesh.faceIds.buffer]);
         return;
       }
 
@@ -1066,7 +1133,7 @@ self.onmessage = async (event: MessageEvent<OcctWorkerRequest>) => {
         valid,
         resolved: true,
       };
-      self.postMessage(response, [mesh.positions.buffer, mesh.indices.buffer]);
+      self.postMessage(response, [mesh.positions.buffer, mesh.indices.buffer, mesh.faceIds.buffer]);
       return;
     }
 

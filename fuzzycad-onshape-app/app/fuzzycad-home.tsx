@@ -353,13 +353,19 @@ export default function FuzzyCADHome() {
   const [filletKind, setFilletKind] = useState<FilletKind>("fillet");
   const [filletAmountMm, setFilletAmountMm] = useState(2);
 
-  // "Extrude" tool: same one-click-captures-pathKey-and-point shape as
-  // Fillet, but push/pull a face instead of rounding an edge.
+  // "Extrude" tool: a first click targets a part (same shape as Fillet's
+  // pick), then a second stage — hovering/clicking the exact face on the
+  // viewer's FacePickerOverlay (real OCCT face-id raycast, not a
+  // nearest-point guess) — sets extrudePickFaceIndex and only then shows
+  // the offset handle.
   const [extrudePickPathKey, setExtrudePickPathKey] = useState<string | null>(
     null,
   );
   const [extrudePickFacePointWorld, setExtrudePickFacePointWorld] = useState<
     [number, number, number] | null
+  >(null);
+  const [extrudePickFaceIndex, setExtrudePickFaceIndex] = useState<
+    number | null
   >(null);
   const [extrudeOffsetMm, setExtrudeOffsetMm] = useState(2);
 
@@ -1512,34 +1518,49 @@ export default function FuzzyCADHome() {
     }
   }
 
-  /** Click routing while the Extrude tool is active: a single click on a
-   * part captures both its pathKey and the clicked world point (near the
-   * face to push/pull) in one gesture, same shape as Fillet's pick. */
+  /** Click routing while the Extrude tool is active, stage 1: a click on a
+   * part targets it — the viewer then renders that part's FacePickerOverlay
+   * (exact OCCT face-id raycast) for stage 2's exact face pick, no facePoint
+   * guessing involved. */
   function handleExtrudePick(pathKey: string | null) {
     if (!pathKey || extrudePickPathKey) {
       return;
     }
 
-    const worldPoint = lastWorldPointRef.current;
+    setHighlightedPathKey(pathKey);
+    setExtrudePickPathKey(pathKey);
+    setExtrudePickFacePointWorld(null);
+    setExtrudePickFaceIndex(null);
+    setExtrudeOffsetMm(2);
+  }
 
-    if (!worldPoint) {
+  /** Stage 2: fires from the viewer's FacePickerOverlay on an exact face click — no distance-guessing, faceIndex comes straight from the raycast intersection. */
+  function handleExtrudeFacePick(
+    faceIndex: number,
+    pointWorld: { x: number; y: number; z: number },
+  ) {
+    if (!extrudePickPathKey) {
       return;
     }
 
-    setHighlightedPathKey(pathKey);
-    setExtrudePickPathKey(pathKey);
-    setExtrudePickFacePointWorld(worldPoint);
+    setExtrudePickFacePointWorld([pointWorld.x, pointWorld.y, pointWorld.z]);
+    setExtrudePickFaceIndex(faceIndex);
     setExtrudeOffsetMm(2);
   }
 
   function applyExtrude() {
-    if (!extrudePickPathKey || !extrudePickFacePointWorld) {
+    if (
+      !extrudePickPathKey ||
+      !extrudePickFacePointWorld ||
+      extrudePickFaceIndex === null
+    ) {
       return;
     }
 
     addExtrudeMark({
       pathKey: extrudePickPathKey,
       facePointWorld: extrudePickFacePointWorld,
+      faceIndex: extrudePickFaceIndex,
       offsetMeters: extrudeOffsetMm / 1000,
       previousValueLabel: "current face",
       proposedValueLabel: `${extrudeOffsetMm >= 0 ? "push" : "pull"} ${Math.abs(extrudeOffsetMm).toFixed(1)}mm`,
@@ -1547,11 +1568,13 @@ export default function FuzzyCADHome() {
 
     setExtrudePickPathKey(null);
     setExtrudePickFacePointWorld(null);
+    setExtrudePickFaceIndex(null);
   }
 
   function cancelExtrude() {
     setExtrudePickPathKey(null);
     setExtrudePickFacePointWorld(null);
+    setExtrudePickFaceIndex(null);
     setActiveTool("select");
   }
 
@@ -2275,7 +2298,7 @@ async function pushAcceptedChangesToOnshape() {
       const offsetStep = preview.offsetMeters * THREE_M_TO_STEP_MM;
 
       await applyToTargets([preview.pathKey], async (handle) => {
-        const result = await client.extrudeFace(handle, facePointStep, offsetStep, true);
+        const result = await client.extrudeFace(handle, facePointStep, offsetStep, true, preview.faceIndex);
         if (!result.resolved) {
           blocked.push(`${preview.pathKey}: couldn't find a face near the marked point`);
         } else if (!result.valid) {
@@ -2642,13 +2665,17 @@ if (result.ok && result.state) {
           onFilletConfirm={applyFillet}
           onFilletCancel={cancelFillet}
           extrudePick={
-            extrudePickPathKey && extrudePickFacePointWorld
+            extrudePickPathKey
               ? {
                   pathKey: extrudePickPathKey,
-                  facePointWorld: extrudePickFacePointWorld,
+                  facePointWorld: extrudePickFacePointWorld ?? [0, 0, 0],
+                  faceIndex: extrudePickFaceIndex,
                   offsetMm: extrudeOffsetMm,
                 }
               : null
+          }
+          onPickExtrudeFace={(faceIndex, pointWorld) =>
+            handleExtrudeFacePick(faceIndex, pointWorld)
           }
           onExtrudeOffsetChange={setExtrudeOffsetMm}
           onExtrudeConfirm={applyExtrude}
@@ -2928,7 +2955,17 @@ if (result.ok && result.state) {
         {activeTool === "extrude" && !extrudePickPathKey ? (
           <div className={styles.manipulationReadout}>
             <span className={styles.manipulationValue}>
-              Click near a face to mark it
+              Click a part to target it for push/pull
+            </span>
+          </div>
+        ) : null}
+
+        {activeTool === "extrude" &&
+        extrudePickPathKey &&
+        extrudePickFaceIndex === null ? (
+          <div className={styles.manipulationReadout}>
+            <span className={styles.manipulationValue}>
+              Hover a face to highlight it, click to select
             </span>
           </div>
         ) : null}

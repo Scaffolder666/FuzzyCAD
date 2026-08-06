@@ -247,6 +247,15 @@ export type BooleanUncertaintyAnnotation = BaseAnnotationFields & {
 export type ExtrudeUncertaintyAnnotation = BaseAnnotationFields & {
   type: "extrude";
   facePointWorld: [number, number, number];
+  /**
+   * Exact OCCT face-explorer index the mark was picked against (see
+   * occtWorker.ts's tessellateShape/getFaceByIndex), from clicking a
+   * face on the raycastable FacePickerOverlay rather than guessing
+   * nearest-to-point. Optional so older saved marks (picked before this
+   * field existed) still degrade gracefully to facePointWorld's
+   * distance-guess resolution.
+   */
+  faceIndex?: number;
   offsetMeters: number;
   previousValueLabel: string;
   proposedValueLabel: string;
@@ -1795,6 +1804,7 @@ function makeExtrudeAnnotationId(pathKey: string) {
 function createExtrudeAnnotation(input: {
   pathKey: string;
   facePointWorld: [number, number, number];
+  faceIndex?: number;
   offsetMeters: number;
   previousValueLabel: string;
   proposedValueLabel: string;
@@ -1820,6 +1830,7 @@ function createExtrudeAnnotation(input: {
       scope: "single",
     },
     facePointWorld: input.facePointWorld,
+    faceIndex: input.faceIndex,
     offsetMeters: input.offsetMeters,
     previousValueLabel: input.previousValueLabel,
     proposedValueLabel: input.proposedValueLabel,
@@ -1838,6 +1849,7 @@ export function addExtrude(
   input: {
     pathKey: string;
     facePointWorld: [number, number, number];
+    faceIndex?: number;
     offsetMeters: number;
     previousValueLabel: string;
     proposedValueLabel: string;
@@ -1860,6 +1872,7 @@ export type ExtrudePreview = {
   id: string;
   pathKey: string;
   facePointWorld: [number, number, number];
+  faceIndex?: number;
   offsetMeters: number;
   status: "open" | "resolved";
 };
@@ -1877,6 +1890,7 @@ export function toExtrudePreviews(
       id: annotation.id,
       pathKey: annotation.target.referencePathKey,
       facePointWorld: annotation.facePointWorld,
+      faceIndex: annotation.faceIndex,
       offsetMeters: annotation.offsetMeters,
       status: annotation.status,
     }));

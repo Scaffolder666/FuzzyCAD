@@ -119,7 +119,7 @@ class OcctClient {
    * transform a specific solid and keep the result around for the next
    * preview/commit — replaces whatever assembly was previously loaded.
    */
-  async loadAssemblySolids(buffer: ArrayBuffer): Promise<{ handle: number; mesh: { positions: Float32Array; indices: Uint32Array } }[]> {
+  async loadAssemblySolids(buffer: ArrayBuffer): Promise<{ handle: number; mesh: { positions: Float32Array; indices: Uint32Array; faceIds: Uint32Array } }[]> {
     await this.ready();
     const response = await this.send({ type: "loadAssemblySolids", buffer }, [buffer]);
     if (response.type !== "loadAssemblySolidsResult") {
@@ -218,19 +218,23 @@ class OcctClient {
   /**
    * commit=false: preview only, always from the last committed state.
    * commit=true: replaces the stored solid. facePointWorld is a
-   * world-space point near the face to push/pull — resolved to the
-   * actual nearest face worker-side (see occtWorker.ts's
-   * resolveNearestFace); `resolved` reports whether one was found.
-   * offsetMm >= 0 grows material outward, < 0 carves it away.
+   * world-space point near the face to push/pull, used as a fallback
+   * only; when faceIndex is given (from an exact raycast against a
+   * face-tagged overlay mesh — see FacePickerOverlay.tsx), resolution is
+   * exact (occtWorker.ts's getFaceByIndex) and facePointWorld is
+   * ignored. Without faceIndex, falls back to resolveNearestFace's
+   * distance guess; `resolved` reports whether a face was found either
+   * way. offsetMm >= 0 grows material outward, < 0 carves it away.
    */
   async extrudeFace(
     handle: number,
     facePointWorld: [number, number, number],
     offsetMm: number,
     commit: boolean,
-  ): Promise<{ mesh: { positions: Float32Array; indices: Uint32Array }; valid: boolean; resolved: boolean }> {
+    faceIndex?: number,
+  ): Promise<{ mesh: { positions: Float32Array; indices: Uint32Array; faceIds: Uint32Array }; valid: boolean; resolved: boolean }> {
     await this.ready();
-    const response = await this.send({ type: "extrudeFace", handle, facePointWorld, offsetMm, commit });
+    const response = await this.send({ type: "extrudeFace", handle, facePointWorld, faceIndex, offsetMm, commit });
     if (response.type !== "extrudeFaceResult") {
       throw new Error(`Unexpected response type: ${response.type}`);
     }

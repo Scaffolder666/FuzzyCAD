@@ -3,6 +3,7 @@
 import { useCallback, useRef, useState } from "react";
 import { getOcctClient } from "./occtClient";
 import { bindSolidsToPartIdsByBoundingBox } from "./stepSolidBinding";
+import type { StepSolidMesh } from "./stepSolidBinding";
 import { fetchOnshapePartStudioStep } from "../onshapeClient";
 import type { AxialStretchObjectSummary } from "../operations/axialStretchTypes";
 
@@ -38,6 +39,14 @@ export function useBrepGhostSource() {
   const [status, setStatus] = useState<BrepGhostSourceStatus>("idle");
   const [error, setError] = useState<string | null>(null);
   const handlesRef = useRef<Map<string, number>>(new Map());
+  /**
+   * The face-tagged tessellation each solid bound to, retained (not just
+   * the handle) so a targeted part's mesh can be rendered as a raycastable,
+   * per-face-highlightable overlay for exact face picking (see
+   * FacePickerOverlay.tsx) instead of guessing the nearest face to a
+   * clicked point.
+   */
+  const meshesRef = useRef<Map<string, StepSolidMesh>>(new Map());
   const loadingPromiseRef = useRef<Promise<void> | null>(null);
   const statusRef = useRef<BrepGhostSourceStatus>("idle");
 
@@ -77,10 +86,13 @@ export function useBrepGhostSource() {
           const { bound } = bindSolidsToPartIdsByBoundingBox(solids, objectSummaries);
 
           const handles = new Map<string, number>();
+          const meshes = new Map<string, StepSolidMesh>();
           for (const entry of bound) {
             handles.set(entry.partId, entry.handle);
+            meshes.set(entry.partId, entry.mesh);
           }
           handlesRef.current = handles;
+          meshesRef.current = meshes;
 
           statusRef.current = "ready";
           setStatus("ready");
@@ -101,7 +113,12 @@ export function useBrepGhostSource() {
 
   const getHandle = useCallback((pathKey: string): number | null => handlesRef.current.get(pathKey) ?? null, []);
 
-  return { status, error, ensureLoaded, getHandle };
+  const getMesh = useCallback(
+    (pathKey: string): StepSolidMesh | null => meshesRef.current.get(pathKey) ?? null,
+    [],
+  );
+
+  return { status, error, ensureLoaded, getHandle, getMesh };
 }
 
 export type BrepGhostSource = ReturnType<typeof useBrepGhostSource>;

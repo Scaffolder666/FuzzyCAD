@@ -60,6 +60,7 @@ import ScaleHandle from "./viewer/ScaleHandle";
 import RotateHandle from "./viewer/RotateHandle";
 import FilletHandle from "./viewer/FilletHandle";
 import ExtrudeHandle from "./viewer/ExtrudeHandle";
+import FacePickerOverlay from "./viewer/FacePickerOverlay";
 import RotateProtractor from "./viewer/RotateProtractor";
 import BendControlPoints from "./viewer/BendControlPoints";
 import MoveRangeHandles from "./viewer/MoveRangeHandles";
@@ -248,6 +249,7 @@ export type ExtrudePreview = {
   id: string;
   pathKey: string;
   facePointWorld: [number, number, number];
+  faceIndex?: number;
   offsetMeters: number;
   status: "open" | "resolved";
 };
@@ -377,8 +379,20 @@ type FuzzyCADGeometryViewerProps = {
   filletPick?: { pathKey: string; edgePointWorld: [number, number, number]; kind: FilletKind; amountMm: number } | null;
   /** Every open (and resolved) fillet/chamfer mark, for a persistent B-rep ghost per mark — not just the one actively being adjusted. */
   filletPreviews?: FilletPreview[];
-  /** Pending face pick for the "Extrude" (push/pull) tool. Same no-live-preview shape as filletPick. */
-  extrudePick?: { pathKey: string; facePointWorld: [number, number, number]; offsetMm: number } | null;
+  /**
+   * Pending face pick for the "Extrude" (push/pull) tool. faceIndex is
+   * null while the part is targeted but no exact face has been clicked
+   * yet on the FacePickerOverlay (see below) — the offset handle only
+   * appears once it's set.
+   */
+  extrudePick?: {
+    pathKey: string;
+    facePointWorld: [number, number, number];
+    faceIndex: number | null;
+    offsetMm: number;
+  } | null;
+  /** Fires on every exact face click against the targeted part's FacePickerOverlay — finalizes extrudePick's faceIndex/facePointWorld. */
+  onPickExtrudeFace?: (faceIndex: number, pointWorld: THREE.Vector3, normalWorld: THREE.Vector3) => void;
   onExtrudeOffsetChange?: (offsetMm: number) => void;
   onExtrudeConfirm?: () => void;
   onExtrudeCancel?: () => void;
@@ -1155,6 +1169,7 @@ function Model({
   onFilletConfirm,
   onFilletCancel,
   extrudePick,
+  onPickExtrudeFace,
   onExtrudeOffsetChange,
   onExtrudeConfirm,
   onExtrudeCancel,
@@ -1225,8 +1240,20 @@ function Model({
   filletPick?: { pathKey: string; edgePointWorld: [number, number, number]; kind: FilletKind; amountMm: number } | null;
   /** Every open (and resolved) fillet/chamfer mark, for a persistent B-rep ghost per mark — not just the one actively being adjusted. */
   filletPreviews?: FilletPreview[];
-  /** Pending face pick for the "Extrude" (push/pull) tool. Same no-live-preview shape as filletPick. */
-  extrudePick?: { pathKey: string; facePointWorld: [number, number, number]; offsetMm: number } | null;
+  /**
+   * Pending face pick for the "Extrude" (push/pull) tool. faceIndex is
+   * null while the part is targeted but no exact face has been clicked
+   * yet on the FacePickerOverlay (see below) — the offset handle only
+   * appears once it's set.
+   */
+  extrudePick?: {
+    pathKey: string;
+    facePointWorld: [number, number, number];
+    faceIndex: number | null;
+    offsetMm: number;
+  } | null;
+  /** Fires on every exact face click against the targeted part's FacePickerOverlay — finalizes extrudePick's faceIndex/facePointWorld. */
+  onPickExtrudeFace?: (faceIndex: number, pointWorld: THREE.Vector3, normalWorld: THREE.Vector3) => void;
   onExtrudeOffsetChange?: (offsetMm: number) => void;
   onExtrudeConfirm?: () => void;
   onExtrudeCancel?: () => void;
@@ -2406,7 +2433,7 @@ function Model({
   const brepExtrudeDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
-    if (!extrudePick || !brepGhostSource) {
+    if (!extrudePick || extrudePick.faceIndex === null || !brepGhostSource) {
       if (brepExtrudeGhostRef.current) {
         scene.remove(brepExtrudeGhostRef.current);
         disposeBrepGhostMesh(brepExtrudeGhostRef.current);
@@ -2429,6 +2456,7 @@ function Model({
     const facePointMm = threeWorldPointToStep(
       new THREE.Vector3(...extrudePick.facePointWorld),
     );
+    const faceIndex = extrudePick.faceIndex;
 
     if (brepExtrudeDebounceRef.current) {
       clearTimeout(brepExtrudeDebounceRef.current);
@@ -2436,7 +2464,7 @@ function Model({
 
     brepExtrudeDebounceRef.current = setTimeout(() => {
       getOcctClient()
-        .extrudeFace(handle, facePointMm, extrudePick.offsetMm, false)
+        .extrudeFace(handle, facePointMm, extrudePick.offsetMm, false, faceIndex)
         .then(({ mesh, valid, resolved }) => {
           if (!resolved || !valid) {
             return;
@@ -2506,7 +2534,7 @@ function Model({
       const offsetMm = preview.offsetMeters / STEP_MM_TO_THREE_M;
 
       getOcctClient()
-        .extrudeFace(handle, facePointMm, offsetMm, false)
+        .extrudeFace(handle, facePointMm, offsetMm, false, preview.faceIndex)
         .then(({ mesh, valid, resolved }) => {
           if (cancelled || !resolved || !valid || extrudePreviewGhostsRef.current.has(preview.id)) {
             return;
@@ -2539,6 +2567,18 @@ function Model({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // The targeted part's face-tagged OCCT tessellation, for FacePickerOverlay
+  // to render as a raycastable hover/click surface once Extrude's first
+  // click has picked a part (extrudePick set) but before/while a specific
+  // face is chosen — replaces resolveNearestFace's point-and-guess with an
+  // exact, visible selection.
+  const extrudeFacePickerMesh = useMemo(() => {
+    if (!extrudePick || !brepGhostSource || brepGhostSource.status !== "ready") {
+      return null;
+    }
+    return brepGhostSource.getMesh(extrudePick.pathKey);
+  }, [extrudePick, brepGhostSource]);
 
   // Every OTHER saved-but-still-OPEN rotate proposal (not the one currently
   // being dragged) shows as a static ghost at its saved angle. Resolved
@@ -4239,7 +4279,18 @@ function Model({
         onPointerOver={handlePointerOver}
         onPointerOut={handlePointerOut}
         dispose={null}
-      />
+      >
+        {extrudeFacePickerMesh && extrudePick ? (
+          <FacePickerOverlay
+            key={extrudePick.pathKey}
+            mesh={extrudeFacePickerMesh}
+            selectedFaceIndex={extrudePick.faceIndex}
+            onPickFace={(faceIndex, pointWorld, normalWorld) =>
+              onPickExtrudeFace?.(faceIndex, pointWorld, normalWorld)
+            }
+          />
+        ) : null}
+      </primitive>
 
       {selectionBoxHelpers.map(({ key, helper }) => (
         // dispose={null}: the useEffect below already disposes this
@@ -4468,7 +4519,7 @@ function Model({
         />
       ) : null}
 
-      {extrudePick ? (
+      {extrudePick && extrudePick.faceIndex !== null ? (
         <ExtrudeHandle
           facePointWorld={new THREE.Vector3(...extrudePick.facePointWorld)}
           offsetMm={extrudePick.offsetMm}
@@ -4662,6 +4713,7 @@ export default function FuzzyCADGeometryViewer({
   onFilletConfirm,
   onFilletCancel,
   extrudePick,
+  onPickExtrudeFace,
   onExtrudeOffsetChange,
   onExtrudeConfirm,
   onExtrudeCancel,
@@ -4789,6 +4841,7 @@ export default function FuzzyCADGeometryViewer({
                   filletPick={filletPick}
                   filletPreviews={filletPreviews}
                   extrudePick={extrudePick}
+                  onPickExtrudeFace={onPickExtrudeFace}
                   onExtrudeOffsetChange={onExtrudeOffsetChange}
                   onExtrudeConfirm={onExtrudeConfirm}
                   onExtrudeCancel={onExtrudeCancel}
