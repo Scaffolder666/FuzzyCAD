@@ -2,6 +2,7 @@
 
 import { Suspense, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
+import { ONSHAPE_CONTEXT_STORAGE_KEY, readSharedOnshapeContext } from "../lib/onshapeRightPanelContext";
 
 /**
  * Verification page for the "Element right panel" application extension
@@ -11,16 +12,19 @@ import { useSearchParams } from "next/navigation";
  * https://cad.onshape.com/appstore/dev-portal), opened from inside a real
  * Part Studio.
  *
- * CONFIRMED LIVE (2026-08-06, real Onshape session, DevTools Network tab):
- * for this extension Onshape's initial iframe src carries only
- * companyId/sessionCompanyId/server/userId/clientId/locale/theme — NOT
- * documentId/workspaceId/elementId. Those are dynamic (change on tab
- * switch without reloading the panel), so they must arrive via postMessage
- * after the applicationInit handshake instead of being in the URL. This
- * page now sends applicationInit unconditionally on load (previously it
- * incorrectly gated that on documentId/workspaceId/elementId already being
- * present, which meant it never fired) and adopts whatever
- * documentId/workspaceId/elementId shows up in ANY inbound message.
+ * CONFIRMED LIVE (2026-08-06, real Onshape session, DevTools Network tab +
+ * repeated fresh reloads): Onshape's initial iframe src for this extension
+ * carries only companyId/sessionCompanyId/server/userId/clientId/locale/
+ * theme — NOT documentId/workspaceId/elementId — AND it never sends a
+ * single postMessage back either, not even in reply to applicationInit
+ * (confirmed by the total absence of "ignored: true" log entries, which
+ * would appear even for a wrong-origin reply). Contrary to the general
+ * client-messaging docs. So this page still sends applicationInit
+ * unconditionally on load and logs anything that arrives, but no longer
+ * depends on Onshape actually replying: see onshapeRightPanelContext.ts
+ * for the same-origin localStorage fallback (the main app, loaded as an
+ * Element tab, reliably has real context from its own URL and writes it
+ * there) that now seeds documentId/workspaceId/elementId instead.
  *
  * Exercises the full interaction loop by hand:
  * 1. applicationInit handshake on load.
@@ -98,6 +102,32 @@ function RightPanelDebugInner() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [server]);
+
+  // Same-origin fallback: the main app (Element tab) reliably knows the real
+  // context and writes it to localStorage -- see onshapeRightPanelContext.ts.
+  useEffect(() => {
+    function applyStoredContext() {
+      const stored = readSharedOnshapeContext();
+      if (!stored) {
+        return;
+      }
+      setDocumentId(stored.documentId);
+      setWorkspaceId(stored.workspaceId);
+      setElementId(stored.elementId);
+      appendLog("in", { source: "localStorage", ...stored });
+    }
+
+    applyStoredContext();
+
+    function handleStorage(event: StorageEvent) {
+      if (event.key === ONSHAPE_CONTEXT_STORAGE_KEY) {
+        applyStoredContext();
+      }
+    }
+
+    window.addEventListener("storage", handleStorage);
+    return () => window.removeEventListener("storage", handleStorage);
+  }, []);
 
   function requestOneFace() {
     const messageId = `req-${nextMessageIdRef.current++}`;

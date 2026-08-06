@@ -38,6 +38,7 @@ import {
   saveFuzzycadProject,
 } from "./lib/onshapeClient";
 import { getOcctClient } from "./lib/occt/occtClient";
+import { writeSharedOnshapeContext } from "./lib/onshapeRightPanelContext";
 import { bindSolidsToPartIdsByBoundingBox, threeWorldDirectionToStep, threeWorldPointToStep, threeWorldVectorToStep, THREE_M_TO_STEP_MM } from "./lib/occt/stepSolidBinding";
 import { getRotateAxisUnitVector } from "./components/viewer/rotatePreview";
 import type { OperationTool } from "./lib/operations/types";
@@ -435,6 +436,22 @@ export default function FuzzyCADHome() {
     }),
     [documentId, workspaceId, elementId, selectedPartStudioId, server],
   );
+
+  // Same-origin fallback for the "Element right panel" extension, which
+  // (confirmed live) never receives documentId/workspaceId/elementId from
+  // Onshape directly -- see onshapeRightPanelContext.ts.
+  useEffect(() => {
+    const partStudioElementId = selectedPartStudioId || elementId;
+    if (!documentId || !workspaceId || !partStudioElementId) {
+      return;
+    }
+    writeSharedOnshapeContext({
+      documentId,
+      workspaceId,
+      elementId: partStudioElementId,
+      server,
+    });
+  }, [documentId, workspaceId, elementId, selectedPartStudioId, server]);
 
   const {
     uncertaintyDocument,
