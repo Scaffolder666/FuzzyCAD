@@ -15,9 +15,11 @@ import {
   type FuzzyCADUncertaintyDocument,
 } from "../lib/uncertainty/document";
 import {
+  fetchOnshapeElements,
   loadFuzzycadProjectState,
   saveFuzzycadProjectState,
   updatePartStudioFeatureSuppressed,
+  type OnshapeElement,
 } from "../lib/onshapeClient";
 import {
   formatFeatureParameterValue,
@@ -106,6 +108,13 @@ function ParameterMarkPanelInner() {
   // this domain, main app or right panel alike, since cookies aren't
   // scoped per iframe). This lets it happen from the right panel too.
   const [notConnected, setNotConnected] = useState(false);
+  // The panel can't ask Onshape which Part Studio is active (confirmed
+  // live: this extension type gets no such signal), and the stored
+  // context can go stale if someone switches tabs in Onshape without
+  // reopening the main FuzzyCAD tab. Showing the resolved name here lets
+  // the person using the panel visually confirm it matches what's open,
+  // rather than silently trusting a possibly-stale elementId.
+  const [currentElementName, setCurrentElementName] = useState<string | null>(null);
   // Need input is the only tab with real content right now (see
   // RIGHT_PANEL_TABS) -- defaulting here instead of "overall" so the
   // panel doesn't open on an empty placeholder.
@@ -130,6 +139,37 @@ function ParameterMarkPanelInner() {
     window.addEventListener("storage", handleStorage);
     return () => window.removeEventListener("storage", handleStorage);
   }, []);
+
+  useEffect(() => {
+    if (!context) {
+      return;
+    }
+
+    let cancelled = false;
+
+    async function resolveElementName() {
+      const result = await fetchOnshapeElements({
+        documentId: context!.documentId,
+        workspaceId: context!.workspaceId,
+        server: context!.server,
+      });
+
+      if (cancelled || !Array.isArray(result.data)) {
+        return;
+      }
+
+      const match = (result.data as OnshapeElement[]).find(
+        (element) => element.id === context!.elementId,
+      );
+      setCurrentElementName(match?.name ?? null);
+    }
+
+    void resolveElementName();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [context]);
 
   useEffect(() => {
     if (!context) {
@@ -472,6 +512,10 @@ function ParameterMarkPanelInner() {
           </button>
         ))}
       </div>
+
+      <p className={styles.elementBadge}>
+        Part Studio: {currentElementName ?? "unknown (check Onshape)"}
+      </p>
 
       {notConnected ? (
         <div className={styles.header}>
