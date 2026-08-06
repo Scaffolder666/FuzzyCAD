@@ -11,16 +11,21 @@ export const runtime = "nodejs";
  * mechanism for that link, so this evaluates a tiny script through
  * POST /api/partstudios/d/{did}/w/{wid}/e/{eid}/featurescript and returns
  * the raw response for inspection. NOT wired into the production
- * parameter-mark-panel yet -- the exact response shape (and whether the
- * FeatureScript version pin below even executes against a live document)
- * needs a live capture first, same as every other "confirmed live" Onshape
- * wire format in this codebase. Disposable once that capture is done.
+ * parameter-mark-panel yet -- the exact response shape still needs a live
+ * capture first, same as every other "confirmed live" Onshape wire format
+ * in this codebase. Disposable once that capture is done.
+ *
+ * Confirmed live (2026-08-06): a leading "FeatureScript <version>;"
+ * pragma / import / "export" -- i.e. a normal top-level FeatureScript
+ * document -- gets a PARSE notice back ("extraneous input 'FeatureScript'
+ * ... expecting {..., 'function', ...}"). The accepted-token set in that
+ * error includes 'function', so this endpoint evaluates the "script"
+ * field as a single bare expression against the Part Studio's own
+ * already-loaded std-library context, not a standalone document -- just
+ * the function literal, no pragma/import/export.
  */
 function buildScript(featureId: string) {
-  return `FeatureScript 2166;
-import(path : "onshape/std/geometry.fs", version : "2166.0");
-
-export function(context is Context, queries) {
+  return `function(context is Context, queries) {
     return transientQueriesToStrings(qCreatedBy(makeId("${featureId}"), EntityType.BODY));
 }`;
 }
