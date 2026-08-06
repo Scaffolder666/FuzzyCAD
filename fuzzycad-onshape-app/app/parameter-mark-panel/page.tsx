@@ -50,6 +50,15 @@ type FeatureGroup = {
   parameters: ValueParameterEntry[];
 };
 
+type PartEntry = {
+  partId: string;
+  name: string | null;
+};
+
+type PartWithFeatures = PartEntry & {
+  featureGroups: FeatureGroup[];
+};
+
 type ParamState = "unmarked" | "needsInput" | "answered";
 
 function paramState(
@@ -68,18 +77,26 @@ function isValidUncertaintyDocument(value: unknown): value is FuzzyCADUncertaint
 }
 
 /**
- * Production "Element right panel" page: lists every numeric parameter
- * (BTMParameterQuantity -- depths, radii, thicknesses, etc; Boolean/Enum/
- * String structural flags are excluded as noise, not real design
- * decisions) across the active Part Studio's feature tree. Clicking
- * "Need input" on a row immediately marks it uncertain AND opens a detail
- * view for it -- no separate mark-then-fill step. The detail view lets
- * the marker optionally bound the answer to a range (rendered as a
- * slider once both ends are set) and hold a multi-reply comment thread,
- * separate from the single shared `comment` every other annotation type
- * has. Everything writes straight into the project's saved uncertainty
- * document (GET/modify/PUT via the existing fuzzycad-project-state API) --
- * no dependency on the main app's live React state.
+ * Production "Element right panel" page -- the "Need input" mode of the
+ * right panel (Proposed/Alternative are separate modes, not built here).
+ * Deliberately part-first, not parameter-first: a raw dump of every
+ * BTMParameterQuantity across the feature tree is the kind of thing
+ * someone would just open Onshape itself to see, not something worth
+ * duplicating for a marker who isn't a CAD user. So the top-level list is
+ * this Part Studio's actual parts; picking one highlights it (in
+ * Onshape's own already-visible viewport, alongside the rest of the
+ * model -- not via openFeatureDialog, which puts Onshape into its native
+ * edit-feature mode and dims everything else, destroying the context a
+ * marker needs) and reveals only the parameters belonging to features
+ * that produced that part. Clicking "Need input" on a row immediately
+ * marks it uncertain AND opens a detail view for it -- no separate
+ * mark-then-fill step. The detail view lets the marker optionally bound
+ * the answer to a range (rendered as a slider once both ends are set)
+ * and hold a multi-reply comment thread, separate from the single shared
+ * `comment` every other annotation type has. Everything writes straight
+ * into the project's saved uncertainty document (GET/modify/PUT via the
+ * existing fuzzycad-project-state API) -- no dependency on the main
+ * app's live React state.
  *
  * Gets documentId/workspaceId/elementId from localStorage, not Onshape's
  * postMessage system -- see onshapeRightPanelContext.ts for why (confirmed
@@ -94,7 +111,10 @@ function ParameterMarkPanelInner() {
   const [uncertaintyDoc, setUncertaintyDoc] = useState<FuzzyCADUncertaintyDocument | null>(null);
   const [selected, setSelected] = useState<ValueParameterEntry | null>(null);
   const [saving, setSaving] = useState(false);
-  const [affectedPartNames, setAffectedPartNames] = useState<Record<string, string[]>>({});
+  const [partList, setPartList] = useState<PartEntry[]>([]);
+  const [featurePartIds, setFeaturePartIds] = useState<Record<string, string[]>>({});
+  const [expandedPartId, setExpandedPartId] = useState<string | null>(null);
+  const nextHighlightIdRef = useRef(1);
 
   useEffect(() => {
     function applyStoredContext() {
@@ -170,22 +190,22 @@ function ParameterMarkPanelInner() {
   }, [context]);
 
   /**
-   * Which part(s) each feature card actually affects -- neither the
-   * Features API nor the Part List API links featureId to partId, so
-   * this resolves it via qCreatedBy() (partstudio-feature-created-parts)
-   * per unique feature, then labels the ids using the Part List's names.
-   * Runs once parameters load rather than inside loadEverything so a
-   * slow/failed lookup here doesn't block the parameter list itself from
-   * showing.
+   * The part list this panel is actually organized around, plus which
+   * part(s) each feature produced -- neither the Features API nor the
+   * Part List API links featureId to partId on its own, so the latter is
+   * resolved via qCreatedBy() (partstudio-feature-created-parts) per
+   * unique feature. Runs once parameters load rather than inside
+   * loadEverything so a slow/failed lookup here doesn't block the
+   * parameter list itself from being fetched.
    */
   useEffect(() => {
-    if (!context || !parameters || parameters.length === 0) {
+    if (!context || !parameters) {
       return;
     }
 
     let cancelled = false;
 
-    async function loadAffectedParts() {
+    async function loadPartMapping() {
       const query = {
         documentId: context!.documentId,
         workspaceId: context!.workspaceId,
@@ -202,28 +222,27 @@ function ParameterMarkPanelInner() {
 
       if (cancelled) return;
 
-      const partNameById = new Map<string, string>();
       const rawParts = Array.isArray(partsRes?.data) ? (partsRes.data as unknown[]) : [];
+      const parsedParts: PartEntry[] = [];
       for (const entry of rawParts) {
         if (typeof entry !== "object" || entry === null) continue;
         const record = entry as Record<string, unknown>;
         const id = record.partId ?? record.id;
         const name = record.name ?? record.partName;
-        if (typeof id === "string" && typeof name === "string") {
-          partNameById.set(id, name);
+        if (typeof id === "string") {
+          parsedParts.push({ partId: id, name: typeof name === "string" ? name : null });
         }
       }
+      setPartList(parsedParts);
 
-      const next: Record<string, string[]> = {};
+      const nextFeaturePartIds: Record<string, string[]> = {};
       uniqueFeatureIds.forEach((featureId, index) => {
-        const partIds = createdByResults[index]?.partIds ?? [];
-        next[featureId] = partIds.map((partId) => partNameById.get(partId) ?? partId);
+        nextFeaturePartIds[featureId] = createdByResults[index]?.partIds ?? [];
       });
-
-      setAffectedPartNames(next);
+      setFeaturePartIds(nextFeaturePartIds);
     }
 
-    void loadAffectedParts();
+    void loadPartMapping();
 
     return () => {
       cancelled = true;
@@ -262,38 +281,58 @@ function ParameterMarkPanelInner() {
     return Array.from(byFeature.values());
   }, [parameters]);
 
+  /** This Part Studio's parts, each carrying only the feature groups that actually produced it (via featurePartIds -- see the loadPartMapping effect above). */
+  const partsWithFeatures = useMemo<PartWithFeatures[]>(() => {
+    const groupsByPartId = new Map<string, FeatureGroup[]>();
+    for (const group of featureGroups) {
+      for (const partId of featurePartIds[group.featureId] ?? []) {
+        const existing = groupsByPartId.get(partId);
+        if (existing) {
+          existing.push(group);
+        } else {
+          groupsByPartId.set(partId, [group]);
+        }
+      }
+    }
+
+    return partList.map((part) => ({
+      ...part,
+      featureGroups: groupsByPartId.get(part.partId) ?? [],
+    }));
+  }, [partList, featureGroups, featurePartIds]);
+
   /**
-   * Asks Onshape's own UI to open its native feature edit dialog -- the
-   * same highlight + direction-arrows affordance you get clicking a
-   * feature in the tree -- so picking a row here shows the affected
-   * geometry without us re-implementing any B-rep highlighting ourselves.
-   * Closes whatever dialog is already open first so switching rows
-   * doesn't require manually dismissing the previous one. One-way:
-   * this extension type never receives a reply (confirmed live).
+   * Highlights a part in Onshape's own, already-visible viewport --
+   * requestSelectionHighlight, not openFeatureDialog. openFeatureDialog
+   * puts Onshape into its native edit-feature mode, which dims/hides
+   * everything except the one feature being edited; a marker picking
+   * through parts needs the rest of the model to stay visible for
+   * context. One-way: this extension type never receives a reply
+   * (confirmed live for other message types here; not yet re-confirmed
+   * for requestSelectionHighlight with entityType BODY specifically).
    */
-  function openFeatureDialog(featureId: string) {
+  function highlightPart(partId: string) {
     if (!context) return;
-    const base = {
-      documentId: context.documentId,
-      workspaceId: context.workspaceId,
-      elementId: context.elementId,
-    };
+    const messageId = `highlight-${nextHighlightIdRef.current++}`;
     window.parent.postMessage(
-      { ...base, messageName: "closeFeatureDialog", accept: false },
+      {
+        documentId: context.documentId,
+        workspaceId: context.workspaceId,
+        elementId: context.elementId,
+        messageName: "requestSelectionHighlight",
+        messageId,
+        selections: [{ selectionType: "ENTITY", selectionId: partId, entityType: "BODY" }],
+      },
       context.server,
     );
-    setTimeout(() => {
-      window.parent.postMessage(
-        { ...base, messageName: "openFeatureDialog", featureId },
-        context.server,
-      );
-    }, 0);
   }
 
   /** Marks (if not already) and opens the detail view in one step -- no separate mark-then-fill click. */
-  async function openDetail(entry: ValueParameterEntry) {
+  async function openDetail(entry: ValueParameterEntry, partId: string | null) {
     setSelected(entry);
-    openFeatureDialog(entry.featureId);
+    if (partId) {
+      highlightPart(partId);
+    }
 
     if (findAnnotation(entry)) {
       return;
@@ -505,73 +544,91 @@ function ParameterMarkPanelInner() {
   return (
     <div className={styles.page}>
       <div className={styles.header}>
-        <h1 className={styles.title}>Mark a parameter as uncertain</h1>
+        <h1 className={styles.title}>Need input</h1>
         <p className={styles.status}>status: {status}</p>
       </div>
-      {parameters === null ? null : parameters.length === 0 ? (
-        <p className={styles.emptyState}>
-          No numeric parameters found in this Part Studio&apos;s feature tree.
-        </p>
+      {parameters === null ? null : partList.length === 0 ? (
+        <p className={styles.emptyState}>Loading this Part Studio&apos;s parts...</p>
       ) : (
         <div className={styles.list}>
-          {featureGroups.map((group) => (
-            <div key={group.featureId} className={styles.featureCard}>
-              <div
-                className={styles.featureHeader}
-                onClick={() => openFeatureDialog(group.featureId)}
-                title="Click to highlight this feature in Onshape"
-              >
-                <span className={styles.cardTitle}>{group.featureName || group.featureId}</span>
-                <span className={styles.cardTypeTag}>({group.featureType})</span>
-                {affectedPartNames[group.featureId]?.length ? (
+          {partsWithFeatures.map((part) => {
+            const expanded = expandedPartId === part.partId;
+            const paramCount = part.featureGroups.reduce(
+              (sum, group) => sum + group.parameters.length,
+              0,
+            );
+
+            return (
+              <div key={part.partId} className={styles.featureCard}>
+                <div
+                  className={styles.featureHeader}
+                  onClick={() => {
+                    highlightPart(part.partId);
+                    setExpandedPartId(expanded ? null : part.partId);
+                  }}
+                  title="Click to highlight this part in Onshape"
+                >
+                  <span className={styles.cardTitle}>{part.name ?? part.partId}</span>
                   <span className={styles.cardTypeTag}>
-                    &rarr; {affectedPartNames[group.featureId].join(", ")}
+                    {paramCount > 0
+                      ? `${paramCount} parameter${paramCount === 1 ? "" : "s"}`
+                      : "no adjustable parameters"}
                   </span>
+                </div>
+                {expanded && part.featureGroups.length > 0 ? (
+                  <div className={styles.paramList}>
+                    {part.featureGroups.map((group) => (
+                      <div key={group.featureId}>
+                        <div className={styles.featureSubheader}>
+                          {group.featureName || group.featureId} ({group.featureType})
+                        </div>
+                        {group.parameters.map((entry) => {
+                          const annotation = findAnnotation(entry);
+                          const state = paramState(annotation);
+
+                          return (
+                            <div
+                              key={entry.parameterId}
+                              className={styles.paramRow}
+                              onClick={() => {
+                                if (state === "unmarked") return;
+                                setSelected(entry);
+                                highlightPart(part.partId);
+                              }}
+                              style={state !== "unmarked" ? { cursor: "pointer" } : undefined}
+                            >
+                              <div className={styles.cardValue}>
+                                {entry.parameterId}:{" "}
+                                {formatFeatureParameterValue(entry.typeName, entry.message)}
+                              </div>
+                              {state === "unmarked" ? (
+                                <button
+                                  type="button"
+                                  className={styles.needInputButton}
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    void openDetail(entry, part.partId);
+                                  }}
+                                >
+                                  Need input
+                                </button>
+                              ) : state === "needsInput" ? (
+                                <span className={styles.tagNeedsInput}>Needs input</span>
+                              ) : (
+                                <span className={styles.tagAnswered}>
+                                  Answered: {annotation!.resolvedValue}
+                                </span>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ))}
+                  </div>
                 ) : null}
               </div>
-              <div className={styles.paramList}>
-                {group.parameters.map((entry) => {
-                  const annotation = findAnnotation(entry);
-                  const state = paramState(annotation);
-
-                  return (
-                    <div
-                      key={entry.parameterId}
-                      className={styles.paramRow}
-                      onClick={() => {
-                        if (state === "unmarked") return;
-                        setSelected(entry);
-                        openFeatureDialog(entry.featureId);
-                      }}
-                      style={state !== "unmarked" ? { cursor: "pointer" } : undefined}
-                    >
-                      <div className={styles.cardValue}>
-                        {entry.parameterId}: {formatFeatureParameterValue(entry.typeName, entry.message)}
-                      </div>
-                      {state === "unmarked" ? (
-                        <button
-                          type="button"
-                          className={styles.needInputButton}
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            void openDetail(entry);
-                          }}
-                        >
-                          Need input
-                        </button>
-                      ) : state === "needsInput" ? (
-                        <span className={styles.tagNeedsInput}>Needs input</span>
-                      ) : (
-                        <span className={styles.tagAnswered}>
-                          Answered: {annotation!.resolvedValue}
-                        </span>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>
