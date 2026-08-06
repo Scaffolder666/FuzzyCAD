@@ -5,6 +5,8 @@ import {
   addFeatureParameterQuestionComment,
   createEmptyUncertaintyDocument,
   makeFeatureParameterQuestionAnnotationId,
+  reopenUncertaintyAnnotation,
+  resolveUncertaintyAnnotation,
   setFeatureParameterQuestionAnswer,
   setFeatureParameterQuestionRange,
   upsertFeatureParameterQuestion,
@@ -340,6 +342,12 @@ function ParameterMarkPanelInner() {
             addFeatureParameterQuestionComment(doc, annotationIdFor(selected), text),
           )
         }
+        onResolve={() =>
+          withSavedDocument((doc) => resolveUncertaintyAnnotation(doc, annotationIdFor(selected)))
+        }
+        onReopen={() =>
+          withSavedDocument((doc) => reopenUncertaintyAnnotation(doc, annotationIdFor(selected)))
+        }
       />
     );
   }
@@ -423,6 +431,8 @@ function DetailView({
   onSaveAnswer,
   onSaveRange,
   onAddComment,
+  onResolve,
+  onReopen,
 }: {
   entry: ValueParameterEntry;
   annotation: FeatureParameterQuestionUncertaintyAnnotation | undefined;
@@ -431,6 +441,8 @@ function DetailView({
   onSaveAnswer: (value: string) => void;
   onSaveRange: (min: number | null, max: number | null) => void;
   onAddComment: (text: string) => void;
+  onResolve: () => void;
+  onReopen: () => void;
 }) {
   const currentValueLabel = formatFeatureParameterValue(entry.typeName, entry.message);
   const currentMagnitude = parseNumericMagnitude(currentValueLabel);
@@ -453,6 +465,11 @@ function DetailView({
   const rangeMin = annotation?.rangeMinValue ?? null;
   const rangeMax = annotation?.rangeMaxValue ?? null;
   const hasRange = rangeMin !== null && rangeMax !== null;
+  const resolved = annotation?.status === "resolved";
+  // Once the range is set, it's locked -- the owner shouldn't be able to
+  // quietly move the goalposts while someone else is answering within it.
+  // Resolving the mark (settling the question) is the only way to reopen it.
+  const rangeLocked = hasRange && !resolved;
 
   return (
     <div className={styles.page}>
@@ -473,37 +490,46 @@ function DetailView({
 
       <div className={styles.section}>
         <div className={styles.sectionLabel}>Constrain the range (optional)</div>
-        <div className={styles.rangeRow}>
-          <input
-            type="number"
-            className={styles.rangeInput}
-            placeholder="min"
-            value={minDraft}
-            onChange={(event) => setMinDraft(event.target.value)}
-          />
-          <input
-            type="number"
-            className={styles.rangeInput}
-            placeholder="max"
-            value={maxDraft}
-            onChange={(event) => setMaxDraft(event.target.value)}
-          />
-          <button
-            type="button"
-            className={styles.secondaryButton}
-            disabled={saving}
-            onClick={() => {
-              const min = minDraft.trim() === "" ? null : parseFloat(minDraft);
-              const max = maxDraft.trim() === "" ? null : parseFloat(maxDraft);
-              onSaveRange(
-                min !== null && !Number.isNaN(min) ? min : null,
-                max !== null && !Number.isNaN(max) ? max : null,
-              );
-            }}
-          >
-            Set range
-          </button>
-        </div>
+        {rangeLocked ? (
+          <div className={styles.rangeLockedRow}>
+            <span>
+              Range: {rangeMin} – {rangeMax}
+            </span>
+            <span className={styles.rangeLockedNote}>Locked — resolve this mark to change it</span>
+          </div>
+        ) : (
+          <div className={styles.rangeRow}>
+            <input
+              type="number"
+              className={styles.rangeInput}
+              placeholder="min"
+              value={minDraft}
+              onChange={(event) => setMinDraft(event.target.value)}
+            />
+            <input
+              type="number"
+              className={styles.rangeInput}
+              placeholder="max"
+              value={maxDraft}
+              onChange={(event) => setMaxDraft(event.target.value)}
+            />
+            <button
+              type="button"
+              className={styles.secondaryButton}
+              disabled={saving}
+              onClick={() => {
+                const min = minDraft.trim() === "" ? null : parseFloat(minDraft);
+                const max = maxDraft.trim() === "" ? null : parseFloat(maxDraft);
+                onSaveRange(
+                  min !== null && !Number.isNaN(min) ? min : null,
+                  max !== null && !Number.isNaN(max) ? max : null,
+                );
+              }}
+            >
+              Set range
+            </button>
+          </div>
+        )}
 
         <div className={styles.sectionLabel}>Proposed value</div>
         {hasRange ? (
@@ -571,6 +597,21 @@ function DetailView({
         >
           Post comment
         </button>
+      </div>
+
+      <div className={styles.section}>
+        <div className={styles.sectionLabel}>Status</div>
+        <div className={styles.rangeLockedRow}>
+          <span>{resolved ? "Resolved" : "Open"}</span>
+          <button
+            type="button"
+            className={styles.secondaryButton}
+            disabled={saving}
+            onClick={resolved ? onReopen : onResolve}
+          >
+            {resolved ? "Reopen to edit range" : "Mark resolved"}
+          </button>
+        </div>
       </div>
     </div>
   );
