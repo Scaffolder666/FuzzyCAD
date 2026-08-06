@@ -2526,6 +2526,7 @@ if (result.ok && result.state) {
                 }
               : null
           }
+          filletPreviews={filletPreviews}
           onFilletKindChange={setFilletKind}
           onFilletAmountChange={setFilletAmountMm}
           onFilletConfirm={applyFillet}

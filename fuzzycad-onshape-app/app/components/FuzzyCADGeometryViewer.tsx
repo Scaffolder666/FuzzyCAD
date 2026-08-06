@@ -231,6 +231,16 @@ export type MoveQuestionAxisDirection = RotateAxisDirection;
 /** Structurally the same shape as document.ts's FilletKind. */
 export type FilletKind = "fillet" | "chamfer";
 
+/** A saved fillet/chamfer proposal, structurally the same shape as document.ts's. */
+export type FilletPreview = {
+  id: string;
+  pathKey: string;
+  kind: FilletKind;
+  edgePointWorld: [number, number, number];
+  radiusMeters: number;
+  status: "open" | "resolved";
+};
+
 /** A plan for the "Move (needs input)" tool's active range-definition session — single object, no followers. */
 export type MoveQuestionRolePlan = {
   pathKey: string;
@@ -354,6 +364,8 @@ type FuzzyCADGeometryViewerProps = {
   onAnswerDistance?: (annotationId: string, distanceMm: number) => void;
   /** Pending edge pick for the "Fillet/Chamfer" tool — set once a part+edge point is clicked, cleared on save/cancel. No live geometry preview (BRepFilletAPI is too slow to re-solve every drag tick); just an edge marker + value entry. */
   filletPick?: { pathKey: string; edgePointWorld: [number, number, number]; kind: FilletKind; amountMm: number } | null;
+  /** Every open (and resolved) fillet/chamfer mark, for a persistent B-rep ghost per mark — not just the one actively being adjusted. */
+  filletPreviews?: FilletPreview[];
   onFilletKindChange?: (kind: FilletKind) => void;
   onFilletAmountChange?: (amountMm: number) => void;
   onFilletConfirm?: () => void;
@@ -1119,6 +1131,7 @@ function Model({
   distancePreviews,
   onAnswerDistance,
   filletPick,
+  filletPreviews,
   onFilletKindChange,
   onFilletAmountChange,
   onFilletConfirm,
@@ -1187,6 +1200,8 @@ function Model({
   distancePreviews?: DistancePreview[];
   onAnswerDistance?: (annotationId: string, distanceMm: number) => void;
   filletPick?: { pathKey: string; edgePointWorld: [number, number, number]; kind: FilletKind; amountMm: number } | null;
+  /** Every open (and resolved) fillet/chamfer mark, for a persistent B-rep ghost per mark — not just the one actively being adjusted. */
+  filletPreviews?: FilletPreview[];
   onFilletKindChange?: (kind: FilletKind) => void;
   onFilletAmountChange?: (amountMm: number) => void;
   onFilletConfirm?: () => void;
@@ -2269,6 +2284,88 @@ function Model({
       }
     };
   }, [filletPick, brepGhostSource, scene, invalidate]);
+
+  // Every saved-and-still-OPEN fillet/chamfer mark also needs its own ghost
+  // — unlike the debounced one above (for the mark still being actively
+  // adjusted in the FilletHandle popup), these are static once saved, so
+  // each is computed once and cached in this map (keyed by annotation id)
+  // rather than recomputed on every render. Without this, a mark showed
+  // nothing at all the instant its popup closed (confirmed live) — the
+  // debounced ghost above only exists while filletPick is non-null.
+  const filletPreviewGhostsRef = useRef<Map<string, BrepGhostMesh>>(new Map());
+
+  useEffect(() => {
+    if (!brepGhostSource || brepGhostSource.status !== "ready") {
+      return;
+    }
+
+    const openPreviews = (filletPreviews ?? []).filter(
+      (preview) => preview.status === "open",
+    );
+    const openIds = new Set(openPreviews.map((preview) => preview.id));
+
+    for (const [id, ghost] of filletPreviewGhostsRef.current) {
+      if (!openIds.has(id)) {
+        scene.remove(ghost);
+        disposeBrepGhostMesh(ghost);
+        filletPreviewGhostsRef.current.delete(id);
+      }
+    }
+
+    let cancelled = false;
+
+    for (const preview of openPreviews) {
+      if (filletPreviewGhostsRef.current.has(preview.id)) {
+        continue;
+      }
+
+      const handle = brepGhostSource.getHandle(preview.pathKey);
+
+      if (handle === null) {
+        continue;
+      }
+
+      const edgePointMm: [number, number, number] = [
+        preview.edgePointWorld[0] / STEP_MM_TO_THREE_M,
+        preview.edgePointWorld[1] / STEP_MM_TO_THREE_M,
+        preview.edgePointWorld[2] / STEP_MM_TO_THREE_M,
+      ];
+      const radiusMm = preview.radiusMeters / STEP_MM_TO_THREE_M;
+
+      getOcctClient()
+        .filletEdge(handle, edgePointMm, preview.kind, radiusMm, false)
+        .then(({ mesh, valid, resolved }) => {
+          if (cancelled || !resolved || !valid || filletPreviewGhostsRef.current.has(preview.id)) {
+            return;
+          }
+
+          const ghost = createBrepGhostMesh(mesh, `FuzzyCAD Fillet Preview (B-rep) ${preview.id}`);
+          filletPreviewGhostsRef.current.set(preview.id, ghost);
+          scene.add(ghost);
+          invalidate();
+        })
+        .catch(() => {
+          // Best-effort — mark stays visible via its panel card even if the ghost fails.
+        });
+    }
+
+    return () => {
+      cancelled = true;
+    };
+  }, [filletPreviews, brepGhostSource, scene, invalidate]);
+
+  useEffect(() => {
+    const ghosts = filletPreviewGhostsRef.current;
+
+    return () => {
+      for (const ghost of ghosts.values()) {
+        scene.remove(ghost);
+        disposeBrepGhostMesh(ghost);
+      }
+      ghosts.clear();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Every OTHER saved-but-still-OPEN rotate proposal (not the one currently
   // being dragged) shows as a static ghost at its saved angle. Resolved
@@ -4376,6 +4473,7 @@ export default function FuzzyCADGeometryViewer({
   distancePreviews,
   onAnswerDistance,
   filletPick,
+  filletPreviews,
   onFilletKindChange,
   onFilletAmountChange,
   onFilletConfirm,
@@ -4501,6 +4599,7 @@ export default function FuzzyCADGeometryViewer({
                   distancePreviews={distancePreviews}
                   onAnswerDistance={onAnswerDistance}
                   filletPick={filletPick}
+                  filletPreviews={filletPreviews}
                   onFilletKindChange={onFilletKindChange}
                   onFilletAmountChange={onFilletAmountChange}
                   onFilletConfirm={onFilletConfirm}
