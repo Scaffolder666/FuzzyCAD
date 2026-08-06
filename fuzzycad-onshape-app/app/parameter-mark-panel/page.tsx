@@ -2,22 +2,24 @@
 
 import { Suspense, useEffect, useState } from "react";
 import {
+  addFeatureParameterQuestionComment,
   createEmptyUncertaintyDocument,
   makeFeatureParameterQuestionAnnotationId,
   setFeatureParameterQuestionAnswer,
-  updateUncertaintyAnnotationComment,
+  setFeatureParameterQuestionRange,
   upsertFeatureParameterQuestion,
   type FeatureParameterQuestionUncertaintyAnnotation,
   type FeatureParameterValueType,
   type FuzzyCADUncertaintyDocument,
 } from "../lib/uncertainty/document";
 import { loadFuzzycadProjectState, saveFuzzycadProjectState } from "../lib/onshapeClient";
-import { formatFeatureParameterValue } from "../lib/featureParameterValue";
+import { formatFeatureParameterValue, parseNumericMagnitude } from "../lib/featureParameterValue";
 import {
   ONSHAPE_CONTEXT_STORAGE_KEY,
   readSharedOnshapeContext,
   type SharedOnshapeContext,
 } from "../lib/onshapeRightPanelContext";
+import styles from "./page.module.css";
 
 type ValueParameterEntry = {
   featureId: string;
@@ -28,8 +30,6 @@ type ValueParameterEntry = {
   typeName: string;
   message: Record<string, unknown>;
 };
-
-type Draft = { answer: string; comment: string };
 
 function isValidUncertaintyDocument(value: unknown): value is FuzzyCADUncertaintyDocument {
   return (
@@ -43,12 +43,15 @@ function isValidUncertaintyDocument(value: unknown): value is FuzzyCADUncertaint
  * Production "Element right panel" page: lists every numeric parameter
  * (BTMParameterQuantity -- depths, radii, thicknesses, etc; Boolean/Enum/
  * String structural flags are excluded as noise, not real design
- * decisions) across the active Part Studio's feature tree, and lets
- * someone mark one as uncertain, propose an alternative value, and leave
- * a comment. Writes straight into the project's saved uncertainty
- * document -- no dependency on the main app's live React state, since
- * that document is persisted server-side (GET/modify/PUT via the existing
- * fuzzycad-project-state API).
+ * decisions) across the active Part Studio's feature tree. Clicking
+ * "Need input" on a row immediately marks it uncertain AND opens a detail
+ * view for it -- no separate mark-then-fill step. The detail view lets
+ * the marker optionally bound the answer to a range (rendered as a
+ * slider once both ends are set) and hold a multi-reply comment thread,
+ * separate from the single shared `comment` every other annotation type
+ * has. Everything writes straight into the project's saved uncertainty
+ * document (GET/modify/PUT via the existing fuzzycad-project-state API) --
+ * no dependency on the main app's live React state.
  *
  * Gets documentId/workspaceId/elementId from localStorage, not Onshape's
  * postMessage system -- see onshapeRightPanelContext.ts for why (confirmed
@@ -61,8 +64,8 @@ function ParameterMarkPanelInner() {
   const [status, setStatus] = useState("waiting for Onshape context...");
   const [parameters, setParameters] = useState<ValueParameterEntry[] | null>(null);
   const [uncertaintyDoc, setUncertaintyDoc] = useState<FuzzyCADUncertaintyDocument | null>(null);
-  const [drafts, setDrafts] = useState<Record<string, Draft>>({});
-  const [savingId, setSavingId] = useState<string | null>(null);
+  const [selected, setSelected] = useState<ValueParameterEntry | null>(null);
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     function applyStoredContext() {
@@ -137,10 +140,15 @@ function ParameterMarkPanelInner() {
     };
   }, [context]);
 
-  function findAnnotation(annotationId: string) {
+  function annotationIdFor(entry: ValueParameterEntry) {
+    return makeFeatureParameterQuestionAnnotationId(entry.featureId, entry.parameterId);
+  }
+
+  function findAnnotation(entry: ValueParameterEntry) {
+    const id = annotationIdFor(entry);
     return uncertaintyDoc?.annotations.find(
       (annotation): annotation is FeatureParameterQuestionUncertaintyAnnotation =>
-        annotation.id === annotationId && annotation.type === "featureParameterQuestion",
+        annotation.id === id && annotation.type === "featureParameterQuestion",
     );
   }
 
@@ -149,12 +157,9 @@ function ParameterMarkPanelInner() {
    * same highlight + direction-arrows affordance you get clicking a
    * feature in the tree -- so picking a row here shows the affected
    * geometry without us re-implementing any B-rep highlighting ourselves.
-   * Closes whatever dialog is already open first (declining any edits,
-   * same as clicking its own red X) so clicking a different row doesn't
-   * require manually dismissing the previous one. One-way: this extension
-   * type never receives a reply (confirmed live), so there's nothing to
-   * wait for here, just fire and forget -- the setTimeout just gives
-   * Onshape a tick to process the close before the open arrives.
+   * Closes whatever dialog is already open first so switching rows
+   * doesn't require manually dismissing the previous one. One-way:
+   * this extension type never receives a reply (confirmed live).
    */
   function openFeatureDialog(featureId: string) {
     if (!context) return;
@@ -175,15 +180,17 @@ function ParameterMarkPanelInner() {
     }, 0);
   }
 
-  async function markUncertain(entry: ValueParameterEntry) {
+  /** Marks (if not already) and opens the detail view in one step -- no separate mark-then-fill click. */
+  async function openDetail(entry: ValueParameterEntry) {
+    setSelected(entry);
+    openFeatureDialog(entry.featureId);
+
+    if (findAnnotation(entry)) {
+      return;
+    }
     if (!context) return;
 
-    const annotationId = makeFeatureParameterQuestionAnnotationId(
-      entry.featureId,
-      entry.parameterId,
-    );
-    setSavingId(annotationId);
-
+    setSaving(true);
     try {
       const stateRes = await loadFuzzycadProjectState({
         documentId: context.documentId,
@@ -224,16 +231,16 @@ function ParameterMarkPanelInner() {
         setStatus(`save failed (HTTP ${saveRes.status})`);
       }
     } finally {
-      setSavingId(null);
+      setSaving(false);
     }
   }
 
-  async function saveAnswer(annotationId: string) {
+  /** Reload -> apply a pure document.ts mutation -> save -> update local state, shared by every detail-view action. */
+  async function withSavedDocument(
+    mutate: (current: FuzzyCADUncertaintyDocument) => FuzzyCADUncertaintyDocument,
+  ) {
     if (!context) return;
-
-    const draft = drafts[annotationId] ?? { answer: "", comment: "" };
-    setSavingId(annotationId);
-
+    setSaving(true);
     try {
       const stateRes = await loadFuzzycadProjectState({
         documentId: context.documentId,
@@ -242,19 +249,11 @@ function ParameterMarkPanelInner() {
       });
 
       if (!stateRes.ok || !isValidUncertaintyDocument(stateRes.state)) {
-        setStatus("could not reload current marks before saving answer");
+        setStatus("could not reload current marks before saving");
         return;
       }
 
-      let nextDocument = stateRes.state;
-      if (draft.answer.trim()) {
-        nextDocument = setFeatureParameterQuestionAnswer(
-          nextDocument,
-          annotationId,
-          draft.answer.trim(),
-        );
-      }
-      nextDocument = updateUncertaintyAnnotationComment(nextDocument, annotationId, draft.comment);
+      const nextDocument = mutate(stateRes.state);
 
       const saveRes = await saveFuzzycadProjectState(
         { documentId: context.documentId, workspaceId: context.workspaceId, server: context.server },
@@ -267,13 +266,13 @@ function ParameterMarkPanelInner() {
         setStatus(`save failed (HTTP ${saveRes.status})`);
       }
     } finally {
-      setSavingId(null);
+      setSaving(false);
     }
   }
 
   if (!context) {
     return (
-      <div style={{ padding: 16, fontFamily: "sans-serif", fontSize: 13 }}>
+      <div className={styles.page}>
         <p>Waiting for Onshape context...</p>
         <p style={{ color: "#666" }}>
           Open the FuzzyCAD Panel tab once in this browser first, then reopen this panel.
@@ -282,118 +281,260 @@ function ParameterMarkPanelInner() {
     );
   }
 
-  return (
-    <div style={{ padding: 16, fontFamily: "sans-serif", fontSize: 13 }}>
-      <h1 style={{ fontSize: 15, marginBottom: 4 }}>Mark a parameter as uncertain</h1>
-      <p style={{ color: "#666", marginTop: 0 }}>status: {status}</p>
-      {parameters === null ? null : parameters.length === 0 ? (
-        <p>No numeric parameters found in this Part Studio&apos;s feature tree.</p>
-      ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          {parameters.map((entry, i) => {
-            const annotationId = makeFeatureParameterQuestionAnnotationId(
-              entry.featureId,
-              entry.parameterId,
-            );
-            const annotation = findAnnotation(annotationId);
-            const marked = !!annotation;
-            const saving = savingId === annotationId;
-            const draft = drafts[annotationId] ?? {
-              answer: annotation?.resolvedValue ?? "",
-              comment: annotation?.comment ?? "",
-            };
+  if (selected) {
+    const annotation = findAnnotation(selected);
+    return (
+      <DetailView
+        entry={selected}
+        annotation={annotation}
+        saving={saving}
+        onBack={() => setSelected(null)}
+        onSaveAnswer={(value) =>
+          withSavedDocument((doc) =>
+            setFeatureParameterQuestionAnswer(doc, annotationIdFor(selected), value),
+          )
+        }
+        onSaveRange={(min, max) =>
+          withSavedDocument((doc) =>
+            setFeatureParameterQuestionRange(doc, annotationIdFor(selected), min, max),
+          )
+        }
+        onAddComment={(text) =>
+          withSavedDocument((doc) =>
+            addFeatureParameterQuestionComment(doc, annotationIdFor(selected), text),
+          )
+        }
+      />
+    );
+  }
 
-            function setDraft(patch: Partial<Draft>) {
-              setDrafts((previous) => ({
-                ...previous,
-                [annotationId]: { ...draft, ...patch },
-              }));
-            }
+  return (
+    <div className={styles.page}>
+      <div className={styles.header}>
+        <h1 className={styles.title}>Mark a parameter as uncertain</h1>
+        <p className={styles.status}>status: {status}</p>
+      </div>
+      {parameters === null ? null : parameters.length === 0 ? (
+        <p className={styles.emptyState}>
+          No numeric parameters found in this Part Studio&apos;s feature tree.
+        </p>
+      ) : (
+        <div className={styles.list}>
+          {parameters.map((entry, i) => {
+            const annotation = findAnnotation(entry);
+            const marked = !!annotation;
 
             return (
               <div
                 key={i}
-                style={{ border: "1px solid #ddd", borderRadius: 8, padding: "8px 12px" }}
+                className={styles.card}
+                onClick={() => openFeatureDialog(entry.featureId)}
+                title="Click to highlight this feature in Onshape"
               >
-                <div
-                  onClick={() => openFeatureDialog(entry.featureId)}
-                  title="Click to highlight this feature in Onshape"
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "space-between",
-                    gap: 8,
-                    cursor: "pointer",
-                  }}
-                >
+                <div className={styles.cardRow}>
                   <div>
-                    <div style={{ fontWeight: 600 }}>
-                      {entry.featureName || entry.featureId}{" "}
-                      <span style={{ fontWeight: 400, color: "#666" }}>({entry.featureType})</span>
+                    <div className={styles.cardTitle}>
+                      {entry.featureName || entry.featureId}
+                      <span className={styles.cardTypeTag}>({entry.featureType})</span>
                     </div>
-                    <div style={{ color: "#444" }}>
+                    <div className={styles.cardValue}>
                       {entry.parameterId}: {formatFeatureParameterValue(entry.typeName, entry.message)}
                     </div>
                   </div>
-                  <button
-                    type="button"
-                    disabled={marked || saving}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      void markUncertain(entry);
-                    }}
-                    style={{ padding: "6px 10px", whiteSpace: "nowrap" }}
-                  >
-                    {marked ? "Marked ✓" : saving ? "Saving..." : "Mark uncertain"}
-                  </button>
-                </div>
-
-                {marked ? (
-                  <div
-                    onClick={(event) => event.stopPropagation()}
-                    style={{
-                      marginTop: 8,
-                      paddingTop: 8,
-                      borderTop: "1px solid #eee",
-                      display: "flex",
-                      flexDirection: "column",
-                      gap: 6,
-                    }}
-                  >
-                    <label style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-                      <span style={{ color: "#666" }}>Proposed value</span>
-                      <input
-                        type="text"
-                        value={draft.answer}
-                        placeholder={entry.message?.expression ? String(entry.message.expression) : ""}
-                        onChange={(event) => setDraft({ answer: event.target.value })}
-                        style={{ padding: "4px 6px" }}
-                      />
-                    </label>
-                    <label style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-                      <span style={{ color: "#666" }}>Comment</span>
-                      <textarea
-                        value={draft.comment}
-                        onChange={(event) => setDraft({ comment: event.target.value })}
-                        rows={2}
-                        style={{ padding: "4px 6px", resize: "vertical" }}
-                      />
-                    </label>
+                  {marked ? (
+                    <span className={styles.markedTag}>Needs input ✓</span>
+                  ) : (
                     <button
                       type="button"
-                      disabled={saving}
-                      onClick={() => void saveAnswer(annotationId)}
-                      style={{ padding: "6px 10px", alignSelf: "flex-start" }}
+                      className={styles.needInputButton}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        void openDetail(entry);
+                      }}
                     >
-                      {saving ? "Saving..." : "Save answer + comment"}
+                      Need input
                     </button>
-                  </div>
-                ) : null}
+                  )}
+                  {marked ? (
+                    <button
+                      type="button"
+                      className={styles.secondaryButton}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        setSelected(entry);
+                        openFeatureDialog(entry.featureId);
+                      }}
+                    >
+                      Open
+                    </button>
+                  ) : null}
+                </div>
               </div>
             );
           })}
         </div>
       )}
+    </div>
+  );
+}
+
+function DetailView({
+  entry,
+  annotation,
+  saving,
+  onBack,
+  onSaveAnswer,
+  onSaveRange,
+  onAddComment,
+}: {
+  entry: ValueParameterEntry;
+  annotation: FeatureParameterQuestionUncertaintyAnnotation | undefined;
+  saving: boolean;
+  onBack: () => void;
+  onSaveAnswer: (value: string) => void;
+  onSaveRange: (min: number | null, max: number | null) => void;
+  onAddComment: (text: string) => void;
+}) {
+  const currentValueLabel = formatFeatureParameterValue(entry.typeName, entry.message);
+  const currentMagnitude = parseNumericMagnitude(currentValueLabel);
+
+  const [minDraft, setMinDraft] = useState(
+    annotation?.rangeMinValue !== null && annotation?.rangeMinValue !== undefined
+      ? String(annotation.rangeMinValue)
+      : "",
+  );
+  const [maxDraft, setMaxDraft] = useState(
+    annotation?.rangeMaxValue !== null && annotation?.rangeMaxValue !== undefined
+      ? String(annotation.rangeMaxValue)
+      : "",
+  );
+  const [answerDraft, setAnswerDraft] = useState(
+    annotation?.resolvedValue ?? (currentMagnitude !== null ? String(currentMagnitude) : ""),
+  );
+  const [commentDraft, setCommentDraft] = useState("");
+
+  const rangeMin = annotation?.rangeMinValue ?? null;
+  const rangeMax = annotation?.rangeMaxValue ?? null;
+  const hasRange = rangeMin !== null && rangeMax !== null;
+
+  return (
+    <div className={styles.page}>
+      <button type="button" className={styles.backButton} onClick={onBack}>
+        &larr; Back to list
+      </button>
+      <div className={styles.detailHeader}>
+        <h1 className={styles.detailTitle}>
+          {entry.featureName || entry.featureId} ({entry.featureType})
+        </h1>
+        <p className={styles.detailSubtitle}>{entry.parameterId}</p>
+      </div>
+
+      <div className={styles.section}>
+        <div className={styles.sectionLabel}>Current value</div>
+        <div className={styles.currentValueRow}>{currentValueLabel}</div>
+      </div>
+
+      <div className={styles.section}>
+        <div className={styles.sectionLabel}>Constrain the range (optional)</div>
+        <div className={styles.rangeRow}>
+          <input
+            type="number"
+            className={styles.rangeInput}
+            placeholder="min"
+            value={minDraft}
+            onChange={(event) => setMinDraft(event.target.value)}
+          />
+          <input
+            type="number"
+            className={styles.rangeInput}
+            placeholder="max"
+            value={maxDraft}
+            onChange={(event) => setMaxDraft(event.target.value)}
+          />
+          <button
+            type="button"
+            className={styles.secondaryButton}
+            disabled={saving}
+            onClick={() => {
+              const min = minDraft.trim() === "" ? null : parseFloat(minDraft);
+              const max = maxDraft.trim() === "" ? null : parseFloat(maxDraft);
+              onSaveRange(
+                min !== null && !Number.isNaN(min) ? min : null,
+                max !== null && !Number.isNaN(max) ? max : null,
+              );
+            }}
+          >
+            Set range
+          </button>
+        </div>
+
+        <div className={styles.sectionLabel}>Proposed value</div>
+        {hasRange ? (
+          <div className={styles.sliderRow}>
+            <input
+              type="range"
+              className={styles.slider}
+              min={rangeMin!}
+              max={rangeMax!}
+              step={(rangeMax! - rangeMin!) / 100 || 1}
+              value={answerDraft || String(rangeMin)}
+              onChange={(event) => setAnswerDraft(event.target.value)}
+            />
+            <span className={styles.sliderValue}>{answerDraft}</span>
+          </div>
+        ) : (
+          <input
+            type="text"
+            className={styles.valueInput}
+            value={answerDraft}
+            onChange={(event) => setAnswerDraft(event.target.value)}
+          />
+        )}
+        <button
+          type="button"
+          className={styles.primaryButton}
+          disabled={saving || !answerDraft.trim()}
+          onClick={() => onSaveAnswer(answerDraft.trim())}
+        >
+          {saving ? "Saving..." : "Save proposed value"}
+        </button>
+      </div>
+
+      <div className={styles.section}>
+        <div className={styles.sectionLabel}>Discussion</div>
+        <div className={styles.commentThread}>
+          {!annotation || annotation.commentThread.length === 0 ? (
+            <div className={styles.commentEmpty}>No comments yet.</div>
+          ) : (
+            annotation.commentThread.map((comment) => (
+              <div key={comment.id} className={styles.comment}>
+                <div className={styles.commentMeta}>
+                  {comment.author ?? "someone"} · {new Date(comment.createdAt).toLocaleString()}
+                </div>
+                <div className={styles.commentText}>{comment.text}</div>
+              </div>
+            ))
+          )}
+        </div>
+        <textarea
+          className={styles.commentInput}
+          rows={2}
+          placeholder="Add a comment..."
+          value={commentDraft}
+          onChange={(event) => setCommentDraft(event.target.value)}
+        />
+        <button
+          type="button"
+          className={styles.secondaryButton}
+          disabled={saving || !commentDraft.trim()}
+          onClick={() => {
+            onAddComment(commentDraft.trim());
+            setCommentDraft("");
+          }}
+        >
+          Post comment
+        </button>
+      </div>
     </div>
   );
 }

@@ -300,6 +300,14 @@ export type FeatureParameterValueType =
   | "BTMParameterEnum"
   | "BTMParameterString";
 
+/** One entry in a FeatureParameterQuestion's discussion -- unlike the single shared `comment` field every annotation type has, this supports multiple back-and-forth replies. */
+export type FeatureParameterComment = {
+  id: string;
+  author?: string;
+  text: string;
+  createdAt: string;
+};
+
 export type FeatureParameterQuestionUncertaintyAnnotation = BaseAnnotationFields & {
   type: "featureParameterQuestion";
   featureId: string;
@@ -309,6 +317,10 @@ export type FeatureParameterQuestionUncertaintyAnnotation = BaseAnnotationFields
   valueType: FeatureParameterValueType;
   currentValue: string;
   resolvedValue: string | null;
+  /** Optional bounds on the proposed value (same numeric unit as currentValue's magnitude) -- lets the marker constrain the answer to a range instead of a free-form value, rendered as a slider when both are set. */
+  rangeMinValue: number | null;
+  rangeMaxValue: number | null;
+  commentThread: FeatureParameterComment[];
 };
 
 export type FuzzyCADUncertaintyAnnotation =
@@ -1945,6 +1957,9 @@ function createFeatureParameterQuestionAnnotation(input: {
   valueType: FeatureParameterValueType;
   currentValue: string;
   resolvedValue?: string | null;
+  rangeMinValue?: number | null;
+  rangeMaxValue?: number | null;
+  commentThread?: FeatureParameterComment[];
   comment?: string;
   author?: string;
   assignee?: string;
@@ -1974,6 +1989,9 @@ function createFeatureParameterQuestionAnnotation(input: {
     valueType: input.valueType,
     currentValue: input.currentValue,
     resolvedValue: input.resolvedValue ?? null,
+    rangeMinValue: input.rangeMinValue ?? null,
+    rangeMaxValue: input.rangeMaxValue ?? null,
+    commentThread: input.commentThread ?? [],
     comment: input.comment,
     author: input.author,
     assignee: input.assignee,
@@ -1983,7 +2001,7 @@ function createFeatureParameterQuestionAnnotation(input: {
   };
 }
 
-/** One open question per (featureId, parameterId) -- re-marking replaces the recorded current value but keeps any existing answer. */
+/** One open question per (featureId, parameterId) -- re-marking replaces the recorded current value but keeps any existing answer, range, and comment thread. */
 export function upsertFeatureParameterQuestion(
   document: FuzzyCADUncertaintyDocument,
   input: {
@@ -2008,6 +2026,9 @@ export function upsertFeatureParameterQuestion(
     valueType: input.valueType,
     currentValue: input.currentValue,
     resolvedValue: existingQuestion?.resolvedValue,
+    rangeMinValue: existingQuestion?.rangeMinValue,
+    rangeMaxValue: existingQuestion?.rangeMaxValue,
+    commentThread: existingQuestion?.commentThread,
     comment: existing?.comment,
     author: existing?.author ?? input.author,
     assignee: existing?.assignee,
@@ -2051,6 +2072,67 @@ export function setFeatureParameterQuestionAnswer(
       return {
         ...annotation,
         resolvedValue,
+        updatedAt: now,
+      };
+    }),
+  };
+}
+
+/** Constrains the proposed value to [min, max] -- lets the marker say "only X can move, and only within this range" instead of an unbounded free-form answer. Pass nulls to clear the constraint. */
+export function setFeatureParameterQuestionRange(
+  document: FuzzyCADUncertaintyDocument,
+  annotationId: string,
+  rangeMinValue: number | null,
+  rangeMaxValue: number | null,
+): FuzzyCADUncertaintyDocument {
+  const now = new Date().toISOString();
+
+  return {
+    ...document,
+    annotations: document.annotations.map((annotation) => {
+      if (annotation.id !== annotationId || annotation.type !== "featureParameterQuestion") {
+        return annotation;
+      }
+
+      return {
+        ...annotation,
+        rangeMinValue,
+        rangeMaxValue,
+        updatedAt: now,
+      };
+    }),
+  };
+}
+
+/** Appends one reply to the multi-round discussion thread (distinct from the single shared `comment` field). */
+export function addFeatureParameterQuestionComment(
+  document: FuzzyCADUncertaintyDocument,
+  annotationId: string,
+  text: string,
+  author?: string,
+): FuzzyCADUncertaintyDocument {
+  if (!text.trim()) {
+    return document;
+  }
+
+  const now = new Date().toISOString();
+  const newComment: FeatureParameterComment = {
+    id: `${annotationId}:comment:${now}:${Math.random().toString(36).slice(2, 8)}`,
+    author,
+    text: text.trim(),
+    createdAt: now,
+  };
+
+  return {
+    ...document,
+    annotations: document.annotations.map((annotation) => {
+      if (annotation.id !== annotationId || annotation.type !== "featureParameterQuestion") {
+        return annotation;
+      }
+
+      return {
+        ...annotation,
+        commentThread: [...annotation.commentThread, newComment],
         updatedAt: now,
       };
     }),
