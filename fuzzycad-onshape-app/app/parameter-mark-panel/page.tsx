@@ -135,6 +135,90 @@ function ParameterMarkPanelInner() {
   // looking at).
   const [partStudioOptions, setPartStudioOptions] = useState<OnshapeElement[]>([]);
 
+  function extractAppearance(
+    data: unknown,
+  ): { color: { red: number; green: number; blue: number } | null; opacity: number | null } {
+    if (!data || typeof data !== "object") return { color: null, opacity: null };
+    const appearance = (data as Record<string, unknown>).appearance;
+    if (!appearance || typeof appearance !== "object") return { color: null, opacity: null };
+    const color = (appearance as Record<string, unknown>).color;
+    const opacity = (appearance as Record<string, unknown>).opacity;
+    const parsedColor =
+      color && typeof color === "object"
+        ? {
+            red: Number((color as Record<string, unknown>).red ?? 0),
+            green: Number((color as Record<string, unknown>).green ?? 0),
+            blue: Number((color as Record<string, unknown>).blue ?? 0),
+          }
+        : null;
+    return { color: parsedColor, opacity: typeof opacity === "number" ? opacity : null };
+  }
+
+  /** Every "fuzzycadProposedExtrude" instance's featureId in a raw features-list dump, however it got there (our own insert, or someone using Onshape's own "insert feature" toolbar directly). */
+  function extractGhostFeatureIds(rawFeatures: unknown): string[] {
+    if (!Array.isArray(rawFeatures)) return [];
+    const ids: string[] = [];
+    for (const entry of rawFeatures) {
+      if (!entry || typeof entry !== "object") continue;
+      const message = (entry as Record<string, unknown>).message;
+      if (!message || typeof message !== "object") continue;
+      const featureType = (message as Record<string, unknown>).featureType;
+      const featureId = (message as Record<string, unknown>).featureId;
+      if (featureType === "fuzzycadProposedExtrude" && typeof featureId === "string") {
+        ids.push(featureId);
+      }
+    }
+    return ids;
+  }
+
+  /**
+   * Recolors every detected ghost proposal's OWN output parts transparent,
+   * regardless of who inserted the ghost -- our right panel's Mark flow, or
+   * someone using Onshape's own "insert feature" toolbar directly. Unlike
+   * applyAppearanceMark (which marks the ORIGINAL feature's part and must
+   * remember its color to restore later), this needs no restore step at
+   * all: the ghost's own part is deleted along with the ghost feature on
+   * accept/reject, so there's nothing left to restore. Idempotent (skips a
+   * part already at opacity 0) and best-effort/non-blocking, same as every
+   * other appearance call in this file.
+   */
+  async function styleDetectedGhosts(rawFeatures: unknown) {
+    if (!context) return;
+    const ghostFeatureIds = extractGhostFeatureIds(rawFeatures);
+    if (ghostFeatureIds.length === 0) return;
+
+    try {
+      for (const featureId of ghostFeatureIds) {
+        const partsRes = await fetchFeatureCreatedPartIds({
+          documentId: context.documentId,
+          workspaceId: context.workspaceId,
+          partStudioElementId: context.elementId,
+          server: context.server,
+          featureId,
+        });
+        const partIds = partsRes.ok ? (partsRes.partIds ?? []) : [];
+
+        for (const partId of partIds) {
+          const partQuery = {
+            documentId: context.documentId,
+            workspaceId: context.workspaceId,
+            elementId: context.elementId,
+            partId,
+            server: context.server,
+          };
+
+          const current = await fetchOnshapePartAppearance(partQuery);
+          const { color, opacity } = extractAppearance(current.data);
+          if (!color || opacity === 0) continue;
+
+          await setOnshapePartAppearance(partQuery, color, 0);
+        }
+      }
+    } catch (err) {
+      console.warn("[FuzzyCAD] ghost auto-styling failed:", err);
+    }
+  }
+
   useEffect(() => {
     function applyStoredContext() {
       const stored = readSharedOnshapeContext();
@@ -233,6 +317,7 @@ function ParameterMarkPanelInner() {
       }
 
       setStatus(paramsRes.ok ? "ready" : `error loading parameters (HTTP ${paramsRes.status})`);
+      void styleDetectedGhosts(paramsData.rawData?.features);
     }
 
     void loadEverything();
@@ -240,6 +325,11 @@ function ParameterMarkPanelInner() {
     return () => {
       cancelled = true;
     };
+    // styleDetectedGhosts is intentionally omitted -- it's a stable,
+    // re-created-per-render component function (not memoized), so adding
+    // it here would refire this effect (and re-hit Onshape) on every
+    // unrelated re-render instead of only when the Part Studio changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [context]);
 
   /** Lets the panel's user correct a stale elementId themselves, since Onshape won't tell us. */
@@ -387,25 +477,6 @@ function ParameterMarkPanelInner() {
     } finally {
       setSaving(false);
     }
-  }
-
-  function extractAppearance(
-    data: unknown,
-  ): { color: { red: number; green: number; blue: number } | null; opacity: number | null } {
-    if (!data || typeof data !== "object") return { color: null, opacity: null };
-    const appearance = (data as Record<string, unknown>).appearance;
-    if (!appearance || typeof appearance !== "object") return { color: null, opacity: null };
-    const color = (appearance as Record<string, unknown>).color;
-    const opacity = (appearance as Record<string, unknown>).opacity;
-    const parsedColor =
-      color && typeof color === "object"
-        ? {
-            red: Number((color as Record<string, unknown>).red ?? 0),
-            green: Number((color as Record<string, unknown>).green ?? 0),
-            blue: Number((color as Record<string, unknown>).blue ?? 0),
-          }
-        : null;
-    return { color: parsedColor, opacity: typeof opacity === "number" ? opacity : null };
   }
 
   /**
