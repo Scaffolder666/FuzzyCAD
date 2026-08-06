@@ -71,7 +71,6 @@ type UncertaintyMarksPanelProps = {
 };
 
 const FILTERS: { key: FilterKey; label: string }[] = [
-  { key: "size", label: "Needs input" },
   { key: "proposal", label: "Proposed" },
   { key: "alternative", label: "Alternatives" },
 ];

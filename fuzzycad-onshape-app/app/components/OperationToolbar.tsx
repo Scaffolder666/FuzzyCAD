@@ -52,41 +52,6 @@ function LassoIcon() {
   );
 }
 
-function SizeIcon() {
-  return (
-    <svg viewBox="0 0 32 32" aria-hidden="true">
-      <path d="M16 5V27" />
-      <path d="M11 10L16 5L21 10" />
-      <path d="M11 22L16 27L21 22" />
-      <path d="M7 24H25" />
-      <path d="M7 8H25" />
-    </svg>
-  );
-}
-
-function DistanceIcon() {
-  return (
-    <svg viewBox="0 0 32 32" aria-hidden="true">
-      <rect x="4" y="12" width="6" height="8" rx="1" />
-      <rect x="22" y="12" width="6" height="8" rx="1" />
-      <path d="M10 16H22" />
-      <path d="M13 13L10 16L13 19" />
-      <path d="M19 13L22 16L19 19" />
-    </svg>
-  );
-}
-
-function MoveQuestionIcon() {
-  return (
-    <svg viewBox="0 0 32 32" aria-hidden="true">
-      <path d="M4 16H28" strokeDasharray="2.5 2.5" />
-      <path d="M9 11L4 16L9 21" />
-      <path d="M23 11L28 16L23 21" />
-      <circle cx="16" cy="16" r="2.6" />
-    </svg>
-  );
-}
-
 function ExtendIcon() {
   return (
     <svg viewBox="0 0 32 32" aria-hidden="true">
@@ -370,30 +335,6 @@ const toolGroups: ToolGroup[] = [
             icon: <BooleanIcon />,
           },
         ],
-      },
-    ],
-  },
-  {
-    key: "needsInput",
-    label: "Needs input",
-    tools: [
-      {
-        id: "height",
-        label: "Size",
-        title: "Add size/height uncertainty mark",
-        icon: <SizeIcon />,
-      },
-      {
-        id: "distance",
-        label: "Distance",
-        title: "Click two parts to flag the gap between them as worth checking",
-        icon: <DistanceIcon />,
-      },
-      {
-        id: "moveQuestion",
-        label: "Move range",
-        title: "Fix a direction and a range — someone else picks the exact value",
-        icon: <MoveQuestionIcon />,
       },
     ],
   },
