@@ -5,7 +5,6 @@ import {
   addFeatureParameterQuestionComment,
   createEmptyUncertaintyDocument,
   makeFeatureParameterQuestionAnnotationId,
-  removeUncertaintyAnnotationById,
   reopenUncertaintyAnnotation,
   resolveUncertaintyAnnotation,
   setFeatureParameterQuestionAnswer,
@@ -16,8 +15,6 @@ import {
   type FuzzyCADUncertaintyDocument,
 } from "../lib/uncertainty/document";
 import {
-  fetchFeatureCreatedPartIds,
-  fetchOnshapePartStudioParts,
   loadFuzzycadProjectState,
   saveFuzzycadProjectState,
   updatePartStudioFeatureSuppressed,
@@ -27,7 +24,6 @@ import {
   parseNumericMagnitude,
   substituteNumericMagnitude,
 } from "../lib/featureParameterValue";
-import { featureTypeLabel, parameterLabel } from "../lib/featureParameterLabels";
 import {
   ONSHAPE_CONTEXT_STORAGE_KEY,
   readSharedOnshapeContext,
@@ -52,40 +48,7 @@ type FeatureGroup = {
   parameters: ValueParameterEntry[];
 };
 
-type PartEntry = {
-  partId: string;
-  name: string | null;
-};
-
-type PartWithFeatures = PartEntry & {
-  featureGroups: FeatureGroup[];
-};
-
 type ParamState = "unmarked" | "needsInput" | "answered";
-
-// How many featurescript evaluations to have in flight at once when
-// resolving every feature's created part(s) -- see the loadPartMapping
-// effect below for why this exists at all.
-const FEATURE_MAPPING_CONCURRENCY = 5;
-
-async function mapWithConcurrencyLimit<T, R>(
-  items: T[],
-  limit: number,
-  fn: (item: T) => Promise<R>,
-): Promise<R[]> {
-  const results: R[] = new Array(items.length);
-  let nextIndex = 0;
-
-  async function worker() {
-    while (nextIndex < items.length) {
-      const index = nextIndex++;
-      results[index] = await fn(items[index]);
-    }
-  }
-
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, () => worker()));
-  return results;
-}
 
 function paramState(
   annotation: FeatureParameterQuestionUncertaintyAnnotation | undefined,
@@ -103,26 +66,18 @@ function isValidUncertaintyDocument(value: unknown): value is FuzzyCADUncertaint
 }
 
 /**
- * Production "Element right panel" page -- the "Need input" mode of the
- * right panel (Proposed/Alternative are separate modes, not built here).
- * Deliberately part-first, not parameter-first: a raw dump of every
- * BTMParameterQuantity across the feature tree is the kind of thing
- * someone would just open Onshape itself to see, not something worth
- * duplicating for a marker who isn't a CAD user. So the top-level list is
- * this Part Studio's actual parts; picking one highlights it (in
- * Onshape's own already-visible viewport, alongside the rest of the
- * model -- not via openFeatureDialog, which puts Onshape into its native
- * edit-feature mode and dims everything else, destroying the context a
- * marker needs) and reveals only the parameters belonging to features
- * that produced that part. Clicking "Need input" on a row immediately
- * marks it uncertain AND opens a detail view for it -- no separate
- * mark-then-fill step. The detail view lets the marker optionally bound
- * the answer to a range (rendered as a slider once both ends are set)
- * and hold a multi-reply comment thread, separate from the single shared
- * `comment` every other annotation type has. Everything writes straight
- * into the project's saved uncertainty document (GET/modify/PUT via the
- * existing fuzzycad-project-state API) -- no dependency on the main
- * app's live React state.
+ * Production "Element right panel" page: lists every numeric parameter
+ * (BTMParameterQuantity -- depths, radii, thicknesses, etc; Boolean/Enum/
+ * String structural flags are excluded as noise, not real design
+ * decisions) across the active Part Studio's feature tree. Clicking
+ * "Need input" on a row immediately marks it uncertain AND opens a detail
+ * view for it -- no separate mark-then-fill step. The detail view lets
+ * the marker optionally bound the answer to a range (rendered as a
+ * slider once both ends are set) and hold a multi-reply comment thread,
+ * separate from the single shared `comment` every other annotation type
+ * has. Everything writes straight into the project's saved uncertainty
+ * document (GET/modify/PUT via the existing fuzzycad-project-state API) --
+ * no dependency on the main app's live React state.
  *
  * Gets documentId/workspaceId/elementId from localStorage, not Onshape's
  * postMessage system -- see onshapeRightPanelContext.ts for why (confirmed
@@ -137,10 +92,6 @@ function ParameterMarkPanelInner() {
   const [uncertaintyDoc, setUncertaintyDoc] = useState<FuzzyCADUncertaintyDocument | null>(null);
   const [selected, setSelected] = useState<ValueParameterEntry | null>(null);
   const [saving, setSaving] = useState(false);
-  const [partList, setPartList] = useState<PartEntry[]>([]);
-  const [featurePartIds, setFeaturePartIds] = useState<Record<string, string[]>>({});
-  const [expandedPartId, setExpandedPartId] = useState<string | null>(null);
-  const nextHighlightIdRef = useRef(1);
 
   useEffect(() => {
     function applyStoredContext() {
@@ -215,80 +166,6 @@ function ParameterMarkPanelInner() {
     };
   }, [context]);
 
-  /**
-   * The part list this panel is actually organized around, plus which
-   * part(s) each feature produced -- neither the Features API nor the
-   * Part List API links featureId to partId on its own, so the latter is
-   * resolved via qCreatedBy() (partstudio-feature-created-parts) per
-   * unique feature. Runs once parameters load rather than inside
-   * loadEverything so a slow/failed lookup here doesn't block the
-   * parameter list itself from being fetched.
-   *
-   * The per-feature fetches run FEATURE_MAPPING_CONCURRENCY at a time,
-   * not all at once. Confirmed live: a real Part Studio with dozens of
-   * features (Sketch/Extrude/Chamfer repeated many times) firing that
-   * many featurescript evaluations simultaneously came back with every
-   * single one empty -- Onshape's featurescript endpoint doesn't reject
-   * with an error our fetch would throw on (a non-2xx HTTP status still
-   * resolves normally, it just carries ok:false), so this failed
-   * completely silently: parts showed up fine (that fetch is separate
-   * and unaffected), but every part's feature list was empty, as if
-   * qCreatedBy had nothing to say. Batching keeps concurrent featurescript
-   * calls low enough that they actually succeed.
-   */
-  useEffect(() => {
-    if (!context || !parameters) {
-      return;
-    }
-
-    let cancelled = false;
-
-    async function loadPartMapping() {
-      const query = {
-        documentId: context!.documentId,
-        workspaceId: context!.workspaceId,
-        partStudioElementId: context!.elementId,
-        server: context!.server,
-      };
-
-      const uniqueFeatureIds = Array.from(new Set(parameters!.map((entry) => entry.featureId)));
-
-      const [partsRes, createdByResults] = await Promise.all([
-        fetchOnshapePartStudioParts(query).catch(() => null),
-        mapWithConcurrencyLimit(uniqueFeatureIds, FEATURE_MAPPING_CONCURRENCY, (featureId) =>
-          fetchFeatureCreatedPartIds(query, featureId).catch(() => ({ partIds: [] as string[] })),
-        ),
-      ]);
-
-      if (cancelled) return;
-
-      const rawParts = Array.isArray(partsRes?.data) ? (partsRes.data as unknown[]) : [];
-      const parsedParts: PartEntry[] = [];
-      for (const entry of rawParts) {
-        if (typeof entry !== "object" || entry === null) continue;
-        const record = entry as Record<string, unknown>;
-        const id = record.partId ?? record.id;
-        const name = record.name ?? record.partName;
-        if (typeof id === "string") {
-          parsedParts.push({ partId: id, name: typeof name === "string" ? name : null });
-        }
-      }
-      setPartList(parsedParts);
-
-      const nextFeaturePartIds: Record<string, string[]> = {};
-      uniqueFeatureIds.forEach((featureId, index) => {
-        nextFeaturePartIds[featureId] = createdByResults[index]?.partIds ?? [];
-      });
-      setFeaturePartIds(nextFeaturePartIds);
-    }
-
-    void loadPartMapping();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [context, parameters]);
-
   function annotationIdFor(entry: ValueParameterEntry) {
     return makeFeatureParameterQuestionAnnotationId(entry.featureId, entry.parameterId);
   }
@@ -301,18 +178,7 @@ function ParameterMarkPanelInner() {
     );
   }
 
-  /**
-   * One card per feature instead of one per parameter -- an Extrude with
-   * 4 numeric fields was showing 4 near-identical cards that all
-   * highlighted the same feature.
-   *
-   * Used to also split parameters into active/inactive by sibling
-   * boolean flags, hiding "inactive" ones by default. Dropped that: on a
-   * real multi-feature part it over-filtered (a part built from several
-   * Extrudes + a Chamfer came back "no adjustable parameters" even
-   * though it obviously had some) -- the boolean-prefix heuristic isn't
-   * reliable enough to hide rows on.
-   */
+  /** One card per feature instead of one per parameter -- an Extrude with 4 numeric fields was showing 4 near-identical cards that all highlighted the same feature. */
   const featureGroups = useMemo<FeatureGroup[]>(() => {
     if (!parameters) return [];
     const byFeature = new Map<string, FeatureGroup>();
@@ -332,58 +198,38 @@ function ParameterMarkPanelInner() {
     return Array.from(byFeature.values());
   }, [parameters]);
 
-  /** This Part Studio's parts, each carrying only the feature groups that actually produced it (via featurePartIds -- see the loadPartMapping effect above). */
-  const partsWithFeatures = useMemo<PartWithFeatures[]>(() => {
-    const groupsByPartId = new Map<string, FeatureGroup[]>();
-    for (const group of featureGroups) {
-      for (const partId of featurePartIds[group.featureId] ?? []) {
-        const existing = groupsByPartId.get(partId);
-        if (existing) {
-          existing.push(group);
-        } else {
-          groupsByPartId.set(partId, [group]);
-        }
-      }
-    }
-
-    return partList.map((part) => ({
-      ...part,
-      featureGroups: groupsByPartId.get(part.partId) ?? [],
-    }));
-  }, [partList, featureGroups, featurePartIds]);
-
   /**
-   * Highlights a part in Onshape's own, already-visible viewport --
-   * requestSelectionHighlight, not openFeatureDialog. openFeatureDialog
-   * puts Onshape into its native edit-feature mode, which dims/hides
-   * everything except the one feature being edited; a marker picking
-   * through parts needs the rest of the model to stay visible for
-   * context. One-way: this extension type never receives a reply
-   * (confirmed live for other message types here; not yet re-confirmed
-   * for requestSelectionHighlight with entityType BODY specifically).
+   * Asks Onshape's own UI to open its native feature edit dialog -- the
+   * same highlight + direction-arrows affordance you get clicking a
+   * feature in the tree -- so picking a row here shows the affected
+   * geometry without us re-implementing any B-rep highlighting ourselves.
+   * Closes whatever dialog is already open first so switching rows
+   * doesn't require manually dismissing the previous one. One-way:
+   * this extension type never receives a reply (confirmed live).
    */
-  function highlightPart(partId: string) {
+  function openFeatureDialog(featureId: string) {
     if (!context) return;
-    const messageId = `highlight-${nextHighlightIdRef.current++}`;
+    const base = {
+      documentId: context.documentId,
+      workspaceId: context.workspaceId,
+      elementId: context.elementId,
+    };
     window.parent.postMessage(
-      {
-        documentId: context.documentId,
-        workspaceId: context.workspaceId,
-        elementId: context.elementId,
-        messageName: "requestSelectionHighlight",
-        messageId,
-        selections: [{ selectionType: "ENTITY", selectionId: partId, entityType: "BODY" }],
-      },
+      { ...base, messageName: "closeFeatureDialog", accept: false },
       context.server,
     );
+    setTimeout(() => {
+      window.parent.postMessage(
+        { ...base, messageName: "openFeatureDialog", featureId },
+        context.server,
+      );
+    }, 0);
   }
 
   /** Marks (if not already) and opens the detail view in one step -- no separate mark-then-fill click. */
-  async function openDetail(entry: ValueParameterEntry, partId: string | null) {
+  async function openDetail(entry: ValueParameterEntry) {
     setSelected(entry);
-    if (partId) {
-      highlightPart(partId);
-    }
+    openFeatureDialog(entry.featureId);
 
     if (findAnnotation(entry)) {
       return;
@@ -549,54 +395,6 @@ function ParameterMarkPanelInner() {
     await withSavedDocument((doc) => resolveUncertaintyAnnotation(doc, annotationIdFor(entry)));
   }
 
-  /**
-   * Reject: discard the mark entirely, no trace kept -- not a third
-   * status alongside open/resolved, just a delete. Also re-applies the
-   * mark's captured original expression, unconditionally, in case
-   * livePreviewValue already pushed an unconfirmed value into the real
-   * Onshape feature while someone was experimenting with the slider; the
-   * point of rejecting is "nothing changed," so the real feature has to
-   * end up back at its original value too, not just the annotation gone.
-   * Appearance restoration (once that's wired) falls out of this for
-   * free -- it keys off "does an open annotation still reference this
-   * part," and after this there won't be one.
-   */
-  async function rejectMark(entry: ValueParameterEntry) {
-    if (!context) return;
-    const annotation = findAnnotation(entry);
-    if (!annotation) return;
-
-    const confirmed = window.confirm(
-      `Discard this mark on ${entry.parameterId}? It will be restored to its original value (${annotation.currentValue}) and the mark removed.`,
-    );
-    if (!confirmed) {
-      return;
-    }
-
-    setSaving(true);
-    const updateRes = await updatePartStudioFeatureSuppressed(
-      {
-        documentId: context.documentId,
-        workspaceId: context.workspaceId,
-        partStudioElementId: context.elementId,
-        server: context.server,
-      },
-      {
-        featureId: entry.featureId,
-        parameterUpdates: [{ parameterId: entry.parameterId, expression: annotation.currentValue }],
-      },
-    );
-    setSaving(false);
-
-    if (!updateRes.ok) {
-      setStatus(`failed to restore original value in Onshape (HTTP ${updateRes.status})`);
-      return;
-    }
-
-    await withSavedDocument((doc) => removeUncertaintyAnnotationById(doc, annotationIdFor(entry)));
-    setSelected(null);
-  }
-
   if (!context) {
     return (
       <div className={styles.page}>
@@ -632,7 +430,6 @@ function ParameterMarkPanelInner() {
           )
         }
         onResolve={() => resolveMark(selected)}
-        onReject={() => rejectMark(selected)}
         onReopen={() =>
           withSavedDocument((doc) => reopenUncertaintyAnnotation(doc, annotationIdFor(selected)))
         }
@@ -641,93 +438,71 @@ function ParameterMarkPanelInner() {
     );
   }
 
-  function renderParamRow(entry: ValueParameterEntry, part: PartWithFeatures) {
-    const annotation = findAnnotation(entry);
-    const state = paramState(annotation);
-
-    return (
-      <div
-        key={entry.parameterId}
-        className={styles.paramRow}
-        onClick={() => {
-          if (state === "unmarked") return;
-          setSelected(entry);
-          highlightPart(part.partId);
-        }}
-        style={state !== "unmarked" ? { cursor: "pointer" } : undefined}
-      >
-        <div className={styles.cardValue}>
-          {parameterLabel(entry.parameterId)}: {formatFeatureParameterValue(entry.typeName, entry.message)}
-        </div>
-        {state === "unmarked" ? (
-          <button
-            type="button"
-            className={styles.needInputButton}
-            onClick={(event) => {
-              event.stopPropagation();
-              void openDetail(entry, part.partId);
-            }}
-          >
-            Need input
-          </button>
-        ) : state === "needsInput" ? (
-          <span className={styles.tagNeedsInput}>Needs input</span>
-        ) : (
-          <span className={styles.tagAnswered}>Answered: {annotation!.resolvedValue}</span>
-        )}
-      </div>
-    );
-  }
-
   return (
     <div className={styles.page}>
       <div className={styles.header}>
-        <h1 className={styles.title}>Need input</h1>
+        <h1 className={styles.title}>Mark a parameter as uncertain</h1>
         <p className={styles.status}>status: {status}</p>
       </div>
-      {parameters === null ? null : partList.length === 0 ? (
-        <p className={styles.emptyState}>Loading this Part Studio&apos;s parts...</p>
+      {parameters === null ? null : parameters.length === 0 ? (
+        <p className={styles.emptyState}>
+          No numeric parameters found in this Part Studio&apos;s feature tree.
+        </p>
       ) : (
         <div className={styles.list}>
-          {partsWithFeatures.map((part) => {
-            const expanded = expandedPartId === part.partId;
-            const paramCount = part.featureGroups.reduce(
-              (sum, group) => sum + group.parameters.length,
-              0,
-            );
-
-            return (
-              <div key={part.partId} className={styles.featureCard}>
-                <div
-                  className={styles.featureHeader}
-                  onClick={() => {
-                    highlightPart(part.partId);
-                    setExpandedPartId(expanded ? null : part.partId);
-                  }}
-                  title="Click to highlight this part in Onshape"
-                >
-                  <span className={styles.cardTitle}>{part.name ?? part.partId}</span>
-                  <span className={styles.cardTypeTag}>
-                    {paramCount > 0
-                      ? `${paramCount} parameter${paramCount === 1 ? "" : "s"}`
-                      : "no adjustable parameters"}
-                  </span>
-                </div>
-                {expanded && part.featureGroups.length > 0 ? (
-                  <div className={styles.paramList}>
-                    {part.featureGroups.map((group) => (
-                      <div key={group.featureId}>
-                        <div className={styles.featureSubheader}>
-                          {group.featureName || featureTypeLabel(group.featureType)}
-                        </div>
-                        {group.parameters.map((entry) => renderParamRow(entry, part))}
-                      </div>
-                    ))}
-                  </div>
-                ) : null}
+          {featureGroups.map((group) => (
+            <div key={group.featureId} className={styles.featureCard}>
+              <div
+                className={styles.featureHeader}
+                onClick={() => openFeatureDialog(group.featureId)}
+                title="Click to highlight this feature in Onshape"
+              >
+                <span className={styles.cardTitle}>{group.featureName || group.featureId}</span>
+                <span className={styles.cardTypeTag}>({group.featureType})</span>
               </div>
-            );
-          })}
+              <div className={styles.paramList}>
+                {group.parameters.map((entry) => {
+                  const annotation = findAnnotation(entry);
+                  const state = paramState(annotation);
+
+                  return (
+                    <div
+                      key={entry.parameterId}
+                      className={styles.paramRow}
+                      onClick={() => {
+                        if (state === "unmarked") return;
+                        setSelected(entry);
+                        openFeatureDialog(entry.featureId);
+                      }}
+                      style={state !== "unmarked" ? { cursor: "pointer" } : undefined}
+                    >
+                      <div className={styles.cardValue}>
+                        {entry.parameterId}: {formatFeatureParameterValue(entry.typeName, entry.message)}
+                      </div>
+                      {state === "unmarked" ? (
+                        <button
+                          type="button"
+                          className={styles.needInputButton}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            void openDetail(entry);
+                          }}
+                        >
+                          Need input
+                        </button>
+                      ) : state === "needsInput" ? (
+                        <span className={styles.tagNeedsInput}>Needs input</span>
+                      ) : (
+                        <span className={styles.tagAnswered}>
+                          Answered: {annotation!.resolvedValue}
+                        </span>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
         </div>
       )}
     </div>
@@ -743,7 +518,6 @@ function DetailView({
   onSaveRange,
   onAddComment,
   onResolve,
-  onReject,
   onReopen,
   onLivePreview,
 }: {
@@ -755,7 +529,6 @@ function DetailView({
   onSaveRange: (min: number | null, max: number | null) => void;
   onAddComment: (text: string) => void;
   onResolve: () => void;
-  onReject: () => void;
   onReopen: () => void;
   onLivePreview: (value: string) => void;
 }) {
@@ -958,26 +731,14 @@ function DetailView({
         <div className={styles.sectionLabel}>Status</div>
         <div className={styles.rangeLockedRow}>
           <span>{resolved ? "Resolved" : "Open"}</span>
-          <div style={{ display: "flex", gap: 8 }}>
-            {resolved ? null : (
-              <button
-                type="button"
-                className={styles.secondaryButton}
-                disabled={saving}
-                onClick={onReject}
-              >
-                Reject
-              </button>
-            )}
-            <button
-              type="button"
-              className={styles.secondaryButton}
-              disabled={saving}
-              onClick={resolved ? onReopen : onResolve}
-            >
-              {resolved ? "Reopen to edit range" : "Mark resolved"}
-            </button>
-          </div>
+          <button
+            type="button"
+            className={styles.secondaryButton}
+            disabled={saving}
+            onClick={resolved ? onReopen : onResolve}
+          >
+            {resolved ? "Reopen to edit range" : "Mark resolved"}
+          </button>
         </div>
         {!resolved && annotation?.resolvedValue ? (
           <div className={styles.rangeLockedNote}>

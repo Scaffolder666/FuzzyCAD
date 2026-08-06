@@ -11,37 +11,21 @@ export const runtime = "nodejs";
  * mechanism for that link, so this evaluates a tiny script through
  * POST /api/partstudios/d/{did}/w/{wid}/e/{eid}/featurescript and returns
  * the raw response for inspection. NOT wired into the production
- * parameter-mark-panel yet -- the exact response shape still needs a live
- * capture first, same as every other "confirmed live" Onshape wire format
- * in this codebase. Disposable once that capture is done.
- *
- * Confirmed live (2026-08-06): a leading "FeatureScript <version>;"
- * pragma / import / "export" -- i.e. a normal top-level FeatureScript
- * document -- gets a PARSE notice back ("extraneous input 'FeatureScript'
- * ... expecting {..., 'function', ...}"). The accepted-token set in that
- * error includes 'function', so this endpoint evaluates the "script"
- * field as a single bare expression against the Part Studio's own
- * already-loaded std-library context, not a standalone document -- just
- * the function literal, no pragma/import/export.
- *
- * Also confirmed live: qCreatedBy() alone returns a Query -- a lazy,
- * symbolic "entities created by this feature" descriptor -- not a
- * resolved list of entities. transientQueriesToStrings() on that
- * unevaluated Query just serializes the descriptor itself back
- * (BTFSValueMap with entityType/featureId/queryType keys), not entity
- * ids. Needs evaluateQuery(context, query) first to actually resolve it
- * against this Context into concrete transient entities before
- * stringifying.
+ * parameter-mark-panel yet -- the exact response shape (and whether the
+ * FeatureScript version pin below even executes against a live document)
+ * needs a live capture first, same as every other "confirmed live" Onshape
+ * wire format in this codebase. Disposable once that capture is done.
  */
 function buildScript(featureId: string) {
-  return `function(context is Context, queries) {
-    return transientQueriesToStrings(evaluateQuery(context, qCreatedBy(makeId("${featureId}"), EntityType.BODY)));
+  return `FeatureScript 2166;
+import(path : "onshape/std/geometry.fs", version : "2166.0");
+
+export function(context is Context, queries) {
+    return transientQueriesToStrings(qCreatedBy(makeId("${featureId}"), EntityType.BODY));
 }`;
 }
 
-// Real featureIds look like "FKF8zbYi3YBEcRZ_0" -- alphanumeric plus
-// underscore (confirmed live, 2026-08-06).
-const FEATURE_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
+const FEATURE_ID_PATTERN = /^[A-Za-z0-9]+$/;
 
 export async function GET(req: NextRequest) {
   const params = req.nextUrl.searchParams;
