@@ -207,6 +207,20 @@ export async function fetchOnshapeElements(
   return res.json() as Promise<ApiResult>;
 }
 
+/** Lets the right panel pick its own document instead of depending on the main tab -- see documents/route.ts. */
+export async function fetchOnshapeDocuments(query: {
+  server: string;
+  q?: string;
+}): Promise<ApiResult> {
+  const params = new URLSearchParams({ server: query.server });
+  if (query.q) {
+    params.set("q", query.q);
+  }
+  const res = await fetch(`/api/onshape/documents?${params.toString()}`);
+
+  return res.json() as Promise<ApiResult>;
+}
+
 export async function fetchOnshapeAssembly(
   query: AssemblyQuery,
 ): Promise<ApiResult> {

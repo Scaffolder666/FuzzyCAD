@@ -18,6 +18,8 @@ import {
 import {
   fetchFeatureCreatedFaceIds,
   fetchFeatureCreatedPartIds,
+  fetchOnshapeElements,
+  fetchOnshapeDocuments,
   fetchOnshapePartStudioParts,
   loadFuzzycadProjectState,
   saveFuzzycadProjectState,
@@ -31,7 +33,11 @@ import {
 import { featureTypeLabel, parameterLabel } from "../lib/featureParameterLabels";
 import {
   ONSHAPE_CONTEXT_STORAGE_KEY,
+  RIGHT_PANEL_SELECTED_CONTEXT_STORAGE_KEY,
+  clearRightPanelSelectedContext,
+  readRightPanelSelectedContext,
   readSharedOnshapeContext,
+  writeRightPanelSelectedContext,
   type SharedOnshapeContext,
 } from "../lib/onshapeRightPanelContext";
 import styles from "./page.module.css";
@@ -146,6 +152,14 @@ function ParameterMarkPanelInner() {
 
   useEffect(() => {
     function applyStoredContext() {
+      // The right panel's own picker takes priority: it's an explicit,
+      // current choice made in the right panel itself, not a hand-me-down
+      // from whatever the main tab happened to have open when it loaded.
+      const picked = readRightPanelSelectedContext();
+      if (picked) {
+        setContext(picked);
+        return;
+      }
       const stored = readSharedOnshapeContext();
       if (stored) {
         setContext(stored);
@@ -155,7 +169,11 @@ function ParameterMarkPanelInner() {
     applyStoredContext();
 
     function handleStorage(event: StorageEvent) {
-      if (event.key === null || event.key === ONSHAPE_CONTEXT_STORAGE_KEY) {
+      if (
+        event.key === null ||
+        event.key === ONSHAPE_CONTEXT_STORAGE_KEY ||
+        event.key === RIGHT_PANEL_SELECTED_CONTEXT_STORAGE_KEY
+      ) {
         applyStoredContext();
       }
     }
@@ -665,10 +683,12 @@ function ParameterMarkPanelInner() {
   if (!context) {
     return (
       <div className={styles.page}>
-        <p>Waiting for Onshape context...</p>
-        <p style={{ color: "#666" }}>
-          Open the FuzzyCAD Panel tab once in this browser first, then reopen this panel.
-        </p>
+        <DocumentPicker
+          onSelect={(picked) => {
+            writeRightPanelSelectedContext(picked);
+            setContext({ ...picked, updatedAt: Date.now() });
+          }}
+        />
       </div>
     );
   }
@@ -749,6 +769,16 @@ function ParameterMarkPanelInner() {
       <div className={styles.header}>
         <h1 className={styles.title}>Need input</h1>
         <p className={styles.status}>status: {status}</p>
+        <button
+          type="button"
+          className={styles.switchDocumentButton}
+          onClick={() => {
+            clearRightPanelSelectedContext();
+            setContext(null);
+          }}
+        >
+          Switch document
+        </button>
       </div>
       {parameters === null ? null : partList.length === 0 ? (
         <p className={styles.emptyState}>Loading this Part Studio&apos;s parts...</p>
@@ -1054,6 +1084,212 @@ function DetailView({
             Resolving will write {annotation.resolvedValue} into the real Onshape feature.
           </div>
         ) : null}
+      </div>
+    </div>
+  );
+}
+
+type PickerDocument = { id: string; name: string; workspaceId: string | null };
+type PickerElement = { id: string; name: string };
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function parsePickerDocuments(raw: unknown): PickerDocument[] {
+  const items = isRecord(raw) && Array.isArray(raw.items) ? raw.items : Array.isArray(raw) ? raw : [];
+  const documents: PickerDocument[] = [];
+  for (const entry of items) {
+    if (!isRecord(entry)) continue;
+    const id = entry.id;
+    const name = entry.name;
+    if (typeof id !== "string" || typeof name !== "string") continue;
+    const defaultWorkspace = entry.defaultWorkspace;
+    const workspaceId =
+      isRecord(defaultWorkspace) && typeof defaultWorkspace.id === "string" ? defaultWorkspace.id : null;
+    documents.push({ id, name, workspaceId });
+  }
+  return documents;
+}
+
+function parsePickerElements(raw: unknown): PickerElement[] {
+  const items = Array.isArray(raw) ? raw : [];
+  const elements: PickerElement[] = [];
+  for (const entry of items) {
+    if (!isRecord(entry)) continue;
+    const id = entry.id;
+    const name = entry.name;
+    const elementType = entry.elementType;
+    if (typeof id !== "string" || typeof name !== "string" || elementType !== "PARTSTUDIO") continue;
+    elements.push({ id, name });
+  }
+  return elements;
+}
+
+/**
+ * Lets the right panel establish its own Onshape context instead of only
+ * ever getting one handed down by the main FuzzyCAD Panel tab -- see
+ * onshapeRightPanelContext.ts. Two-step: pick a document (search or
+ * recent list, GET /api/documents), then pick a Part Studio within it
+ * (reuses the same elements endpoint the main app uses, filtered to
+ * elementType PARTSTUDIO). Whatever's picked is handed back via onSelect
+ * for the caller to persist and use immediately -- this component holds
+ * no context of its own beyond the two-step picking flow.
+ */
+function DocumentPicker({
+  onSelect,
+}: {
+  onSelect: (context: { documentId: string; workspaceId: string; elementId: string; server: string }) => void;
+}) {
+  const server = "https://cad.onshape.com";
+  const [query, setQuery] = useState("");
+  const [status, setStatus] = useState("idle");
+  const [documents, setDocuments] = useState<PickerDocument[]>([]);
+  const [selectedDocument, setSelectedDocument] = useState<PickerDocument | null>(null);
+  const [elements, setElements] = useState<PickerElement[]>([]);
+
+  async function searchDocuments() {
+    setStatus("loading documents...");
+    const res = await fetchOnshapeDocuments({ server, q: query || undefined });
+    if (!res.ok) {
+      setStatus(
+        res.status === 401
+          ? "Not connected to Onshape yet -- open the main FuzzyCAD Panel tab once to connect, then come back."
+          : `Failed to load documents (HTTP ${res.status})`,
+      );
+      setDocuments([]);
+      return;
+    }
+    setDocuments(parsePickerDocuments(res.data));
+    setStatus("ready");
+  }
+
+  // Effect-local copy of the initial load rather than calling the
+  // render-scope searchDocuments() above -- keeps this a plain "fetch
+  // once on mount" effect matching every other loader in this file,
+  // instead of invoking an externally-defined function whose own
+  // setState calls the linter can't statically follow.
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadInitialDocuments() {
+      setStatus("loading documents...");
+      const res = await fetchOnshapeDocuments({ server, q: undefined });
+      if (cancelled) return;
+      if (!res.ok) {
+        setStatus(
+          res.status === 401
+            ? "Not connected to Onshape yet -- open the main FuzzyCAD Panel tab once to connect, then come back."
+            : `Failed to load documents (HTTP ${res.status})`,
+        );
+        setDocuments([]);
+        return;
+      }
+      setDocuments(parsePickerDocuments(res.data));
+      setStatus("ready");
+    }
+
+    void loadInitialDocuments();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  async function pickDocument(doc: PickerDocument) {
+    if (!doc.workspaceId) {
+      setStatus(`"${doc.name}" has no default workspace to read from.`);
+      return;
+    }
+    setSelectedDocument(doc);
+    setStatus("loading Part Studios...");
+    const res = await fetchOnshapeElements({ documentId: doc.id, workspaceId: doc.workspaceId, server });
+    if (!res.ok) {
+      setStatus(`Failed to load elements (HTTP ${res.status})`);
+      setElements([]);
+      return;
+    }
+    const partStudios = parsePickerElements(res.data);
+    setElements(partStudios);
+    setStatus(partStudios.length === 0 ? "This document has no Part Studios." : "ready");
+  }
+
+  if (selectedDocument) {
+    return (
+      <div>
+        <button
+          type="button"
+          className={styles.backButton}
+          onClick={() => {
+            setSelectedDocument(null);
+            setElements([]);
+          }}
+        >
+          &larr; Back to documents
+        </button>
+        <div className={styles.header}>
+          <h1 className={styles.title}>{selectedDocument.name}</h1>
+          <p className={styles.status}>status: {status}</p>
+        </div>
+        <div className={styles.list}>
+          {elements.map((element) => (
+            <div
+              key={element.id}
+              className={styles.featureCard}
+              style={{ cursor: "pointer" }}
+              onClick={() =>
+                onSelect({
+                  documentId: selectedDocument.id,
+                  workspaceId: selectedDocument.workspaceId!,
+                  elementId: element.id,
+                  server,
+                })
+              }
+            >
+              <div className={styles.featureHeader}>
+                <span className={styles.cardTitle}>{element.name}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <div className={styles.header}>
+        <h1 className={styles.title}>Pick a document</h1>
+        <p className={styles.status}>status: {status}</p>
+      </div>
+      <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+        <input
+          type="text"
+          className={styles.valueInput}
+          placeholder="Search documents..."
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") void searchDocuments();
+          }}
+        />
+        <button type="button" className={styles.secondaryButton} onClick={() => void searchDocuments()}>
+          Search
+        </button>
+      </div>
+      <div className={styles.list}>
+        {documents.map((doc) => (
+          <div
+            key={doc.id}
+            className={styles.featureCard}
+            style={{ cursor: "pointer" }}
+            onClick={() => void pickDocument(doc)}
+          >
+            <div className={styles.featureHeader}>
+              <span className={styles.cardTitle}>{doc.name}</span>
+            </div>
+          </div>
+        ))}
       </div>
     </div>
   );
