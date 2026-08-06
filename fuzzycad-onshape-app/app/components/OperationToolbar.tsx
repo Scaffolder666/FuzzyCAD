@@ -195,6 +195,18 @@ function BooleanIcon() {
   );
 }
 
+function ExtrudeIcon() {
+  return (
+    <svg viewBox="0 0 32 32" aria-hidden="true">
+      <path d="M6 12L16 6L26 12L16 18Z" />
+      <path d="M6 12V22L16 28V18" />
+      <path d="M26 12V22L16 28" />
+      <path d="M16 18V10" strokeDasharray="2.5 2.5" />
+      <path d="M13 12L16 10L19 12" />
+    </svg>
+  );
+}
+
 function AlternativeIcon() {
   return (
     <svg viewBox="0 0 32 32" aria-hidden="true">
@@ -305,6 +317,12 @@ const toolGroups: ToolGroup[] = [
         label: "Fillet",
         title: "Click near an edge to mark it for a rounded (fillet) or beveled (chamfer) break",
         icon: <FilletIcon />,
+      },
+      {
+        id: "extrude",
+        label: "Extrude",
+        title: "Click near a face to push/pull it — grow or carve material along its normal",
+        icon: <ExtrudeIcon />,
       },
       {
         id: "booleanUnion",

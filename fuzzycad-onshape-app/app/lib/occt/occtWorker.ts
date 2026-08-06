@@ -58,6 +58,14 @@ type OcctWorkerRequest =
       mode: "union" | "subtract" | "intersect";
       commit: boolean;
     }
+  | {
+      id: number;
+      type: "extrudeFace";
+      handle: number;
+      facePointWorld: [number, number, number];
+      offsetMm: number;
+      commit: boolean;
+    }
   | { id: number; type: "exportAssemblyStep" }
   | { id: number; type: "exportSolidsStep"; handles: number[] };
 
@@ -91,6 +99,14 @@ type OcctWorkerResponse =
       resolved: boolean;
     }
   | { id: number; type: "booleanSolidsResult"; handle: number; mesh: TessellatedShape; valid: boolean }
+  | {
+      id: number;
+      type: "extrudeFaceResult";
+      handle: number;
+      mesh: TessellatedShape;
+      valid: boolean;
+      resolved: boolean;
+    }
   | { id: number; type: "testStepBytesResult"; buffer: ArrayBuffer }
   | { id: number; type: "exportAssemblyStepResult"; buffer: ArrayBuffer }
   | { id: number; type: "exportSolidsStepResult"; buffer: ArrayBuffer }
@@ -233,6 +249,12 @@ type OpenCascadeInstance = {
     s1: TopoDS_Shape,
     s2: TopoDS_Shape,
     range: unknown,
+  ) => { Shape: () => TopoDS_Shape; delete: () => void };
+  BRepPrimAPI_MakePrism_1: new (
+    shape: TopoDS_Shape,
+    vec: unknown,
+    copy: boolean,
+    canonize: boolean,
   ) => { Shape: () => TopoDS_Shape; delete: () => void };
 };
 
@@ -510,6 +532,143 @@ function resolveNearestEdge(
 
   edgeExplorer.delete();
   return best;
+}
+
+/**
+ * Finds the face of `shape` whose vertex-average sits closest to
+ * `pointWorld`, and an approximate face normal (from the cross product of
+ * the first two non-degenerate edges of its boundary, computed in plain
+ * JS rather than via an OCCT surface-evaluation class not yet verified
+ * against this build). Assumes a planar face — good enough for the flat
+ * panels/plates this tool is meant for; a curved face's "normal" here is
+ * just whatever that first corner happens to give.
+ */
+function resolveNearestFace(
+  oc: OpenCascadeInstance,
+  shape: TopoDS_Shape,
+  pointWorld: [number, number, number],
+): { face: TopoDS_Shape; normal: [number, number, number] } | null {
+  const [px, py, pz] = pointWorld;
+  let best: TopoDS_Shape | null = null;
+  let bestNormal: [number, number, number] = [0, 0, 1];
+  let bestDistSq = Infinity;
+
+  const faceExplorer = new oc.TopExp_Explorer_2(
+    shape,
+    oc.TopAbs_ShapeEnum.TopAbs_FACE,
+    oc.TopAbs_ShapeEnum.TopAbs_SHAPE,
+  );
+
+  while (faceExplorer.More()) {
+    const face = oc.TopoDS.Face_1(faceExplorer.Current());
+
+    const points: [number, number, number][] = [];
+    const vertexExplorer = new oc.TopExp_Explorer_2(
+      face,
+      oc.TopAbs_ShapeEnum.TopAbs_VERTEX,
+      oc.TopAbs_ShapeEnum.TopAbs_SHAPE,
+    );
+    while (vertexExplorer.More()) {
+      const vertex = oc.TopoDS.Vertex_1(vertexExplorer.Current());
+      const pnt = oc.BRep_Tool.Pnt(vertex);
+      points.push([pnt.X(), pnt.Y(), pnt.Z()]);
+      vertexExplorer.Next();
+    }
+    vertexExplorer.delete();
+
+    if (points.length > 0) {
+      let sumX = 0;
+      let sumY = 0;
+      let sumZ = 0;
+      for (const [x, y, z] of points) {
+        sumX += x;
+        sumY += y;
+        sumZ += z;
+      }
+      const cx = sumX / points.length;
+      const cy = sumY / points.length;
+      const cz = sumZ / points.length;
+      const distSq = (cx - px) ** 2 + (cy - py) ** 2 + (cz - pz) ** 2;
+
+      if (distSq < bestDistSq) {
+        bestDistSq = distSq;
+        best = face;
+        bestNormal = computeNormalFromPoints(points) ?? bestNormal;
+      }
+    }
+
+    faceExplorer.Next();
+  }
+
+  faceExplorer.delete();
+
+  if (!best) {
+    return null;
+  }
+
+  return { face: best, normal: bestNormal };
+}
+
+/** First non-degenerate cross product from a face's boundary vertices, normalized. */
+function computeNormalFromPoints(
+  points: [number, number, number][],
+): [number, number, number] | null {
+  for (let i = 0; i + 2 < points.length; i++) {
+    const [ax, ay, az] = points[i];
+    const [bx, by, bz] = points[i + 1];
+    const [cx, cy, cz] = points[i + 2];
+    const ux = bx - ax;
+    const uy = by - ay;
+    const uz = bz - az;
+    const vx = cx - ax;
+    const vy = cy - ay;
+    const vz = cz - az;
+    const nx = uy * vz - uz * vy;
+    const ny = uz * vx - ux * vz;
+    const nz = ux * vy - uy * vx;
+    const len = Math.sqrt(nx * nx + ny * ny + nz * nz);
+
+    if (len > 1e-9) {
+      return [nx / len, ny / len, nz / len];
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Push/pull one face: extrudes it into a prism along `normal` scaled by
+ * `offsetMm` (BRepPrimAPI_MakePrism), then combines that prism with the
+ * original solid — Fuse to grow material outward (offsetMm >= 0), Cut to
+ * carve it away (offsetMm < 0, so the prism vector already points inward).
+ */
+function extrudeFace(
+  oc: OpenCascadeInstance,
+  shape: TopoDS_Shape,
+  face: TopoDS_Shape,
+  normal: [number, number, number],
+  offsetMm: number,
+): TopoDS_Shape {
+  const vec = new oc.gp_Vec_4(normal[0] * offsetMm, normal[1] * offsetMm, normal[2] * offsetMm);
+  const prismMaker = new oc.BRepPrimAPI_MakePrism_1(face, vec, false, false);
+  const prism = prismMaker.Shape();
+  prismMaker.delete();
+
+  const progress = new oc.Message_ProgressRange_1();
+
+  if (offsetMm >= 0) {
+    const op = new oc.BRepAlgoAPI_Fuse_3(shape, prism, progress);
+    const result = op.Shape();
+    op.delete();
+    progress.delete();
+    return result;
+  }
+
+  const op = new oc.BRepAlgoAPI_Cut_3(shape, prism, progress);
+  const result = op.Shape();
+  op.delete();
+  progress.delete();
+  return result;
 }
 
 /**
@@ -861,6 +1020,51 @@ self.onmessage = async (event: MessageEvent<OcctWorkerRequest>) => {
         handle: handleA,
         mesh,
         valid,
+      };
+      self.postMessage(response, [mesh.positions.buffer, mesh.indices.buffer]);
+      return;
+    }
+
+    if (type === "extrudeFace") {
+      const oc = await loadOcct();
+      const { handle, facePointWorld, offsetMm, commit } = event.data;
+      const shape = shapeStore.get(handle);
+
+      if (!shape) {
+        throw new Error(`extrudeFace: unknown handle ${handle}`);
+      }
+
+      const resolved = resolveNearestFace(oc, shape, facePointWorld);
+
+      if (!resolved) {
+        const mesh = tessellateShape(oc, shape);
+        const response: OcctWorkerResponse = {
+          id,
+          type: "extrudeFaceResult",
+          handle,
+          mesh,
+          valid: true,
+          resolved: false,
+        };
+        self.postMessage(response, [mesh.positions.buffer, mesh.indices.buffer]);
+        return;
+      }
+
+      const transformed = extrudeFace(oc, shape, resolved.face, resolved.normal, offsetMm);
+      const valid = checkShapeValid(oc, transformed);
+
+      if (commit) {
+        shapeStore.set(handle, transformed);
+      }
+
+      const mesh = tessellateShape(oc, transformed);
+      const response: OcctWorkerResponse = {
+        id,
+        type: "extrudeFaceResult",
+        handle,
+        mesh,
+        valid,
+        resolved: true,
       };
       self.postMessage(response, [mesh.positions.buffer, mesh.indices.buffer]);
       return;

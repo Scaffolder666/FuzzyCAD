@@ -15,4 +15,5 @@ export type OperationTool =
   | "fillet"
   | "booleanUnion"
   | "booleanSubtract"
-  | "booleanIntersect";
+  | "booleanIntersect"
+  | "extrude";

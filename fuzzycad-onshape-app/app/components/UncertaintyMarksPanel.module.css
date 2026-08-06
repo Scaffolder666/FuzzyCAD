@@ -244,6 +244,11 @@
   color: #b91c1c;
 }
 
+.kindPillExtrude {
+  background: rgba(5, 150, 105, 0.12);
+  color: #047857;
+}
+
 .answerRow {
   display: flex;
   gap: 6px;

@@ -237,6 +237,22 @@ export type BooleanUncertaintyAnnotation = BaseAnnotationFields & {
 };
 
 /**
+ * "Extrude": SketchUp-style push/pull on one (assumed planar) face — grow
+ * material outward along the face's own normal (positive offsetMeters) or
+ * carve it away (negative). facePointWorld is a world-space point the
+ * marker clicked near the face, not a topology index, for the same
+ * stability reason Fillet's edgePointWorld is — resolved to the nearest
+ * real face at apply time (see occtWorker.ts's resolveNearestFace).
+ */
+export type ExtrudeUncertaintyAnnotation = BaseAnnotationFields & {
+  type: "extrude";
+  facePointWorld: [number, number, number];
+  offsetMeters: number;
+  previousValueLabel: string;
+  proposedValueLabel: string;
+};
+
+/**
  * "Move (needs input)": instead of the flagger proposing an exact delta,
  * they fix a direction and a range — "somewhere between 4 and 10mm along
  * X" — and someone else with the relevant knowledge picks the actual
@@ -265,7 +281,8 @@ export type FuzzyCADUncertaintyAnnotation =
   | BendUncertaintyAnnotation
   | MoveQuestionUncertaintyAnnotation
   | FilletUncertaintyAnnotation
-  | BooleanUncertaintyAnnotation;
+  | BooleanUncertaintyAnnotation
+  | ExtrudeUncertaintyAnnotation;
 
 export function createEmptyUncertaintyDocument(
   source: FuzzyCADUncertaintySource,
@@ -1763,6 +1780,104 @@ export function toBooleanPreviews(
       pathKey: annotation.target.referencePathKey,
       mode: annotation.mode,
       otherPathKey: annotation.otherPathKey,
+      status: annotation.status,
+    }));
+}
+
+function makeExtrudeAnnotationId(pathKey: string) {
+  const suffix =
+    typeof crypto !== "undefined" && "randomUUID" in crypto
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  return `extrude:${pathKey}:${suffix}`;
+}
+
+function createExtrudeAnnotation(input: {
+  pathKey: string;
+  facePointWorld: [number, number, number];
+  offsetMeters: number;
+  previousValueLabel: string;
+  proposedValueLabel: string;
+  comment?: string;
+  author?: string;
+  assignee?: string;
+  status?: AnnotationStatus;
+  createdAt?: string;
+  updatedAt?: string;
+}): ExtrudeUncertaintyAnnotation | null {
+  if (!input.pathKey) {
+    return null;
+  }
+
+  const now = new Date().toISOString();
+
+  return {
+    id: makeExtrudeAnnotationId(input.pathKey),
+    type: "extrude",
+    target: {
+      pathKeys: [input.pathKey],
+      referencePathKey: input.pathKey,
+      scope: "single",
+    },
+    facePointWorld: input.facePointWorld,
+    offsetMeters: input.offsetMeters,
+    previousValueLabel: input.previousValueLabel,
+    proposedValueLabel: input.proposedValueLabel,
+    comment: input.comment,
+    author: input.author,
+    assignee: input.assignee,
+    status: input.status ?? "open",
+    createdAt: input.createdAt ?? now,
+    updatedAt: input.updatedAt ?? now,
+  };
+}
+
+/** Unlike Move/Rotate/Bend, a part can carry more than one extrude — each call always appends a new mark. */
+export function addExtrude(
+  document: FuzzyCADUncertaintyDocument,
+  input: {
+    pathKey: string;
+    facePointWorld: [number, number, number];
+    offsetMeters: number;
+    previousValueLabel: string;
+    proposedValueLabel: string;
+    author?: string;
+  },
+): FuzzyCADUncertaintyDocument {
+  const nextAnnotation = createExtrudeAnnotation({ ...input, status: "open" });
+
+  if (!nextAnnotation) {
+    return document;
+  }
+
+  return {
+    ...document,
+    annotations: [...document.annotations, nextAnnotation],
+  };
+}
+
+export type ExtrudePreview = {
+  id: string;
+  pathKey: string;
+  facePointWorld: [number, number, number];
+  offsetMeters: number;
+  status: "open" | "resolved";
+};
+
+/** Open AND resolved extrude proposals, for the 3D viewer to render as a persistent ghost. */
+export function toExtrudePreviews(
+  document: FuzzyCADUncertaintyDocument,
+): ExtrudePreview[] {
+  return document.annotations
+    .filter(
+      (annotation): annotation is ExtrudeUncertaintyAnnotation =>
+        annotation.type === "extrude",
+    )
+    .map((annotation) => ({
+      id: annotation.id,
+      pathKey: annotation.target.referencePathKey,
+      facePointWorld: annotation.facePointWorld,
+      offsetMeters: annotation.offsetMeters,
       status: annotation.status,
     }));
 }

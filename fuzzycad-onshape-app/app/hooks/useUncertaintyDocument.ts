@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import {
   addBoolean,
+  addExtrude,
   addFillet,
   createEmptyUncertaintyDocument,
   removeSizeAnnotationsForPathKeys,
@@ -16,6 +17,7 @@ import {
   toBendPreviews,
   toBooleanPreviews,
   toDistancePreviews,
+  toExtrudePreviews,
   toFilletPreviews,
   toFuzzyConfidenceAnnotations,
   toMovePreviews,
@@ -112,6 +114,11 @@ export function useUncertaintyDocument(source: FuzzyCADUncertaintySource) {
 
   const booleanPreviews = useMemo(
     () => toBooleanPreviews(uncertaintyDocumentWithCurrentSource),
+    [uncertaintyDocumentWithCurrentSource],
+  );
+
+  const extrudePreviews = useMemo(
+    () => toExtrudePreviews(uncertaintyDocumentWithCurrentSource),
     [uncertaintyDocumentWithCurrentSource],
   );
 
@@ -452,6 +459,25 @@ export function useUncertaintyDocument(source: FuzzyCADUncertaintySource) {
     );
   }
 
+  function addExtrudeMark(input: {
+    pathKey: string;
+    facePointWorld: [number, number, number];
+    offsetMeters: number;
+    previousValueLabel: string;
+    proposedValueLabel: string;
+    author?: string;
+  }) {
+    setUncertaintyDocument((previous) =>
+      addExtrude(
+        {
+          ...previous,
+          source,
+        },
+        input,
+      ),
+    );
+  }
+
   function selectAnnotationAlternativeOption(
     annotationId: string,
     optionId: string,
@@ -504,5 +530,7 @@ export function useUncertaintyDocument(source: FuzzyCADUncertaintySource) {
     answerMoveQuestionMark,
     addFilletMark,
     addBooleanMark,
+    addExtrudeMark,
+    extrudePreviews,
   };
 }

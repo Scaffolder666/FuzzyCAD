@@ -215,6 +215,28 @@ class OcctClient {
     return { mesh: response.mesh, valid: response.valid };
   }
 
+  /**
+   * commit=false: preview only, always from the last committed state.
+   * commit=true: replaces the stored solid. facePointWorld is a
+   * world-space point near the face to push/pull — resolved to the
+   * actual nearest face worker-side (see occtWorker.ts's
+   * resolveNearestFace); `resolved` reports whether one was found.
+   * offsetMm >= 0 grows material outward, < 0 carves it away.
+   */
+  async extrudeFace(
+    handle: number,
+    facePointWorld: [number, number, number],
+    offsetMm: number,
+    commit: boolean,
+  ): Promise<{ mesh: { positions: Float32Array; indices: Uint32Array }; valid: boolean; resolved: boolean }> {
+    await this.ready();
+    const response = await this.send({ type: "extrudeFace", handle, facePointWorld, offsetMm, commit });
+    if (response.type !== "extrudeFaceResult") {
+      throw new Error(`Unexpected response type: ${response.type}`);
+    }
+    return { mesh: response.mesh, valid: response.valid, resolved: response.resolved };
+  }
+
   /** Combines every currently-loaded solid (including any committed edits) into one compound and writes it out as STEP bytes. */
   async exportAssemblyStep(): Promise<ArrayBuffer> {
     await this.ready();

@@ -7,6 +7,7 @@ import type {
   BooleanUncertaintyAnnotation,
   DistanceMoveMode,
   DistanceUncertaintyAnnotation,
+  ExtrudeUncertaintyAnnotation,
   FilletUncertaintyAnnotation,
   FuzzyCADUncertaintyAnnotation,
   FuzzyCADUncertaintyDocument,
@@ -119,7 +120,8 @@ function matchesFilter(
       annotation.type === "rotate" ||
       annotation.type === "bend" ||
       annotation.type === "fillet" ||
-      annotation.type === "boolean"
+      annotation.type === "boolean" ||
+      annotation.type === "extrude"
     );
   }
 
@@ -1129,6 +1131,82 @@ function BooleanCard({
   );
 }
 
+function ExtrudeCard({
+  annotation,
+  selected,
+  hovered,
+  onSelect,
+  onDelete,
+  onCommentChange,
+  onResolve,
+}: {
+  annotation: ExtrudeUncertaintyAnnotation;
+  selected: boolean;
+  hovered: boolean;
+  onSelect: () => void;
+  onDelete: () => void;
+  onCommentChange: (comment: string) => void;
+  onResolve: () => void;
+}) {
+  return (
+    <article
+      className={`${styles.card} ${selected ? styles.cardSelected : ""} ${
+        hovered ? styles.cardHovered : ""
+      }`}
+      onClick={onSelect}
+    >
+      <div className={styles.cardHeader}>
+        <span className={`${styles.kindPill} ${styles.kindPillExtrude}`}>
+          Proposed extrude
+        </span>
+      </div>
+
+      <div className={styles.cardTitle}>{annotation.target.referencePathKey}</div>
+
+      <div className={styles.valueLine}>
+        <span className={styles.valueOld}>{annotation.previousValueLabel}</span>
+        <span className={styles.valueArrow}>&rarr;</span>
+        <span className={styles.valueNew}>{annotation.proposedValueLabel}</span>
+      </div>
+
+      {annotation.author ? (
+        <div className={styles.metaRow}>proposed by {annotation.author}</div>
+      ) : null}
+
+      <textarea
+        className={styles.comment}
+        value={annotation.comment ?? ""}
+        placeholder="Add a comment..."
+        onClick={(event) => event.stopPropagation()}
+        onChange={(event) => onCommentChange(event.target.value)}
+      />
+
+      <div className={styles.actions}>
+        <button
+          type="button"
+          className={styles.resolveButton}
+          onClick={(event) => {
+            event.stopPropagation();
+            onResolve();
+          }}
+        >
+          Accept
+        </button>
+        <button
+          type="button"
+          className={styles.deleteButton}
+          onClick={(event) => {
+            event.stopPropagation();
+            onDelete();
+          }}
+        >
+          Reject
+        </button>
+      </div>
+    </article>
+  );
+}
+
 function MoveQuestionCard({
   annotation,
   selected,
@@ -1646,6 +1724,23 @@ export default function UncertaintyMarksPanel({
               );
             }
 
+            if (annotation.type === "extrude") {
+              return (
+                <ExtrudeCard
+                  key={annotation.id}
+                  annotation={annotation}
+                  selected={selected}
+                  hovered={hovered}
+                  onSelect={() => onSelectAnnotation(annotation.id)}
+                  onDelete={() => onDeleteAnnotation(annotation.id)}
+                  onCommentChange={(comment) =>
+                    onCommentChange(annotation.id, comment)
+                  }
+                  onResolve={() => onResolveAnnotation(annotation.id)}
+                />
+              );
+            }
+
             if (annotation.type === "moveQuestion") {
               return (
                 <MoveQuestionCard
@@ -1722,7 +1817,9 @@ export default function UncertaintyMarksPanel({
                                         ? `${annotation.kind === "chamfer" ? "Chamfer" : "Fillet"}: ${annotation.target.referencePathKey}`
                                         : annotation.type === "boolean"
                                           ? `${annotation.mode}: ${annotation.target.referencePathKey}`
-                                          : "Alternative"}
+                                          : annotation.type === "extrude"
+                                            ? `Extrude: ${annotation.target.referencePathKey}`
+                                            : "Alternative"}
                     </span>
                     <button
                       type="button"

@@ -59,6 +59,7 @@ import MovePlaneHandle from "./viewer/MovePlaneHandle";
 import ScaleHandle from "./viewer/ScaleHandle";
 import RotateHandle from "./viewer/RotateHandle";
 import FilletHandle from "./viewer/FilletHandle";
+import ExtrudeHandle from "./viewer/ExtrudeHandle";
 import RotateProtractor from "./viewer/RotateProtractor";
 import BendControlPoints from "./viewer/BendControlPoints";
 import MoveRangeHandles from "./viewer/MoveRangeHandles";
@@ -241,6 +242,15 @@ export type FilletPreview = {
   status: "open" | "resolved";
 };
 
+/** A saved extrude (push/pull face) proposal, structurally the same shape as document.ts's. */
+export type ExtrudePreview = {
+  id: string;
+  pathKey: string;
+  facePointWorld: [number, number, number];
+  offsetMeters: number;
+  status: "open" | "resolved";
+};
+
 /** A plan for the "Move (needs input)" tool's active range-definition session — single object, no followers. */
 export type MoveQuestionRolePlan = {
   pathKey: string;
@@ -366,6 +376,13 @@ type FuzzyCADGeometryViewerProps = {
   filletPick?: { pathKey: string; edgePointWorld: [number, number, number]; kind: FilletKind; amountMm: number } | null;
   /** Every open (and resolved) fillet/chamfer mark, for a persistent B-rep ghost per mark — not just the one actively being adjusted. */
   filletPreviews?: FilletPreview[];
+  /** Pending face pick for the "Extrude" (push/pull) tool. Same no-live-preview shape as filletPick. */
+  extrudePick?: { pathKey: string; facePointWorld: [number, number, number]; offsetMm: number } | null;
+  onExtrudeOffsetChange?: (offsetMm: number) => void;
+  onExtrudeConfirm?: () => void;
+  onExtrudeCancel?: () => void;
+  /** Every open (and resolved) extrude mark, for a persistent B-rep ghost per mark. */
+  extrudePreviews?: ExtrudePreview[];
   onFilletKindChange?: (kind: FilletKind) => void;
   onFilletAmountChange?: (amountMm: number) => void;
   onFilletConfirm?: () => void;
@@ -1136,6 +1153,11 @@ function Model({
   onFilletAmountChange,
   onFilletConfirm,
   onFilletCancel,
+  extrudePick,
+  onExtrudeOffsetChange,
+  onExtrudeConfirm,
+  onExtrudeCancel,
+  extrudePreviews,
   hoveredPathKey,
   onHoveredPathKeyChange,
   focusRequest,
@@ -1202,6 +1224,13 @@ function Model({
   filletPick?: { pathKey: string; edgePointWorld: [number, number, number]; kind: FilletKind; amountMm: number } | null;
   /** Every open (and resolved) fillet/chamfer mark, for a persistent B-rep ghost per mark — not just the one actively being adjusted. */
   filletPreviews?: FilletPreview[];
+  /** Pending face pick for the "Extrude" (push/pull) tool. Same no-live-preview shape as filletPick. */
+  extrudePick?: { pathKey: string; facePointWorld: [number, number, number]; offsetMm: number } | null;
+  onExtrudeOffsetChange?: (offsetMm: number) => void;
+  onExtrudeConfirm?: () => void;
+  onExtrudeCancel?: () => void;
+  /** Every open (and resolved) extrude mark, for a persistent B-rep ghost per mark. */
+  extrudePreviews?: ExtrudePreview[];
   onFilletKindChange?: (kind: FilletKind) => void;
   onFilletAmountChange?: (amountMm: number) => void;
   onFilletConfirm?: () => void;
@@ -2356,6 +2385,151 @@ function Model({
 
   useEffect(() => {
     const ghosts = filletPreviewGhostsRef.current;
+
+    return () => {
+      for (const ghost of ghosts.values()) {
+        scene.remove(ghost);
+        disposeBrepGhostMesh(ghost);
+      }
+      ghosts.clear();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Extrude's live preview — same debounced-real-solve shape as Fillet's
+  // above (no cheap rigid-transform approximation available for a
+  // topology-changing op).
+  const brepExtrudeGhostRef = useRef<BrepGhostMesh | null>(null);
+  const brepExtrudeDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (!extrudePick || !brepGhostSource) {
+      if (brepExtrudeGhostRef.current) {
+        scene.remove(brepExtrudeGhostRef.current);
+        disposeBrepGhostMesh(brepExtrudeGhostRef.current);
+        brepExtrudeGhostRef.current = null;
+        invalidate();
+      }
+      return;
+    }
+
+    if (brepGhostSource.status !== "ready") {
+      return;
+    }
+
+    const handle = brepGhostSource.getHandle(extrudePick.pathKey);
+
+    if (handle === null) {
+      return;
+    }
+
+    const facePointMm: [number, number, number] = [
+      extrudePick.facePointWorld[0] / STEP_MM_TO_THREE_M,
+      extrudePick.facePointWorld[1] / STEP_MM_TO_THREE_M,
+      extrudePick.facePointWorld[2] / STEP_MM_TO_THREE_M,
+    ];
+
+    if (brepExtrudeDebounceRef.current) {
+      clearTimeout(brepExtrudeDebounceRef.current);
+    }
+
+    brepExtrudeDebounceRef.current = setTimeout(() => {
+      getOcctClient()
+        .extrudeFace(handle, facePointMm, extrudePick.offsetMm, false)
+        .then(({ mesh, valid, resolved }) => {
+          if (!resolved || !valid) {
+            return;
+          }
+
+          if (!brepExtrudeGhostRef.current) {
+            const ghost = createBrepGhostMesh(mesh, "FuzzyCAD Extrude Preview (B-rep)");
+            brepExtrudeGhostRef.current = ghost;
+            scene.add(ghost);
+          } else {
+            updateBrepGhostMesh(brepExtrudeGhostRef.current, mesh);
+          }
+
+          invalidate();
+        })
+        .catch(() => {
+          // Best-effort — no ghost shown on failure, the marker dot still is.
+        });
+    }, 250);
+
+    return () => {
+      if (brepExtrudeDebounceRef.current) {
+        clearTimeout(brepExtrudeDebounceRef.current);
+      }
+    };
+  }, [extrudePick, brepGhostSource, scene, invalidate]);
+
+  // Every saved-and-still-OPEN extrude mark also needs its own persistent
+  // ghost — same reasoning and shape as filletPreviewGhostsRef above (this
+  // is the piece that got missed the first time for Fillet).
+  const extrudePreviewGhostsRef = useRef<Map<string, BrepGhostMesh>>(new Map());
+
+  useEffect(() => {
+    if (!brepGhostSource || brepGhostSource.status !== "ready") {
+      return;
+    }
+
+    const openPreviews = (extrudePreviews ?? []).filter(
+      (preview) => preview.status === "open",
+    );
+    const openIds = new Set(openPreviews.map((preview) => preview.id));
+
+    for (const [id, ghost] of extrudePreviewGhostsRef.current) {
+      if (!openIds.has(id)) {
+        scene.remove(ghost);
+        disposeBrepGhostMesh(ghost);
+        extrudePreviewGhostsRef.current.delete(id);
+      }
+    }
+
+    let cancelled = false;
+
+    for (const preview of openPreviews) {
+      if (extrudePreviewGhostsRef.current.has(preview.id)) {
+        continue;
+      }
+
+      const handle = brepGhostSource.getHandle(preview.pathKey);
+
+      if (handle === null) {
+        continue;
+      }
+
+      const facePointMm: [number, number, number] = [
+        preview.facePointWorld[0] / STEP_MM_TO_THREE_M,
+        preview.facePointWorld[1] / STEP_MM_TO_THREE_M,
+        preview.facePointWorld[2] / STEP_MM_TO_THREE_M,
+      ];
+      const offsetMm = preview.offsetMeters / STEP_MM_TO_THREE_M;
+
+      getOcctClient()
+        .extrudeFace(handle, facePointMm, offsetMm, false)
+        .then(({ mesh, valid, resolved }) => {
+          if (cancelled || !resolved || !valid || extrudePreviewGhostsRef.current.has(preview.id)) {
+            return;
+          }
+
+          const ghost = createBrepGhostMesh(mesh, `FuzzyCAD Extrude Preview (B-rep) ${preview.id}`);
+          extrudePreviewGhostsRef.current.set(preview.id, ghost);
+          scene.add(ghost);
+          invalidate();
+        })
+        .catch(() => {
+          // Best-effort — mark stays visible via its panel card even if the ghost fails.
+        });
+    }
+
+    return () => {
+      cancelled = true;
+    };
+  }, [extrudePreviews, brepGhostSource, scene, invalidate]);
+
+  useEffect(() => {
+    const ghosts = extrudePreviewGhostsRef.current;
 
     return () => {
       for (const ghost of ghosts.values()) {
@@ -4295,6 +4469,16 @@ function Model({
         />
       ) : null}
 
+      {extrudePick ? (
+        <ExtrudeHandle
+          facePointWorld={new THREE.Vector3(...extrudePick.facePointWorld)}
+          offsetMm={extrudePick.offsetMm}
+          onOffsetChange={(offsetMm) => onExtrudeOffsetChange?.(offsetMm)}
+          onConfirm={() => onExtrudeConfirm?.()}
+          onCancel={() => onExtrudeCancel?.()}
+        />
+      ) : null}
+
       {persistentRotateFrames.map((frame) => (
         <RotateProtractor
           key={frame.key}
@@ -4478,6 +4662,11 @@ export default function FuzzyCADGeometryViewer({
   onFilletAmountChange,
   onFilletConfirm,
   onFilletCancel,
+  extrudePick,
+  onExtrudeOffsetChange,
+  onExtrudeConfirm,
+  onExtrudeCancel,
+  extrudePreviews,
   hoveredPathKey,
   onHoveredPathKeyChange,
   focusRequest,
@@ -4600,6 +4789,11 @@ export default function FuzzyCADGeometryViewer({
                   onAnswerDistance={onAnswerDistance}
                   filletPick={filletPick}
                   filletPreviews={filletPreviews}
+                  extrudePick={extrudePick}
+                  onExtrudeOffsetChange={onExtrudeOffsetChange}
+                  onExtrudeConfirm={onExtrudeConfirm}
+                  onExtrudeCancel={onExtrudeCancel}
+                  extrudePreviews={extrudePreviews}
                   onFilletKindChange={onFilletKindChange}
                   onFilletAmountChange={onFilletAmountChange}
                   onFilletConfirm={onFilletConfirm}

@@ -353,6 +353,16 @@ export default function FuzzyCADHome() {
   const [filletKind, setFilletKind] = useState<FilletKind>("fillet");
   const [filletAmountMm, setFilletAmountMm] = useState(2);
 
+  // "Extrude" tool: same one-click-captures-pathKey-and-point shape as
+  // Fillet, but push/pull a face instead of rounding an edge.
+  const [extrudePickPathKey, setExtrudePickPathKey] = useState<string | null>(
+    null,
+  );
+  const [extrudePickFacePointWorld, setExtrudePickFacePointWorld] = useState<
+    [number, number, number] | null
+  >(null);
+  const [extrudeOffsetMm, setExtrudeOffsetMm] = useState(2);
+
   // "Boolean" tool: same two-click flow as Distance (mode is fixed by
   // which toolbar variant — Union/Subtract/Intersect — is active, so
   // there's nothing else to configure once both parts are picked).
@@ -466,6 +476,8 @@ export default function FuzzyCADHome() {
     answerMoveQuestionMark,
     addFilletMark,
     addBooleanMark,
+    addExtrudeMark,
+    extrudePreviews,
   } = useUncertaintyDocument(currentUncertaintySource);
 
   const appearanceMarkingQuery = useMemo(
@@ -1482,6 +1494,67 @@ export default function FuzzyCADHome() {
     setActiveTool("select");
   }
 
+  function startExtrude() {
+    setActiveTool("extrude");
+    resetSizeOperationState();
+    setLassoPathKeys([]);
+
+    if (documentId && workspaceId && selectedPartStudioId) {
+      brepGhostSource.ensureLoaded(
+        {
+          documentId,
+          workspaceId,
+          assemblyElementId: selectedPartStudioId,
+          server,
+        },
+        objectSummaries,
+      );
+    }
+  }
+
+  /** Click routing while the Extrude tool is active: a single click on a
+   * part captures both its pathKey and the clicked world point (near the
+   * face to push/pull) in one gesture, same shape as Fillet's pick. */
+  function handleExtrudePick(pathKey: string | null) {
+    if (!pathKey || extrudePickPathKey) {
+      return;
+    }
+
+    const worldPoint = lastWorldPointRef.current;
+
+    if (!worldPoint) {
+      return;
+    }
+
+    setHighlightedPathKey(pathKey);
+    setExtrudePickPathKey(pathKey);
+    setExtrudePickFacePointWorld(worldPoint);
+    setExtrudeOffsetMm(2);
+  }
+
+  function applyExtrude() {
+    if (!extrudePickPathKey || !extrudePickFacePointWorld) {
+      return;
+    }
+
+    addExtrudeMark({
+      pathKey: extrudePickPathKey,
+      facePointWorld: extrudePickFacePointWorld,
+      offsetMeters: extrudeOffsetMm / 1000,
+      previousValueLabel: "current face",
+      proposedValueLabel: `${extrudeOffsetMm >= 0 ? "push" : "pull"} ${Math.abs(extrudeOffsetMm).toFixed(1)}mm`,
+    });
+
+    setExtrudePickPathKey(null);
+    setExtrudePickFacePointWorld(null);
+  }
+
+  function cancelExtrude() {
+    setExtrudePickPathKey(null);
+    setExtrudePickFacePointWorld(null);
+    setActiveTool("select");
+  }
+
   function startBoolean() {
     resetSizeOperationState();
     setLassoPathKeys([]);
@@ -1986,13 +2059,15 @@ async function pushAcceptedChangesToOnshape() {
   const resolvedRotates = rotatePreviews.filter((preview) => preview.status === "resolved");
   const resolvedFillets = filletPreviews.filter((preview) => preview.status === "resolved");
   const resolvedBooleans = booleanPreviews.filter((preview) => preview.status === "resolved");
+  const resolvedExtrudes = extrudePreviews.filter((preview) => preview.status === "resolved");
 
   if (
     resolvedMoves.length === 0 &&
     resolvedScales.length === 0 &&
     resolvedRotates.length === 0 &&
     resolvedFillets.length === 0 &&
-    resolvedBooleans.length === 0
+    resolvedBooleans.length === 0 &&
+    resolvedExtrudes.length === 0
   ) {
     setPushBlockedSummary(null);
     return;
@@ -2038,7 +2113,8 @@ async function pushAcceptedChangesToOnshape() {
       resolvedScales.length === 0 &&
       resolvedRotates.length === 0 &&
       resolvedFillets.length === 0 &&
-      resolvedBooleans.length === 0
+      resolvedBooleans.length === 0 &&
+      resolvedExtrudes.length === 0
     ) {
       setPushBlockedSummary(blocked.length > 0 ? blocked : null);
       return;
@@ -2192,6 +2268,20 @@ async function pushAcceptedChangesToOnshape() {
       // handleB's geometry was folded into handleA and dropped from the
       // worker's shape store (see occtWorker.ts's booleanSolids handler) —
       // don't also try to export it standalone below.
+    }
+
+    for (const preview of resolvedExtrudes) {
+      const facePointStep = threeWorldPointToStep(new THREE.Vector3(...preview.facePointWorld));
+      const offsetStep = preview.offsetMeters * THREE_M_TO_STEP_MM;
+
+      await applyToTargets([preview.pathKey], async (handle) => {
+        const result = await client.extrudeFace(handle, facePointStep, offsetStep, true);
+        if (!result.resolved) {
+          blocked.push(`${preview.pathKey}: couldn't find a face near the marked point`);
+        } else if (!result.valid) {
+          blocked.push(`${preview.pathKey}: extrude produced an invalid solid`);
+        }
+      });
     }
 
     // unmatchedPartIds only matters for partIds an accepted mark actually
@@ -2424,6 +2514,11 @@ if (result.ok && result.state) {
       return;
     }
 
+    if (activeTool === "extrude" && !extrudePickPathKey) {
+      handleExtrudePick(pathKey);
+      return;
+    }
+
     if (
       activeTool === "booleanUnion" ||
       activeTool === "booleanSubtract" ||
@@ -2546,6 +2641,19 @@ if (result.ok && result.state) {
           onFilletAmountChange={setFilletAmountMm}
           onFilletConfirm={applyFillet}
           onFilletCancel={cancelFillet}
+          extrudePick={
+            extrudePickPathKey && extrudePickFacePointWorld
+              ? {
+                  pathKey: extrudePickPathKey,
+                  facePointWorld: extrudePickFacePointWorld,
+                  offsetMm: extrudeOffsetMm,
+                }
+              : null
+          }
+          onExtrudeOffsetChange={setExtrudeOffsetMm}
+          onExtrudeConfirm={applyExtrude}
+          onExtrudeCancel={cancelExtrude}
+          extrudePreviews={extrudePreviews}
           hoveredPathKey={hoveredPathKey}
           onHoveredPathKeyChange={setHoveredPathKey}
           focusRequest={focusRequest}
@@ -2650,6 +2758,11 @@ if (result.ok && result.state) {
 
             if (tool === "fillet") {
               startFillet();
+              return;
+            }
+
+            if (tool === "extrude") {
+              startExtrude();
               return;
             }
 
@@ -2808,6 +2921,14 @@ if (result.ok && result.state) {
           <div className={styles.manipulationReadout}>
             <span className={styles.manipulationValue}>
               Click near an edge to mark it
+            </span>
+          </div>
+        ) : null}
+
+        {activeTool === "extrude" && !extrudePickPathKey ? (
+          <div className={styles.manipulationReadout}>
+            <span className={styles.manipulationValue}>
+              Click near a face to mark it
             </span>
           </div>
         ) : null}
