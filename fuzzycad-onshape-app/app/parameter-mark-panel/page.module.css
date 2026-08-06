@@ -34,6 +34,37 @@
   min-width: 0;
 }
 
+/*
+ * Overall's true Overleaf layout: a 2-column CSS grid where each marked
+ * row and its discussion card are emitted as a pair, so the grid's own
+ * row-sizing keeps them vertically aligned -- no JS position measuring.
+ * The feature header spans both columns to stay out of the pairing.
+ */
+.overallGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  column-gap: 20px;
+  row-gap: 0;
+  align-items: start;
+}
+
+.overallFeatureHeader {
+  cursor: pointer;
+  padding: 14px 0 6px;
+  border-top: 1px solid #eee;
+}
+
+.overallFeatureHeader:first-child {
+  border-top: none;
+  padding-top: 0;
+}
+
+.discussionCard {
+  border-left: 1px solid #e3e3e6;
+  padding: 8px 0 8px 20px;
+  border-top: 1px solid #f0f0f2;
+}
+
 .tabBar {
   display: flex;
   gap: 4px;

@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import {
   addFeatureParameterQuestionComment,
   createEmptyUncertaintyDocument,
@@ -616,8 +616,6 @@ function ParameterMarkPanelInner() {
         </div>
       ) : null}
 
-      <div className={styles.splitLayout}>
-      <div className={styles.listColumn}>
       {activeTab === "overall" ? (
         <>
           <div className={styles.header}>
@@ -627,31 +625,28 @@ function ParameterMarkPanelInner() {
           {overallGroups.length === 0 ? (
             <p className={styles.emptyState}>No marks yet -- mark a parameter from Need input first.</p>
           ) : (
-            <div className={styles.list}>
+            <div className={styles.overallGrid}>
               {overallGroups.map((group) => (
-                <div key={group.featureId} className={styles.featureCard}>
+                <Fragment key={group.featureId}>
                   <div
-                    className={styles.featureHeader}
+                    className={styles.overallFeatureHeader}
+                    style={{ gridColumn: "1 / -1" }}
                     onClick={() => openFeatureDialog(group.featureId)}
                     title="Click to highlight this feature in Onshape"
                   >
                     <span className={styles.cardTitle}>{group.featureName || group.featureId}</span>
                     <span className={styles.cardTypeTag}>({group.featureType})</span>
                   </div>
-                  <div className={styles.paramList}>
-                    {group.parameters.map((entry) => {
-                      const annotation = findAnnotation(entry)!;
-                      const state = overallState(annotation);
+                  {group.parameters.map((entry) => {
+                    const annotation = findAnnotation(entry)!;
+                    const state = overallState(annotation);
 
-                      return (
+                    return (
+                      <Fragment key={entry.parameterId}>
                         <div
-                          key={entry.parameterId}
                           className={styles.paramRow}
                           style={{ cursor: "pointer" }}
-                          onClick={() => {
-                            setSelected(entry);
-                            openFeatureDialog(entry.featureId);
-                          }}
+                          onClick={() => openFeatureDialog(entry.featureId)}
                         >
                           <div className={styles.cardValue}>
                             {entry.parameterId}: {formatFeatureParameterValue(entry.typeName, entry.message)}
@@ -700,126 +695,189 @@ function ParameterMarkPanelInner() {
                             ) : null}
                           </div>
                         </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </>
-      ) : activeTab === "proposed" ? (
-        <div className={styles.header}>
-          <h1 className={styles.title}>Proposed</h1>
-          <p className={styles.emptyState}>Not built yet -- what goes here is still undecided.</p>
-        </div>
-      ) : (
-        <>
-          <div className={styles.header}>
-            <h1 className={styles.title}>Mark a parameter as uncertain</h1>
-            <p className={styles.status}>status: {status}</p>
-          </div>
-          {parameters === null ? null : parameters.length === 0 ? (
-            <p className={styles.emptyState}>
-              No numeric parameters found in this Part Studio&apos;s feature tree.
-            </p>
-          ) : (
-            <div className={styles.list}>
-              {featureGroups.map((group) => (
-                <div key={group.featureId} className={styles.featureCard}>
-                  <div
-                    className={styles.featureHeader}
-                    onClick={() => openFeatureDialog(group.featureId)}
-                    title="Click to highlight this feature in Onshape"
-                  >
-                    <span className={styles.cardTitle}>{group.featureName || group.featureId}</span>
-                    <span className={styles.cardTypeTag}>({group.featureType})</span>
-                  </div>
-                  <div className={styles.paramList}>
-                    {group.parameters.map((entry) => {
-                      const annotation = findAnnotation(entry);
-                      const state = paramState(annotation);
-
-                      return (
-                        <div
-                          key={entry.parameterId}
-                          className={styles.paramRow}
-                          onClick={() => {
-                            if (state === "unmarked") return;
-                            setSelected(entry);
-                            openFeatureDialog(entry.featureId);
-                          }}
-                          style={state !== "unmarked" ? { cursor: "pointer" } : undefined}
-                        >
-                          <div className={styles.cardValue}>
-                            {entry.parameterId}: {formatFeatureParameterValue(entry.typeName, entry.message)}
-                          </div>
-                          {state === "unmarked" ? (
-                            <button
-                              type="button"
-                              className={styles.needInputButton}
-                              onClick={(event) => {
-                                event.stopPropagation();
-                                void openDetail(entry);
-                              }}
-                            >
-                              Need input
-                            </button>
-                          ) : state === "needsInput" ? (
-                            <span className={styles.tagNeedsInput}>Needs input</span>
-                          ) : (
-                            <span className={styles.tagAnswered}>
-                              Answered: {annotation!.resolvedValue}
-                            </span>
-                          )}
+                        <div className={styles.discussionCard}>
+                          <DiscussionThread
+                            annotation={annotation}
+                            saving={saving}
+                            onAddComment={(text) =>
+                              withSavedDocument((doc) =>
+                                addFeatureParameterQuestionComment(doc, annotationIdFor(entry), text),
+                              )
+                            }
+                          />
                         </div>
-                      );
-                    })}
-                  </div>
-                </div>
+                      </Fragment>
+                    );
+                  })}
+                </Fragment>
               ))}
             </div>
           )}
         </>
-      )}
-      </div>
+      ) : (
+        <div className={styles.splitLayout}>
+          <div className={styles.listColumn}>
+            {activeTab === "proposed" ? (
+              <div className={styles.header}>
+                <h1 className={styles.title}>Proposed</h1>
+                <p className={styles.emptyState}>Not built yet -- what goes here is still undecided.</p>
+              </div>
+            ) : (
+              <>
+                <div className={styles.header}>
+                  <h1 className={styles.title}>Mark a parameter as uncertain</h1>
+                  <p className={styles.status}>status: {status}</p>
+                </div>
+                {parameters === null ? null : parameters.length === 0 ? (
+                  <p className={styles.emptyState}>
+                    No numeric parameters found in this Part Studio&apos;s feature tree.
+                  </p>
+                ) : (
+                  <div className={styles.list}>
+                    {featureGroups.map((group) => (
+                      <div key={group.featureId} className={styles.featureCard}>
+                        <div
+                          className={styles.featureHeader}
+                          onClick={() => openFeatureDialog(group.featureId)}
+                          title="Click to highlight this feature in Onshape"
+                        >
+                          <span className={styles.cardTitle}>{group.featureName || group.featureId}</span>
+                          <span className={styles.cardTypeTag}>({group.featureType})</span>
+                        </div>
+                        <div className={styles.paramList}>
+                          {group.parameters.map((entry) => {
+                            const annotation = findAnnotation(entry);
+                            const state = paramState(annotation);
 
-      {selected ? (
-        <div className={styles.detailColumn}>
-          <DetailView
-            entry={selected}
-            annotation={findAnnotation(selected)}
-            saving={saving}
-            onBack={() => setSelected(null)}
-            onSaveAnswer={(value) =>
-              withSavedDocument((doc) =>
-                setFeatureParameterQuestionAnswer(doc, annotationIdFor(selected), value),
-              )
-            }
-            onSaveRange={(min, max) =>
-              withSavedDocument((doc) =>
-                setFeatureParameterQuestionRange(doc, annotationIdFor(selected), min, max),
-              )
-            }
-            onAddComment={(text) =>
-              withSavedDocument((doc) =>
-                addFeatureParameterQuestionComment(doc, annotationIdFor(selected), text),
-              )
-            }
-            onResolve={() => resolveMark(selected)}
-            onReopen={() =>
-              withSavedDocument((doc) => reopenUncertaintyAnnotation(doc, annotationIdFor(selected)))
-            }
-            onReject={() =>
-              void rejectMark(selected).then((deleted) => {
-                if (deleted) setSelected(null);
-              })
-            }
-            onLivePreview={(value) => void livePreviewValue(selected, value)}
-          />
+                            return (
+                              <div
+                                key={entry.parameterId}
+                                className={styles.paramRow}
+                                onClick={() => {
+                                  if (state === "unmarked") return;
+                                  setSelected(entry);
+                                  openFeatureDialog(entry.featureId);
+                                }}
+                                style={state !== "unmarked" ? { cursor: "pointer" } : undefined}
+                              >
+                                <div className={styles.cardValue}>
+                                  {entry.parameterId}: {formatFeatureParameterValue(entry.typeName, entry.message)}
+                                </div>
+                                {state === "unmarked" ? (
+                                  <button
+                                    type="button"
+                                    className={styles.needInputButton}
+                                    onClick={(event) => {
+                                      event.stopPropagation();
+                                      void openDetail(entry);
+                                    }}
+                                  >
+                                    Need input
+                                  </button>
+                                ) : state === "needsInput" ? (
+                                  <span className={styles.tagNeedsInput}>Needs input</span>
+                                ) : (
+                                  <span className={styles.tagAnswered}>
+                                    Answered: {annotation!.resolvedValue}
+                                  </span>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+
+          {selected ? (
+            <div className={styles.detailColumn}>
+              <DetailView
+                entry={selected}
+                annotation={findAnnotation(selected)}
+                saving={saving}
+                onBack={() => setSelected(null)}
+                onSaveAnswer={(value) =>
+                  withSavedDocument((doc) =>
+                    setFeatureParameterQuestionAnswer(doc, annotationIdFor(selected), value),
+                  )
+                }
+                onSaveRange={(min, max) =>
+                  withSavedDocument((doc) =>
+                    setFeatureParameterQuestionRange(doc, annotationIdFor(selected), min, max),
+                  )
+                }
+                onAddComment={(text) =>
+                  withSavedDocument((doc) =>
+                    addFeatureParameterQuestionComment(doc, annotationIdFor(selected), text),
+                  )
+                }
+                onResolve={() => resolveMark(selected)}
+                onReopen={() =>
+                  withSavedDocument((doc) => reopenUncertaintyAnnotation(doc, annotationIdFor(selected)))
+                }
+                onReject={() =>
+                  void rejectMark(selected).then((deleted) => {
+                    if (deleted) setSelected(null);
+                  })
+                }
+                onLivePreview={(value) => void livePreviewValue(selected, value)}
+              />
+            </div>
+          ) : null}
         </div>
-      ) : null}
-      </div>
+      )}
+    </div>
+  );
+}
+
+/** The Overall tab's Overleaf-style margin thread -- comments only, no answer/range editing (that's Need input's job). */
+function DiscussionThread({
+  annotation,
+  saving,
+  onAddComment,
+}: {
+  annotation: FeatureParameterQuestionUncertaintyAnnotation;
+  saving: boolean;
+  onAddComment: (text: string) => void;
+}) {
+  const [commentDraft, setCommentDraft] = useState("");
+
+  return (
+    <div className={styles.commentThread}>
+      {annotation.commentThread.length === 0 ? (
+        <div className={styles.commentEmpty}>No comments yet.</div>
+      ) : (
+        annotation.commentThread.map((comment) => (
+          <div key={comment.id} className={styles.comment}>
+            <div className={styles.commentMeta}>
+              {comment.author ?? "someone"} &middot; {new Date(comment.createdAt).toLocaleString()}
+            </div>
+            <div className={styles.commentText}>{comment.text}</div>
+          </div>
+        ))
+      )}
+      <textarea
+        className={styles.commentInput}
+        rows={2}
+        placeholder="Add a comment..."
+        value={commentDraft}
+        onChange={(event) => setCommentDraft(event.target.value)}
+      />
+      <button
+        type="button"
+        className={styles.secondaryButton}
+        disabled={saving || !commentDraft.trim()}
+        onClick={() => {
+          onAddComment(commentDraft.trim());
+          setCommentDraft("");
+        }}
+      >
+        Post comment
+      </button>
     </div>
   );
 }
