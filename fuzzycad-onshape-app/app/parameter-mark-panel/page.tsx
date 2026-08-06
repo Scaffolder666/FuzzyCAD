@@ -62,28 +62,13 @@ type FeatureGroup = {
   parameters: ValueParameterEntry[];
 };
 
-type ParamState = "unmarked" | "needsInput" | "answered";
-
-type RightPanelTab = "overall" | "needInput" | "proposed";
-
-const RIGHT_PANEL_TABS: { key: RightPanelTab; label: string }[] = [
-  { key: "overall", label: "Overall" },
-  { key: "needInput", label: "Need input" },
-  { key: "proposed", label: "Proposed" },
-];
-
-function paramState(
-  annotation: FeatureParameterQuestionUncertaintyAnnotation | undefined,
-): ParamState {
-  if (!annotation) return "unmarked";
-  return annotation.resolvedValue ? "answered" : "needsInput";
-}
-
 /**
- * Overall needs a finer-grained status than the Need input tab's
- * "answered" (which conflates "someone proposed a value" with "the owner
- * confirmed it") -- kept separate so the Need input tab's already-working
- * behavior doesn't change.
+ * The right panel is a single unified list -- every parameter, marked or
+ * not, browsed and reviewed in one place -- rather than separate "browse
+ * to mark" / "review what's proposed" tabs. "proposed" conflates "someone
+ * typed an answer" (legacy resolvedValue flow) with "a ghost proposal
+ * instance exists" (Extrude depth) -- both mean the same thing to the
+ * reviewer: there's a concrete value to accept or reject.
  */
 type OverallState = "needsInput" | "proposed" | "resolved";
 
@@ -130,7 +115,6 @@ function ParameterMarkPanelInner() {
   const [status, setStatus] = useState("waiting for Onshape context...");
   const [parameters, setParameters] = useState<ValueParameterEntry[] | null>(null);
   const [uncertaintyDoc, setUncertaintyDoc] = useState<FuzzyCADUncertaintyDocument | null>(null);
-  const [selected, setSelected] = useState<ValueParameterEntry | null>(null);
   const [saving, setSaving] = useState(false);
   // Whether the last data load hit a 401 -- the right panel used to be
   // able to connect only via the main FuzzyCAD Panel tab's "Connect
@@ -150,10 +134,6 @@ function ParameterMarkPanelInner() {
   // switch among the few Part Studios already inside the document you're
   // looking at).
   const [partStudioOptions, setPartStudioOptions] = useState<OnshapeElement[]>([]);
-  // Need input is the only tab with real content right now (see
-  // RIGHT_PANEL_TABS) -- defaulting here instead of "overall" so the
-  // panel doesn't open on an empty placeholder.
-  const [activeTab, setActiveTab] = useState<RightPanelTab>("needInput");
 
   useEffect(() => {
     function applyStoredContext() {
@@ -325,22 +305,6 @@ function ParameterMarkPanelInner() {
     return Array.from(byFeature.values());
   }, [parameters]);
 
-  /** Same feature-grouping as featureGroups, but only the parameters someone has actually marked -- Overall is a review list, not a browse-everything list. */
-  const overallGroups = useMemo<FeatureGroup[]>(() => {
-    if (!uncertaintyDoc) return [];
-    const markedIds = new Set(
-      uncertaintyDoc.annotations
-        .filter((annotation) => annotation.type === "featureParameterQuestion")
-        .map((annotation) => annotation.id),
-    );
-    return featureGroups
-      .map((group) => ({
-        ...group,
-        parameters: group.parameters.filter((entry) => markedIds.has(annotationIdFor(entry))),
-      }))
-      .filter((group) => group.parameters.length > 0);
-  }, [featureGroups, uncertaintyDoc]);
-
   /**
    * Asks Onshape's own UI to open its native feature edit dialog -- the
    * same highlight + direction-arrows affordance you get clicking a
@@ -369,9 +333,8 @@ function ParameterMarkPanelInner() {
     }, 0);
   }
 
-  /** Marks (if not already) and opens the detail view in one step -- no separate mark-then-fill click. */
+  /** Marks a parameter as uncertain (no-op if already marked) and highlights its feature in Onshape. */
   async function openDetail(entry: ValueParameterEntry) {
-    setSelected(entry);
     openFeatureDialog(entry.featureId);
 
     if (findAnnotation(entry)) {
@@ -747,20 +710,91 @@ function ParameterMarkPanelInner() {
   }
 
   /**
-   * Resolving is the moment a proposed value is CONFIRMED, even though
-   * livePreviewValue may have already pushed intermediate values to
-   * Onshape while someone was still dragging the slider -- this call
-   * re-applies the final resolvedValue (in case the last live preview
-   * wasn't the final one, e.g. answered via typing after a slider drag)
-   * and is what actually locks the mark. If there's a resolvedValue,
-   * patch the real parameter's expression via the Feature API (preserving
-   * its original unit suffix), then mark the annotation resolved. If the
-   * Feature API patch fails, the mark stays open so nothing is silently
-   * lost.
+   * Reads a feature's current "depth" expression live from Onshape --
+   * used to pull the ghost's edited value at Accept time, since the ghost
+   * itself (not resolvedValue) is the source of truth for a ghost-tracked
+   * proposal. Reuses the same generic feature->parameters dump already
+   * used at page load rather than adding a new single-feature-read route.
+   */
+  async function fetchGhostDepthExpression(proposedFeatureId: string): Promise<string | null> {
+    if (!context) return null;
+    const params = new URLSearchParams({
+      documentId: context.documentId,
+      workspaceId: context.workspaceId,
+      partStudioElementId: context.elementId,
+      server: context.server,
+    });
+    const res = await fetch(`/api/onshape/partstudio-feature-parameters-debug?${params.toString()}`);
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (!Array.isArray(data.valueParameters)) return null;
+    const match = data.valueParameters.find(
+      (p: { featureId?: unknown; parameterId?: unknown }) =>
+        p.featureId === proposedFeatureId && p.parameterId === "depth",
+    );
+    const expression = match?.message?.expression;
+    return typeof expression === "string" && expression ? expression : null;
+  }
+
+  /**
+   * Resolving is the moment a proposed value is CONFIRMED. There are two
+   * sources of truth for "what's the proposed value," mutually exclusive:
+   *  - Ghost-tracked (Extrude depth, proposedFeatureId set): the ghost
+   *    instance's own live depth IS the proposal -- read it fresh (it may
+   *    have been edited directly in Onshape's own feature dialog, not just
+   *    through our slider) and write it into the real feature.
+   *  - Everything else: the old resolvedValue flow -- livePreviewValue may
+   *    have already pushed intermediate values to Onshape while someone
+   *    was dragging the slider, so this re-applies the final resolvedValue
+   *    in case the last live preview wasn't the final one.
+   * Either way, if the Feature API patch fails, the mark stays open so
+   * nothing is silently lost.
    */
   async function resolveMark(entry: ValueParameterEntry) {
     if (!context) return;
     const annotation = findAnnotation(entry);
+
+    if (isGhostExtrudeParam(entry) && annotation?.proposedFeatureId) {
+      const confirmed = window.confirm(
+        `Accept the proposed ${entry.parameterId} shown on the ghost extrude and write it into the real feature? ` +
+          "This writes the real value into Onshape and can't be edited again without reopening.",
+      );
+      if (!confirmed) {
+        return;
+      }
+
+      setSaving(true);
+      const ghostDepth = await fetchGhostDepthExpression(annotation.proposedFeatureId);
+      if (ghostDepth) {
+        const updateRes = await updatePartStudioFeatureSuppressed(
+          {
+            documentId: context.documentId,
+            workspaceId: context.workspaceId,
+            partStudioElementId: context.elementId,
+            server: context.server,
+          },
+          {
+            featureId: entry.featureId,
+            parameterUpdates: [{ parameterId: entry.parameterId, expression: ghostDepth }],
+          },
+        );
+        setSaving(false);
+
+        if (!updateRes.ok) {
+          setStatus(`failed to apply value in Onshape (HTTP ${updateRes.status})`);
+          return;
+        }
+      } else {
+        setSaving(false);
+        setStatus("could not read the ghost's current depth -- real feature left unchanged");
+        return;
+      }
+
+      await withSavedDocument((doc) => resolveUncertaintyAnnotation(doc, annotationIdFor(entry)));
+      void revertAppearanceMark(entry);
+      void deleteProposedExtrudeGhost(entry);
+      return;
+    }
 
     if (annotation?.resolvedValue) {
       const confirmed = window.confirm(
@@ -839,6 +873,14 @@ function ParameterMarkPanelInner() {
     return true;
   }
 
+  /** Reopens a resolved mark for further editing -- re-applies the appearance/ghost marks that were restored on resolve. */
+  function reopenMark(entry: ValueParameterEntry) {
+    void withSavedDocument((doc) => reopenUncertaintyAnnotation(doc, annotationIdFor(entry))).then(() => {
+      void applyAppearanceMark(entry);
+      void applyProposedExtrudeGhost(entry);
+    });
+  }
+
   if (!context) {
     return (
       <div className={styles.page}>
@@ -852,19 +894,6 @@ function ParameterMarkPanelInner() {
 
   return (
     <div className={styles.page}>
-      <div className={styles.tabBar}>
-        {RIGHT_PANEL_TABS.map((tab) => (
-          <button
-            key={tab.key}
-            type="button"
-            className={activeTab === tab.key ? styles.tabActive : styles.tab}
-            onClick={() => setActiveTab(tab.key)}
-          >
-            {tab.label}
-          </button>
-        ))}
-      </div>
-
       <div className={styles.elementSwitcher}>
         <span className={styles.elementBadge}>Part Studio:</span>
         {partStudioOptions.length > 0 ? (
@@ -914,48 +943,63 @@ function ParameterMarkPanelInner() {
         </div>
       ) : null}
 
-      {activeTab === "overall" ? (
-        <>
-          <div className={styles.header}>
-            <h1 className={styles.title}>Overall</h1>
-            <p className={styles.status}>status: {status}</p>
-          </div>
-          {overallGroups.length === 0 ? (
-            <p className={styles.emptyState}>No marks yet -- mark a parameter from Need input first.</p>
-          ) : (
-            <div className={styles.overallGrid}>
-              {overallGroups.map((group) => (
-                <Fragment key={group.featureId}>
-                  <div
-                    className={styles.overallFeatureHeader}
-                    style={{ gridColumn: "1 / -1" }}
-                    onClick={() => openFeatureDialog(group.featureId)}
-                    title="Click to highlight this feature in Onshape"
-                  >
-                    <span className={styles.cardTitle}>{group.featureName || group.featureId}</span>
-                    <span className={styles.cardTypeTag}>({group.featureType})</span>
-                  </div>
-                  {group.parameters.map((entry) => {
-                    const annotation = findAnnotation(entry)!;
-                    const state = overallState(annotation);
+      <div className={styles.header}>
+        <h1 className={styles.title}>Overall</h1>
+        <p className={styles.status}>status: {status}</p>
+      </div>
 
-                    return (
-                      <Fragment key={entry.parameterId}>
-                        <div
-                          className={styles.paramRow}
-                          style={{ cursor: "pointer" }}
-                          onClick={() => openFeatureDialog(entry.featureId)}
-                        >
-                          <div className={styles.cardValue}>
-                            {entry.parameterId}: {formatFeatureParameterValue(entry.typeName, entry.message)}
-                            {state !== "needsInput" ? (
-                              <span className={styles.proposedValueInline}>
-                                {" "}
-                                &rarr; {annotation.resolvedValue}
-                              </span>
-                            ) : null}
-                          </div>
-                          <div className={styles.rowActions}>
+      {parameters === null ? null : parameters.length === 0 ? (
+        <p className={styles.emptyState}>
+          No numeric parameters found in this Part Studio&apos;s feature tree.
+        </p>
+      ) : (
+        <div className={styles.overallGrid}>
+          {featureGroups.map((group) => (
+            <Fragment key={group.featureId}>
+              <div
+                className={styles.overallFeatureHeader}
+                style={{ gridColumn: "1 / -1" }}
+                onClick={() => openFeatureDialog(group.featureId)}
+                title="Click to highlight this feature in Onshape"
+              >
+                <span className={styles.cardTitle}>{group.featureName || group.featureId}</span>
+                <span className={styles.cardTypeTag}>({group.featureType})</span>
+              </div>
+              {group.parameters.map((entry) => {
+                const annotation = findAnnotation(entry);
+                const state = annotation ? overallState(annotation) : null;
+
+                return (
+                  <Fragment key={entry.parameterId}>
+                    <div
+                      className={styles.paramRow}
+                      style={{ cursor: "pointer" }}
+                      onClick={() => openFeatureDialog(entry.featureId)}
+                    >
+                      <div className={styles.cardValue}>
+                        {entry.parameterId}: {formatFeatureParameterValue(entry.typeName, entry.message)}
+                        {annotation?.resolvedValue ? (
+                          <span className={styles.proposedValueInline}>
+                            {" "}
+                            &rarr; {annotation.resolvedValue}
+                          </span>
+                        ) : null}
+                      </div>
+                      <div className={styles.rowActions}>
+                        {!annotation ? (
+                          <button
+                            type="button"
+                            className={styles.needInputButton}
+                            disabled={saving}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              void openDetail(entry);
+                            }}
+                          >
+                            Mark
+                          </button>
+                        ) : (
+                          <>
                             {state === "needsInput" ? (
                               <span className={styles.tagNeedsInput}>Needs input</span>
                             ) : state === "proposed" ? (
@@ -963,251 +1007,109 @@ function ParameterMarkPanelInner() {
                             ) : (
                               <span className={styles.tagAnswered}>Resolved</span>
                             )}
-                            {state !== "resolved" ? (
-                              <>
-                                {state === "proposed" ? (
-                                  <button
-                                    type="button"
-                                    className={styles.acceptButton}
-                                    disabled={saving}
-                                    onClick={(event) => {
-                                      event.stopPropagation();
-                                      void resolveMark(entry);
-                                    }}
-                                  >
-                                    Accept
-                                  </button>
-                                ) : null}
-                                <button
-                                  type="button"
-                                  className={styles.rejectButton}
-                                  disabled={saving}
-                                  onClick={(event) => {
-                                    event.stopPropagation();
-                                    void rejectMark(entry);
-                                  }}
-                                >
-                                  Reject
-                                </button>
-                              </>
-                            ) : null}
-                          </div>
-                        </div>
-                        <div className={styles.discussionCard}>
-                          <DiscussionThread
-                            annotation={annotation}
-                            saving={saving}
-                            onAddComment={(text) =>
-                              withSavedDocument((doc) =>
-                                addFeatureParameterQuestionComment(doc, annotationIdFor(entry), text),
-                              )
-                            }
-                          />
-                        </div>
-                      </Fragment>
-                    );
-                  })}
-                </Fragment>
-              ))}
-            </div>
-          )}
-        </>
-      ) : (
-        <div className={styles.splitLayout}>
-          <div className={styles.listColumn}>
-            {activeTab === "proposed" ? (
-              <div className={styles.header}>
-                <h1 className={styles.title}>Proposed</h1>
-                <p className={styles.emptyState}>Not built yet -- what goes here is still undecided.</p>
-              </div>
-            ) : (
-              <>
-                <div className={styles.header}>
-                  <h1 className={styles.title}>Mark a parameter as uncertain</h1>
-                  <p className={styles.status}>status: {status}</p>
-                </div>
-                {parameters === null ? null : parameters.length === 0 ? (
-                  <p className={styles.emptyState}>
-                    No numeric parameters found in this Part Studio&apos;s feature tree.
-                  </p>
-                ) : (
-                  <div className={styles.list}>
-                    {featureGroups.map((group) => (
-                      <div key={group.featureId} className={styles.featureCard}>
-                        <div
-                          className={styles.featureHeader}
-                          onClick={() => openFeatureDialog(group.featureId)}
-                          title="Click to highlight this feature in Onshape"
-                        >
-                          <span className={styles.cardTitle}>{group.featureName || group.featureId}</span>
-                          <span className={styles.cardTypeTag}>({group.featureType})</span>
-                        </div>
-                        <div className={styles.paramList}>
-                          {group.parameters.map((entry) => {
-                            const annotation = findAnnotation(entry);
-                            const state = paramState(annotation);
-
-                            return (
-                              <div
-                                key={entry.parameterId}
-                                className={styles.paramRow}
-                                onClick={() => {
-                                  if (state === "unmarked") return;
-                                  setSelected(entry);
-                                  openFeatureDialog(entry.featureId);
+                            {state === "proposed" ? (
+                              <button
+                                type="button"
+                                className={styles.acceptButton}
+                                disabled={saving}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  void resolveMark(entry);
                                 }}
-                                style={state !== "unmarked" ? { cursor: "pointer" } : undefined}
                               >
-                                <div className={styles.cardValue}>
-                                  {entry.parameterId}: {formatFeatureParameterValue(entry.typeName, entry.message)}
-                                </div>
-                                {state === "unmarked" ? (
-                                  <button
-                                    type="button"
-                                    className={styles.needInputButton}
-                                    onClick={(event) => {
-                                      event.stopPropagation();
-                                      void openDetail(entry);
-                                    }}
-                                  >
-                                    Need input
-                                  </button>
-                                ) : state === "needsInput" ? (
-                                  <span className={styles.tagNeedsInput}>Needs input</span>
-                                ) : (
-                                  <span className={styles.tagAnswered}>
-                                    Answered: {annotation!.resolvedValue}
-                                  </span>
-                                )}
-                              </div>
-                            );
-                          })}
-                        </div>
+                                Accept
+                              </button>
+                            ) : null}
+                            {state !== "resolved" ? (
+                              <button
+                                type="button"
+                                className={styles.rejectButton}
+                                disabled={saving}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  void rejectMark(entry);
+                                }}
+                              >
+                                Reject
+                              </button>
+                            ) : (
+                              <button
+                                type="button"
+                                className={styles.secondaryButton}
+                                disabled={saving}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  reopenMark(entry);
+                                }}
+                              >
+                                Reopen
+                              </button>
+                            )}
+                          </>
+                        )}
                       </div>
-                    ))}
-                  </div>
-                )}
-              </>
-            )}
-          </div>
-
-          {selected ? (
-            <div className={styles.detailColumn}>
-              <DetailView
-                entry={selected}
-                annotation={findAnnotation(selected)}
-                saving={saving}
-                onBack={() => setSelected(null)}
-                onSaveAnswer={(value) =>
-                  withSavedDocument((doc) =>
-                    setFeatureParameterQuestionAnswer(doc, annotationIdFor(selected), value),
-                  )
-                }
-                onSaveRange={(min, max) =>
-                  withSavedDocument((doc) =>
-                    setFeatureParameterQuestionRange(doc, annotationIdFor(selected), min, max),
-                  )
-                }
-                onAddComment={(text) =>
-                  withSavedDocument((doc) =>
-                    addFeatureParameterQuestionComment(doc, annotationIdFor(selected), text),
-                  )
-                }
-                onResolve={() => resolveMark(selected)}
-                onReopen={() =>
-                  void withSavedDocument((doc) =>
-                    reopenUncertaintyAnnotation(doc, annotationIdFor(selected)),
-                  ).then(() => {
-                    void applyAppearanceMark(selected);
-                    void applyProposedExtrudeGhost(selected);
-                  })
-                }
-                onReject={() =>
-                  void rejectMark(selected).then((deleted) => {
-                    if (deleted) setSelected(null);
-                  })
-                }
-                onLivePreview={(value) => void livePreviewValue(selected, value)}
-              />
-            </div>
-          ) : null}
+                    </div>
+                    <div className={styles.discussionCard}>
+                      {annotation ? (
+                        <ProposalCard
+                          entry={entry}
+                          annotation={annotation}
+                          saving={saving}
+                          onSaveAnswer={(value) =>
+                            withSavedDocument((doc) =>
+                              setFeatureParameterQuestionAnswer(doc, annotationIdFor(entry), value),
+                            )
+                          }
+                          onSaveRange={(min, max) =>
+                            withSavedDocument((doc) =>
+                              setFeatureParameterQuestionRange(doc, annotationIdFor(entry), min, max),
+                            )
+                          }
+                          onAddComment={(text) =>
+                            withSavedDocument((doc) =>
+                              addFeatureParameterQuestionComment(doc, annotationIdFor(entry), text),
+                            )
+                          }
+                          onLivePreview={(value) => void livePreviewValue(entry, value)}
+                        />
+                      ) : (
+                        <div className={styles.commentEmpty}>Not marked yet.</div>
+                      )}
+                    </div>
+                  </Fragment>
+                );
+              })}
+            </Fragment>
+          ))}
         </div>
       )}
     </div>
   );
 }
 
-/** The Overall tab's Overleaf-style margin thread -- comments only, no answer/range editing (that's Need input's job). */
-function DiscussionThread({
-  annotation,
-  saving,
-  onAddComment,
-}: {
-  annotation: FeatureParameterQuestionUncertaintyAnnotation;
-  saving: boolean;
-  onAddComment: (text: string) => void;
-}) {
-  const [commentDraft, setCommentDraft] = useState("");
-
-  return (
-    <div className={styles.commentThread}>
-      {annotation.commentThread.length === 0 ? (
-        <div className={styles.commentEmpty}>No comments yet.</div>
-      ) : (
-        annotation.commentThread.map((comment) => (
-          <div key={comment.id} className={styles.comment}>
-            <div className={styles.commentMeta}>
-              {comment.author ?? "someone"} &middot; {new Date(comment.createdAt).toLocaleString()}
-            </div>
-            <div className={styles.commentText}>{comment.text}</div>
-          </div>
-        ))
-      )}
-      <textarea
-        className={styles.commentInput}
-        rows={2}
-        placeholder="Add a comment..."
-        value={commentDraft}
-        onChange={(event) => setCommentDraft(event.target.value)}
-      />
-      <button
-        type="button"
-        className={styles.secondaryButton}
-        disabled={saving || !commentDraft.trim()}
-        onClick={() => {
-          onAddComment(commentDraft.trim());
-          setCommentDraft("");
-        }}
-      >
-        Post comment
-      </button>
-    </div>
-  );
-}
-
-function DetailView({
+/**
+ * The Overleaf-style margin card paired with each marked row: range +
+ * proposed-value input (still useful for feature types that don't have a
+ * FeatureScript ghost yet -- see isGhostExtrudeParam) and the discussion
+ * thread, all in one place. No header/close button (the row above already
+ * shows the feature/parameter) and no Status section (Accept/Reject/Reopen
+ * live on the row itself now, not duplicated here).
+ */
+function ProposalCard({
   entry,
   annotation,
   saving,
-  onBack,
   onSaveAnswer,
   onSaveRange,
   onAddComment,
-  onResolve,
-  onReopen,
-  onReject,
   onLivePreview,
 }: {
   entry: ValueParameterEntry;
-  annotation: FeatureParameterQuestionUncertaintyAnnotation | undefined;
+  annotation: FeatureParameterQuestionUncertaintyAnnotation;
   saving: boolean;
-  onBack: () => void;
   onSaveAnswer: (value: string) => void;
   onSaveRange: (min: number | null, max: number | null) => void;
   onAddComment: (text: string) => void;
-  onResolve: () => void;
-  onReopen: () => void;
-  onReject: () => void;
   onLivePreview: (value: string) => void;
 }) {
   const currentValueLabel = formatFeatureParameterValue(entry.typeName, entry.message);
@@ -1261,16 +1163,6 @@ function DetailView({
 
   return (
     <div className={styles.detailPanel}>
-      <button type="button" className={styles.backButton} onClick={onBack}>
-        &times; Close
-      </button>
-      <div className={styles.detailHeader}>
-        <h1 className={styles.detailTitle}>
-          {entry.featureName || entry.featureId} ({entry.featureType})
-        </h1>
-        <p className={styles.detailSubtitle}>{entry.parameterId}</p>
-      </div>
-
       <div className={styles.section}>
         <div className={styles.sectionLabel}>Current value</div>
         <div className={styles.currentValueRow}>{currentValueLabel}</div>
@@ -1403,38 +1295,6 @@ function DetailView({
         >
           Post comment
         </button>
-      </div>
-
-      <div className={styles.section}>
-        <div className={styles.sectionLabel}>Status</div>
-        <div className={styles.rangeLockedRow}>
-          <span>{resolved ? "Resolved" : "Open"}</span>
-          <div className={styles.rowActions}>
-            {!resolved ? (
-              <button
-                type="button"
-                className={styles.rejectButton}
-                disabled={saving}
-                onClick={onReject}
-              >
-                Reject
-              </button>
-            ) : null}
-            <button
-              type="button"
-              className={styles.secondaryButton}
-              disabled={saving}
-              onClick={resolved ? onReopen : onResolve}
-            >
-              {resolved ? "Reopen to edit range" : "Mark resolved"}
-            </button>
-          </div>
-        </div>
-        {!resolved && annotation?.resolvedValue ? (
-          <div className={styles.rangeLockedNote}>
-            Resolving will write {annotation.resolvedValue} into the real Onshape feature.
-          </div>
-        ) : null}
       </div>
     </div>
   );
