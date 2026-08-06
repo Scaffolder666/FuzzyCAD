@@ -267,6 +267,16 @@ class OcctClient {
     return response.buffer;
   }
 
+  /** Temporary debug helper — see occtWorker.ts's probeCtorArity handler. */
+  async probeCtorArity(): Promise<string> {
+    await this.ready();
+    const response = await this.send({ type: "probeCtorArity" });
+    if (response.type !== "probeCtorArityResult") {
+      throw new Error(`Unexpected response type: ${response.type}`);
+    }
+    return response.report;
+  }
+
   dispose(): void {
     this.worker.terminate();
   }

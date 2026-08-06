@@ -78,12 +78,18 @@ export default function FacePickerOverlay({
   const [hoveredFaceId, setHoveredFaceId] = useState<number | null>(null);
   const meshRef = useRef<THREE.Mesh>(null);
 
+  // Scale applied as a transform (mesh.scale below), NOT via
+  // geometry.scale(): that mutates the position attribute's array IN
+  // PLACE, and mesh.positions here is useBrepGhostSource's long-lived
+  // cached array — reused across every mount of this component for the
+  // same part. Baking the scale into the geometry would re-shrink that
+  // same array by another 1000x on every remount (e.g. cancel Extrude,
+  // re-target the same part), silently corrupting it after the first use.
   const geometry = useMemo(() => {
     const geo = new THREE.BufferGeometry();
     geo.setAttribute("position", new THREE.BufferAttribute(mesh.positions, 3));
     geo.setIndex(new THREE.BufferAttribute(mesh.indices, 1));
     geo.computeVertexNormals();
-    geo.scale(STEP_MM_TO_THREE_M, STEP_MM_TO_THREE_M, STEP_MM_TO_THREE_M);
     return geo;
   }, [mesh]);
 
@@ -153,6 +159,7 @@ export default function FacePickerOverlay({
       ref={meshRef}
       geometry={geometry}
       material={[BASE_MATERIAL, HIGHLIGHT_MATERIAL]}
+      scale={STEP_MM_TO_THREE_M}
       onPointerMove={handlePointerMove}
       onPointerOut={handlePointerOut}
       onPointerDown={handlePointerDown}

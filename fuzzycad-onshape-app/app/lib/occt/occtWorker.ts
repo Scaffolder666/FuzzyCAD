@@ -75,7 +75,8 @@ type OcctWorkerRequest =
       commit: boolean;
     }
   | { id: number; type: "exportAssemblyStep" }
-  | { id: number; type: "exportSolidsStep"; handles: number[] };
+  | { id: number; type: "exportSolidsStep"; handles: number[] }
+  | { id: number; type: "probeCtorArity" };
 
 type TessellatedShape = {
   positions: Float32Array;
@@ -126,13 +127,14 @@ type OcctWorkerResponse =
   | { id: number; type: "testStepBytesResult"; buffer: ArrayBuffer }
   | { id: number; type: "exportAssemblyStepResult"; buffer: ArrayBuffer }
   | { id: number; type: "exportSolidsStepResult"; buffer: ArrayBuffer }
+  | { id: number; type: "probeCtorArityResult"; report: string }
   | { id: number; type: "error"; message: string };
 
 // Minimal structural typing for the parts of the embind API this file
 // actually calls. opencascade.js ships no .d.ts; overload suffixes (_1,
 // _2, ...) were confirmed against the installed package by grepping
 // exported symbol strings out of opencascade.wasm.wasm.
-type TopoDS_Shape = { IsNull: () => boolean };
+type TopoDS_Shape = { IsNull: () => boolean; Orientation_1: () => number };
 type OpenCascadeInstance = {
   FS: {
     writeFile: (path: string, data: Uint8Array) => void;
@@ -171,7 +173,7 @@ type OpenCascadeInstance = {
     TopAbs_EDGE: number;
     TopAbs_VERTEX: number;
   };
-  TopAbs_Orientation: { TopAbs_FORWARD: number };
+  TopAbs_Orientation: { TopAbs_FORWARD: number; TopAbs_REVERSED: number };
   BRepMesh_IncrementalMesh_2: new (
     shape: TopoDS_Shape,
     linearDeflection: number,
@@ -234,37 +236,44 @@ type OpenCascadeInstance = {
     IsValid_2: () => boolean;
     delete: () => void;
   };
-  Message_ProgressRange_1: new () => { delete: () => void };
   ChFi3d_FilletShape: { ChFi3d_Rational: number };
   BRepFilletAPI_MakeFillet: new (
     shape: TopoDS_Shape,
     filletShape: number,
   ) => {
     Add_2: (radius: number, edge: TopoDS_Shape) => void;
-    Build: (range: unknown) => void;
+    Build: () => void;
     Shape: () => TopoDS_Shape;
     delete: () => void;
   };
   BRepFilletAPI_MakeChamfer: new (shape: TopoDS_Shape) => {
     Add_2: (distance: number, edge: TopoDS_Shape) => void;
-    Build: (range: unknown) => void;
+    Build: () => void;
     Shape: () => TopoDS_Shape;
     delete: () => void;
   };
+  /**
+   * The classic immediate 2-shape constructor. NOTE: despite the "_3"
+   * suffix (which in the ocjs.org reference docs' current API denotes a
+   * 3-arg (s1, s2, Message_ProgressRange) overload), this specific
+   * opencascade.js build has NO Message_ProgressRange binding at all
+   * (confirmed via `strings opencascade.wasm.wasm` — the class doesn't
+   * exist in this build's exported symbol table) and this build's own
+   * "_3" is actually the 2-shape overload, confirmed empirically via
+   * embind's own "expected (2) parameters" error text against every
+   * candidate overload. Do not add back a progress-range argument here.
+   */
   BRepAlgoAPI_Fuse_3: new (
     s1: TopoDS_Shape,
     s2: TopoDS_Shape,
-    range: unknown,
   ) => { Shape: () => TopoDS_Shape; delete: () => void };
   BRepAlgoAPI_Cut_3: new (
     s1: TopoDS_Shape,
     s2: TopoDS_Shape,
-    range: unknown,
   ) => { Shape: () => TopoDS_Shape; delete: () => void };
   BRepAlgoAPI_Common_3: new (
     s1: TopoDS_Shape,
     s2: TopoDS_Shape,
-    range: unknown,
   ) => { Shape: () => TopoDS_Shape; delete: () => void };
   BRepPrimAPI_MakePrism_1: new (
     shape: TopoDS_Shape,
@@ -614,10 +623,35 @@ function collectFaceVertexPoints(
   return points;
 }
 
+/**
+ * computeNormalFromPoints's cross product is purely geometric — it
+ * knows nothing about which side of the face is "outward" relative to
+ * the solid. A face's TopAbs_Orientation (REVERSED vs FORWARD) encodes
+ * exactly that (BRepPrimAPI_MakeBox, for instance, marks alternating
+ * faces of a box REVERSED to keep the solid's overall orientation
+ * consistent), so a REVERSED face's raw cross product needs flipping to
+ * actually point away from the solid. Confirmed empirically: without
+ * this, extrudeFace silently no-ops (Fuse of a prism built the wrong
+ * way largely overlaps the existing solid) on exactly the REVERSED
+ * faces of a test box — half of them, matching a live bug report of
+ * "the offset does nothing."
+ */
+function orientedFaceNormal(
+  oc: OpenCascadeInstance,
+  face: TopoDS_Shape,
+  rawNormal: [number, number, number],
+): [number, number, number] {
+  if (face.Orientation_1() === oc.TopAbs_Orientation.TopAbs_REVERSED) {
+    return [-rawNormal[0], -rawNormal[1], -rawNormal[2]];
+  }
+  return rawNormal;
+}
+
 /** Exact counterpart to resolveNearestFace's per-face normal guess, for a face already resolved by getFaceByIndex. */
 function getFaceNormal(oc: OpenCascadeInstance, face: TopoDS_Shape): [number, number, number] {
   const points = collectFaceVertexPoints(oc, face);
-  return computeNormalFromPoints(points) ?? [0, 0, 1];
+  const rawNormal = computeNormalFromPoints(points) ?? [0, 0, 1];
+  return orientedFaceNormal(oc, face, rawNormal);
 }
 
 function resolveNearestFace(
@@ -657,7 +691,8 @@ function resolveNearestFace(
       if (distSq < bestDistSq) {
         bestDistSq = distSq;
         best = face;
-        bestNormal = computeNormalFromPoints(points) ?? bestNormal;
+        const rawNormal = computeNormalFromPoints(points);
+        bestNormal = rawNormal ? orientedFaceNormal(oc, face, rawNormal) : bestNormal;
       }
     }
 
@@ -718,20 +753,16 @@ function extrudeFace(
   const prism = prismMaker.Shape();
   prismMaker.delete();
 
-  const progress = new oc.Message_ProgressRange_1();
-
   if (offsetMm >= 0) {
-    const op = new oc.BRepAlgoAPI_Fuse_3(shape, prism, progress);
+    const op = new oc.BRepAlgoAPI_Fuse_3(shape, prism);
     const result = op.Shape();
     op.delete();
-    progress.delete();
     return result;
   }
 
-  const op = new oc.BRepAlgoAPI_Cut_3(shape, prism, progress);
+  const op = new oc.BRepAlgoAPI_Cut_3(shape, prism);
   const result = op.Shape();
   op.delete();
-  progress.delete();
   return result;
 }
 
@@ -747,24 +778,20 @@ function filletOrChamferShape(
   kind: "fillet" | "chamfer",
   amount: number,
 ): TopoDS_Shape {
-  const progress = new oc.Message_ProgressRange_1();
-
   if (kind === "chamfer") {
     const mkChamfer = new oc.BRepFilletAPI_MakeChamfer(shape);
     mkChamfer.Add_2(amount, edge);
-    mkChamfer.Build(progress);
+    mkChamfer.Build();
     const result = mkChamfer.Shape();
     mkChamfer.delete();
-    progress.delete();
     return result;
   }
 
   const mkFillet = new oc.BRepFilletAPI_MakeFillet(shape, oc.ChFi3d_FilletShape.ChFi3d_Rational);
   mkFillet.Add_2(amount, edge);
-  mkFillet.Build(progress);
+  mkFillet.Build();
   const result = mkFillet.Shape();
   mkFillet.delete();
-  progress.delete();
   return result;
 }
 
@@ -775,28 +802,23 @@ function booleanShapes(
   shapeB: TopoDS_Shape,
   mode: "union" | "subtract" | "intersect",
 ): TopoDS_Shape {
-  const progress = new oc.Message_ProgressRange_1();
-
   if (mode === "subtract") {
-    const op = new oc.BRepAlgoAPI_Cut_3(shapeA, shapeB, progress);
+    const op = new oc.BRepAlgoAPI_Cut_3(shapeA, shapeB);
     const result = op.Shape();
     op.delete();
-    progress.delete();
     return result;
   }
 
   if (mode === "intersect") {
-    const op = new oc.BRepAlgoAPI_Common_3(shapeA, shapeB, progress);
+    const op = new oc.BRepAlgoAPI_Common_3(shapeA, shapeB);
     const result = op.Shape();
     op.delete();
-    progress.delete();
     return result;
   }
 
-  const op = new oc.BRepAlgoAPI_Fuse_3(shapeA, shapeB, progress);
+  const op = new oc.BRepAlgoAPI_Fuse_3(shapeA, shapeB);
   const result = op.Shape();
   op.delete();
-  progress.delete();
   return result;
 }
 
@@ -1189,6 +1211,53 @@ self.onmessage = async (event: MessageEvent<OcctWorkerRequest>) => {
       ) as ArrayBuffer;
       const response: OcctWorkerResponse = { id, type: "exportSolidsStepResult", buffer };
       self.postMessage(response, [buffer]);
+      return;
+    }
+
+    if (type === "probeCtorArity") {
+      const oc = await loadOcct();
+      const box = new oc.BRepPrimAPI_MakeBox_1(10, 10, 10);
+      const shapeA = box.Shape();
+      const box2 = new oc.BRepPrimAPI_MakeBox_2(new oc.gp_Pnt_3(5, 5, 5), 10, 10, 10);
+      const shapeB = box2.Shape();
+      const dynOc = oc as unknown as Record<string, new (...args: unknown[]) => { Shape: () => TopoDS_Shape; Add_2?: (...args: unknown[]) => void; Build?: (...args: unknown[]) => void; delete: () => void }>;
+      const lines: string[] = [];
+      for (const name of ["BRepAlgoAPI_Fuse_1", "BRepAlgoAPI_Fuse_2", "BRepAlgoAPI_Fuse_3", "BRepAlgoAPI_Fuse_4"]) {
+        for (const args of [[], [shapeA], [shapeA, shapeB]] as unknown[][]) {
+          try {
+            const ctor = dynOc[name];
+            const instance = new ctor(...args);
+            const shape = instance.Shape();
+            lines.push(`${name}(${args.length} args): OK, shape.IsNull()=${shape.IsNull()}`);
+            instance.delete();
+          } catch (err) {
+            lines.push(`${name}(${args.length} args): ${err instanceof Error ? err.message : String(err)}`);
+          }
+        }
+      }
+
+      // Probe BRepFilletAPI_MakeFillet's Build() arity the same way —
+      // Message_ProgressRange isn't bound in this build either, so its
+      // 1-arg Build(range) call likely needs the same "drop the arg" fix.
+      lines.push("--- MakeFillet.Build ---");
+      const edgeExplorer = new oc.TopExp_Explorer_2(shapeA, oc.TopAbs_ShapeEnum.TopAbs_EDGE, oc.TopAbs_ShapeEnum.TopAbs_SHAPE);
+      const firstEdge = oc.TopoDS.Edge_1(edgeExplorer.Current());
+      edgeExplorer.delete();
+      const mkFillet = new dynOc["BRepFilletAPI_MakeFillet"](shapeA, 0);
+      mkFillet.Add_2?.(1, firstEdge);
+      for (const args of [[], ["x"]] as unknown[][]) {
+        try {
+          mkFillet.Build?.(...args);
+          const shape = mkFillet.Shape();
+          lines.push(`Build(${args.length} args): OK, shape.IsNull()=${shape.IsNull()}`);
+        } catch (err) {
+          lines.push(`Build(${args.length} args): ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+      mkFillet.delete();
+
+      const response: OcctWorkerResponse = { id, type: "probeCtorArityResult", report: lines.join("\n") };
+      self.postMessage(response);
       return;
     }
 

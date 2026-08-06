@@ -2334,8 +2334,13 @@ function Model({
 
           invalidate();
         })
-        .catch(() => {
-          // Best-effort — no ghost shown on failure, the orange edge marker still is.
+        .catch((error) => {
+          // Best-effort — no ghost shown on failure, the orange edge marker
+          // still is. Logged (not surfaced in the UI) so a real OCCT
+          // failure doesn't look identical to "still computing" — see the
+          // Message_ProgressRange/BRepAlgoAPI overload-arity bug this
+          // exact silence used to hide.
+          console.error("Fillet live preview failed", error);
         });
     }, 250);
 
@@ -2403,8 +2408,9 @@ function Model({
           scene.add(ghost);
           invalidate();
         })
-        .catch(() => {
+        .catch((error) => {
           // Best-effort — mark stays visible via its panel card even if the ghost fails.
+          console.error("Fillet saved-mark preview failed", error);
         });
     }
 
@@ -2480,8 +2486,9 @@ function Model({
 
           invalidate();
         })
-        .catch(() => {
+        .catch((error) => {
           // Best-effort — no ghost shown on failure, the marker dot still is.
+          console.error("Extrude live preview failed", error);
         });
     }, 250);
 
@@ -2545,8 +2552,9 @@ function Model({
           scene.add(ghost);
           invalidate();
         })
-        .catch(() => {
+        .catch((error) => {
           // Best-effort — mark stays visible via its panel card even if the ghost fails.
+          console.error("Extrude saved-mark preview failed", error);
         });
     }
 
