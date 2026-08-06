@@ -210,6 +210,15 @@ function ParameterMarkPanelInner() {
    * unique feature. Runs once parameters load rather than inside
    * loadEverything so a slow/failed lookup here doesn't block the
    * parameter list itself from being fetched.
+   *
+   * Every per-feature fetch is individually caught -> [] on failure, and
+   * this batch is its own effect, separate from the FACE-highlight one
+   * below. A single Promise.all across every request used to mean one
+   * failed/timed-out request (more likely the more features there are)
+   * silently voided the ENTIRE update, including the part list itself --
+   * "every part had something, now parts aren't recognized at all." Each
+   * request failing on its own now just leaves that one feature's mapping
+   * empty instead of taking the whole panel down with it.
    */
   useEffect(() => {
     if (!context || !parameters) {
@@ -228,10 +237,13 @@ function ParameterMarkPanelInner() {
 
       const uniqueFeatureIds = Array.from(new Set(parameters!.map((entry) => entry.featureId)));
 
-      const [partsRes, createdByResults, createdFaceResults] = await Promise.all([
-        fetchOnshapePartStudioParts(query),
-        Promise.all(uniqueFeatureIds.map((featureId) => fetchFeatureCreatedPartIds(query, featureId))),
-        Promise.all(uniqueFeatureIds.map((featureId) => fetchFeatureCreatedFaceIds(query, featureId))),
+      const [partsRes, createdByResults] = await Promise.all([
+        fetchOnshapePartStudioParts(query).catch(() => null),
+        Promise.all(
+          uniqueFeatureIds.map((featureId) =>
+            fetchFeatureCreatedPartIds(query, featureId).catch(() => ({ partIds: [] as string[] })),
+          ),
+        ),
       ]);
 
       if (cancelled) return;
@@ -250,16 +262,59 @@ function ParameterMarkPanelInner() {
       setPartList(parsedParts);
 
       const nextFeaturePartIds: Record<string, string[]> = {};
-      const nextFeatureFaceIds: Record<string, string[]> = {};
       uniqueFeatureIds.forEach((featureId, index) => {
         nextFeaturePartIds[featureId] = createdByResults[index]?.partIds ?? [];
-        nextFeatureFaceIds[featureId] = createdFaceResults[index]?.entityIds ?? [];
       });
       setFeaturePartIds(nextFeaturePartIds);
-      setFeatureFaceIds(nextFeatureFaceIds);
     }
 
     void loadPartMapping();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [context, parameters]);
+
+  /**
+   * Which face(s) each feature produced, for the finer highlightFeature()
+   * click -- purely a nice-to-have on top of the part list above, so it's
+   * its own effect/failure domain: if this one fails or is slow, the part
+   * list and Need Input rows above still work, just without the
+   * face-level highlight (highlightFeature falls back to the whole part).
+   */
+  useEffect(() => {
+    if (!context || !parameters) {
+      return;
+    }
+
+    let cancelled = false;
+
+    async function loadFaceMapping() {
+      const query = {
+        documentId: context!.documentId,
+        workspaceId: context!.workspaceId,
+        partStudioElementId: context!.elementId,
+        server: context!.server,
+      };
+
+      const uniqueFeatureIds = Array.from(new Set(parameters!.map((entry) => entry.featureId)));
+
+      const createdFaceResults = await Promise.all(
+        uniqueFeatureIds.map((featureId) =>
+          fetchFeatureCreatedFaceIds(query, featureId).catch(() => ({ entityIds: [] as string[] })),
+        ),
+      );
+
+      if (cancelled) return;
+
+      const nextFeatureFaceIds: Record<string, string[]> = {};
+      uniqueFeatureIds.forEach((featureId, index) => {
+        nextFeatureFaceIds[featureId] = createdFaceResults[index]?.entityIds ?? [];
+      });
+      setFeatureFaceIds(nextFeatureFaceIds);
+    }
+
+    void loadFaceMapping();
 
     return () => {
       cancelled = true;
