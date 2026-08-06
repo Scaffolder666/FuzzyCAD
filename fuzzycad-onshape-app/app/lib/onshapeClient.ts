@@ -11,10 +11,7 @@ export type ApiResult = {
   status?: number;
   ok?: boolean;
   data?: unknown;
-  /** Per-occurrence results from assembly-transforms — one Onshape API call is made per {path, transform} pair. */
-  results?: unknown;
   state?: unknown;
-  graph?: unknown;
   error?: string;
   action?: string;
   details?: unknown;
@@ -298,6 +295,26 @@ export async function addPartStudioTransformFeature(
 }
 
 /**
+ * Flips an existing Part Studio feature's `suppressed` flag in place via
+ * Onshape's Feature API -- the mechanism a "proposal" write-back model
+ * would use: insert a feature suppressed (inactive, invisible) up front,
+ * then un-suppress it here once the mark is accepted, instead of doing a
+ * second insert.
+ */
+export async function updatePartStudioFeatureSuppressed(
+  query: PartStudioQuery,
+  body: { featureId: string; suppressed: boolean },
+): Promise<ApiResult> {
+  const res = await fetch(`/api/onshape/partstudio-update-feature`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...query, ...body }),
+  });
+
+  return res.json() as Promise<ApiResult>;
+}
+
+/**
  * An edited-and-re-exported STEP file (opencascade.js's STEPControl_Writer
  * output) is verbose CAD text, not the binary STL gzipBlob's doc comment
  * describes — but it compresses just as well, and hits the exact same
@@ -369,43 +386,6 @@ export async function fetchFuzzycadAssemblySummary(
   const res = await fetch(
     `/api/fuzzycad/assembly-summary?${params.toString()}`,
   );
-
-  return res.json() as Promise<ApiResult>;
-}
-
-export async function fetchFuzzycadRelationshipGraph(
-  query: AssemblyQuery,
-): Promise<ApiResult> {
-  const params = makeAssemblyParams(query);
-  const res = await fetch(
-    `/api/fuzzycad/relationship-graph?${params.toString()}`,
-  );
-
-  return res.json() as Promise<ApiResult>;
-}
-
-export type OccurrenceUpdate = {
-  /** Full occurrence path array (split of pathKey on "/"). */
-  path: string[];
-  /** 16-element row-major 4×4 transform matrix. */
-  transform: number[];
-};
-
-export async function applyOnshapeOccurrenceTransforms(
-  query: AssemblyQuery,
-  occurrences: OccurrenceUpdate[],
-): Promise<ApiResult> {
-  const res = await fetch("/api/onshape/assembly-transforms", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      documentId: query.documentId,
-      workspaceId: query.workspaceId,
-      assemblyElementId: query.assemblyElementId,
-      server: query.server,
-      occurrences,
-    }),
-  });
 
   return res.json() as Promise<ApiResult>;
 }
