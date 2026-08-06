@@ -136,21 +136,30 @@ function ParameterMarkPanelInner() {
    * same highlight + direction-arrows affordance you get clicking a
    * feature in the tree -- so picking a row here shows the affected
    * geometry without us re-implementing any B-rep highlighting ourselves.
-   * One-way: this extension type never receives a reply (confirmed live),
-   * so there's nothing to wait for here, just fire and forget.
+   * Closes whatever dialog is already open first (declining any edits,
+   * same as clicking its own red X) so clicking a different row doesn't
+   * require manually dismissing the previous one. One-way: this extension
+   * type never receives a reply (confirmed live), so there's nothing to
+   * wait for here, just fire and forget -- the setTimeout just gives
+   * Onshape a tick to process the close before the open arrives.
    */
   function openFeatureDialog(featureId: string) {
     if (!context) return;
+    const base = {
+      documentId: context.documentId,
+      workspaceId: context.workspaceId,
+      elementId: context.elementId,
+    };
     window.parent.postMessage(
-      {
-        documentId: context.documentId,
-        workspaceId: context.workspaceId,
-        elementId: context.elementId,
-        messageName: "openFeatureDialog",
-        featureId,
-      },
+      { ...base, messageName: "closeFeatureDialog", accept: false },
       context.server,
     );
+    setTimeout(() => {
+      window.parent.postMessage(
+        { ...base, messageName: "openFeatureDialog", featureId },
+        context.server,
+      );
+    }, 0);
   }
 
   async function markUncertain(entry: ValueParameterEntry) {
