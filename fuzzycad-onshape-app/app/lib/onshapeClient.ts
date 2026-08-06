@@ -29,6 +29,7 @@ assemblyOverlayResult?: unknown;
   projectStateResult?: unknown;
   reconstructionResult?: unknown;
   projectState?: unknown;
+  partIds?: string[];
 };
 
 async function parseApiResult(res: Response): Promise<ApiResult> {
@@ -301,6 +302,23 @@ export async function addPartStudioTransformFeature(
  * then un-suppress it here once the mark is accepted, instead of doing a
  * second insert.
  */
+/** Which real Onshape partId(s) a feature created -- the Features API and Part List API never link the two on their own, so this goes through qCreatedBy() via FeatureScript. */
+export async function fetchFeatureCreatedPartIds(
+  query: PartStudioQuery & { featureId: string },
+): Promise<ApiResult> {
+  const params = new URLSearchParams({
+    documentId: query.documentId,
+    workspaceId: query.workspaceId,
+    partStudioElementId: query.partStudioElementId,
+    featureId: query.featureId,
+    server: query.server,
+  });
+
+  const res = await fetch(`/api/onshape/partstudio-feature-created-parts?${params.toString()}`);
+
+  return res.json() as Promise<ApiResult>;
+}
+
 export async function updatePartStudioFeatureSuppressed(
   query: PartStudioQuery,
   body: {

@@ -308,6 +308,13 @@ export type FeatureParameterComment = {
   createdAt: string;
 };
 
+/** A part's appearance as it was before we overrode it to show "uncertain" -- captured so we can restore it exactly, persisted in the document (not just in-memory) so it survives a reload or a different browser resolving/rejecting the mark. */
+export type FeatureParameterPartAppearanceSnapshot = {
+  partId: string;
+  color: { red: number; green: number; blue: number };
+  opacity: number | null;
+};
+
 export type FeatureParameterQuestionUncertaintyAnnotation = BaseAnnotationFields & {
   type: "featureParameterQuestion";
   featureId: string;
@@ -321,6 +328,8 @@ export type FeatureParameterQuestionUncertaintyAnnotation = BaseAnnotationFields
   rangeMinValue: number | null;
   rangeMaxValue: number | null;
   commentThread: FeatureParameterComment[];
+  /** Parts this feature created, recolored transparent while the mark is open -- empty until the feature->part lookup resolves, and cleared back to [] once restored on resolve/reject. */
+  markedAppearances: FeatureParameterPartAppearanceSnapshot[];
 };
 
 export type FuzzyCADUncertaintyAnnotation =
@@ -1960,6 +1969,7 @@ function createFeatureParameterQuestionAnnotation(input: {
   rangeMinValue?: number | null;
   rangeMaxValue?: number | null;
   commentThread?: FeatureParameterComment[];
+  markedAppearances?: FeatureParameterPartAppearanceSnapshot[];
   comment?: string;
   author?: string;
   assignee?: string;
@@ -1992,6 +2002,7 @@ function createFeatureParameterQuestionAnnotation(input: {
     rangeMinValue: input.rangeMinValue ?? null,
     rangeMaxValue: input.rangeMaxValue ?? null,
     commentThread: input.commentThread ?? [],
+    markedAppearances: input.markedAppearances ?? [],
     comment: input.comment,
     author: input.author,
     assignee: input.assignee,
@@ -2029,6 +2040,7 @@ export function upsertFeatureParameterQuestion(
     rangeMinValue: existingQuestion?.rangeMinValue,
     rangeMaxValue: existingQuestion?.rangeMaxValue,
     commentThread: existingQuestion?.commentThread,
+    markedAppearances: existingQuestion?.markedAppearances,
     comment: existing?.comment,
     author: existing?.author ?? input.author,
     assignee: existing?.assignee,
@@ -2098,6 +2110,58 @@ export function setFeatureParameterQuestionRange(
         ...annotation,
         rangeMinValue,
         rangeMaxValue,
+        updatedAt: now,
+      };
+    }),
+  };
+}
+
+/** Records the parts' pre-mark appearance so it can be restored later -- called once, right after recoloring them transparent. A no-op if the mark already has a snapshot (re-running the feature->part lookup shouldn't overwrite it with our own override). */
+export function setFeatureParameterQuestionMarkedAppearances(
+  document: FuzzyCADUncertaintyDocument,
+  annotationId: string,
+  markedAppearances: FeatureParameterPartAppearanceSnapshot[],
+): FuzzyCADUncertaintyDocument {
+  const now = new Date().toISOString();
+
+  return {
+    ...document,
+    annotations: document.annotations.map((annotation) => {
+      if (
+        annotation.id !== annotationId ||
+        annotation.type !== "featureParameterQuestion" ||
+        // Loaded documents saved before this field existed won't have it.
+        (annotation.markedAppearances ?? []).length > 0
+      ) {
+        return annotation;
+      }
+
+      return {
+        ...annotation,
+        markedAppearances,
+        updatedAt: now,
+      };
+    }),
+  };
+}
+
+/** Clears the stored snapshot once its parts' original appearance has been restored (resolve/reject) -- so a later reopen knows there's nothing left to restore and re-marks from scratch. */
+export function clearFeatureParameterQuestionMarkedAppearances(
+  document: FuzzyCADUncertaintyDocument,
+  annotationId: string,
+): FuzzyCADUncertaintyDocument {
+  const now = new Date().toISOString();
+
+  return {
+    ...document,
+    annotations: document.annotations.map((annotation) => {
+      if (annotation.id !== annotationId || annotation.type !== "featureParameterQuestion") {
+        return annotation;
+      }
+
+      return {
+        ...annotation,
+        markedAppearances: [],
         updatedAt: now,
       };
     }),

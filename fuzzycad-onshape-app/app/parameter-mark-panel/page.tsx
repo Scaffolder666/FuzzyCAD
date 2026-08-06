@@ -3,22 +3,28 @@
 import { Fragment, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import {
   addFeatureParameterQuestionComment,
+  clearFeatureParameterQuestionMarkedAppearances,
   createEmptyUncertaintyDocument,
   makeFeatureParameterQuestionAnnotationId,
   removeUncertaintyAnnotationById,
   reopenUncertaintyAnnotation,
   resolveUncertaintyAnnotation,
   setFeatureParameterQuestionAnswer,
+  setFeatureParameterQuestionMarkedAppearances,
   setFeatureParameterQuestionRange,
   upsertFeatureParameterQuestion,
+  type FeatureParameterPartAppearanceSnapshot,
   type FeatureParameterQuestionUncertaintyAnnotation,
   type FeatureParameterValueType,
   type FuzzyCADUncertaintyDocument,
 } from "../lib/uncertainty/document";
 import {
+  fetchFeatureCreatedPartIds,
   fetchOnshapeElements,
+  fetchOnshapePartAppearance,
   loadFuzzycadProjectState,
   saveFuzzycadProjectState,
+  setOnshapePartAppearance,
   updatePartStudioFeatureSuppressed,
   type OnshapeElement,
 } from "../lib/onshapeClient";
@@ -384,11 +390,146 @@ function ParameterMarkPanelInner() {
 
       if (saveRes.ok) {
         setUncertaintyDoc(nextDocument);
+        void applyAppearanceMark(entry);
       } else {
         setStatus(`save failed (HTTP ${saveRes.status})`);
       }
     } finally {
       setSaving(false);
+    }
+  }
+
+  function extractAppearance(
+    data: unknown,
+  ): { color: { red: number; green: number; blue: number } | null; opacity: number | null } {
+    if (!data || typeof data !== "object") return { color: null, opacity: null };
+    const appearance = (data as Record<string, unknown>).appearance;
+    if (!appearance || typeof appearance !== "object") return { color: null, opacity: null };
+    const color = (appearance as Record<string, unknown>).color;
+    const opacity = (appearance as Record<string, unknown>).opacity;
+    const parsedColor =
+      color && typeof color === "object"
+        ? {
+            red: Number((color as Record<string, unknown>).red ?? 0),
+            green: Number((color as Record<string, unknown>).green ?? 0),
+            blue: Number((color as Record<string, unknown>).blue ?? 0),
+          }
+        : null;
+    return { color: parsedColor, opacity: typeof opacity === "number" ? opacity : null };
+  }
+
+  /**
+   * Best-effort and non-blocking: looks up which real part(s) this
+   * feature created, captures their current appearance, and sets opacity
+   * to 0 so the affected geometry visually reads as "not finalized"
+   * directly in Onshape's own viewport, not just in this panel -- edges
+   * still draw (Onshape's own shaded-with-edges display, not something
+   * this API controls), giving the sketch-like look. Reloads the document
+   * fresh rather than trusting component state, since this runs right
+   * after a save whose result hasn't round-tripped through a re-render
+   * yet. Idempotent (skips if already marked) and silent on failure --
+   * the feature->part lookup goes through a fragile, rate-limited Onshape
+   * endpoint, and the numeric mark itself must not depend on it.
+   */
+  async function applyAppearanceMark(entry: ValueParameterEntry) {
+    if (!context) return;
+
+    try {
+      const stateRes = await loadFuzzycadProjectState({
+        documentId: context.documentId,
+        workspaceId: context.workspaceId,
+        server: context.server,
+      });
+      if (!stateRes.ok || !isValidUncertaintyDocument(stateRes.state)) return;
+
+      const id = annotationIdFor(entry);
+      const annotation = stateRes.state.annotations.find(
+        (a): a is FeatureParameterQuestionUncertaintyAnnotation =>
+          a.id === id && a.type === "featureParameterQuestion",
+      );
+      if (!annotation || (annotation.markedAppearances ?? []).length > 0) return;
+
+      const partsRes = await fetchFeatureCreatedPartIds({
+        documentId: context.documentId,
+        workspaceId: context.workspaceId,
+        partStudioElementId: context.elementId,
+        server: context.server,
+        featureId: entry.featureId,
+      });
+      const partIds = partsRes.ok ? (partsRes.partIds ?? []) : [];
+      if (partIds.length === 0) return;
+
+      const snapshots: FeatureParameterPartAppearanceSnapshot[] = [];
+      for (const partId of partIds) {
+        const partQuery = {
+          documentId: context.documentId,
+          workspaceId: context.workspaceId,
+          elementId: context.elementId,
+          partId,
+          server: context.server,
+        };
+
+        const current = await fetchOnshapePartAppearance(partQuery);
+        const { color, opacity } = extractAppearance(current.data);
+        if (!color) continue;
+
+        snapshots.push({ partId, color, opacity });
+        await setOnshapePartAppearance(partQuery, color, 0);
+      }
+
+      if (snapshots.length > 0) {
+        await withSavedDocument((doc) =>
+          setFeatureParameterQuestionMarkedAppearances(doc, id, snapshots),
+        );
+      }
+    } catch (err) {
+      console.warn(`[FuzzyCAD] appearance marking failed for ${entry.featureId}:`, err);
+    }
+  }
+
+  /**
+   * Restores each marked part's original appearance and clears the
+   * stored snapshot -- called once a mark stops being "uncertain"
+   * (resolved or rejected). Only clears the snapshot after every part is
+   * confirmed restored; a partial failure leaves it in place so a later
+   * resolve/reopen cycle retries instead of losing the original colors.
+   */
+  async function revertAppearanceMark(entry: ValueParameterEntry) {
+    if (!context) return;
+
+    try {
+      const stateRes = await loadFuzzycadProjectState({
+        documentId: context.documentId,
+        workspaceId: context.workspaceId,
+        server: context.server,
+      });
+      if (!stateRes.ok || !isValidUncertaintyDocument(stateRes.state)) return;
+
+      const id = annotationIdFor(entry);
+      const annotation = stateRes.state.annotations.find(
+        (a): a is FeatureParameterQuestionUncertaintyAnnotation =>
+          a.id === id && a.type === "featureParameterQuestion",
+      );
+      const existingSnapshots = annotation?.markedAppearances ?? [];
+      if (!annotation || existingSnapshots.length === 0) return;
+
+      for (const snapshot of existingSnapshots) {
+        await setOnshapePartAppearance(
+          {
+            documentId: context.documentId,
+            workspaceId: context.workspaceId,
+            elementId: context.elementId,
+            partId: snapshot.partId,
+            server: context.server,
+          },
+          snapshot.color,
+          snapshot.opacity ?? undefined,
+        );
+      }
+
+      await withSavedDocument((doc) => clearFeatureParameterQuestionMarkedAppearances(doc, id));
+    } catch (err) {
+      console.warn(`[FuzzyCAD] appearance restore failed for ${entry.featureId}:`, err);
     }
   }
 
@@ -504,6 +645,7 @@ function ParameterMarkPanelInner() {
     }
 
     await withSavedDocument((doc) => resolveUncertaintyAnnotation(doc, annotationIdFor(entry)));
+    void revertAppearanceMark(entry);
   }
 
   /**
@@ -537,6 +679,10 @@ function ParameterMarkPanelInner() {
     );
     setSaving(false);
 
+    // Must happen before the delete below -- revertAppearanceMark looks
+    // the annotation back up to find markedAppearances, and a deleted
+    // annotation has nothing left to find.
+    await revertAppearanceMark(entry);
     await withSavedDocument((doc) => removeUncertaintyAnnotationById(doc, annotationIdFor(entry)));
     return true;
   }
@@ -817,7 +963,9 @@ function ParameterMarkPanelInner() {
                 }
                 onResolve={() => resolveMark(selected)}
                 onReopen={() =>
-                  withSavedDocument((doc) => reopenUncertaintyAnnotation(doc, annotationIdFor(selected)))
+                  void withSavedDocument((doc) =>
+                    reopenUncertaintyAnnotation(doc, annotationIdFor(selected)),
+                  ).then(() => applyAppearanceMark(selected))
                 }
                 onReject={() =>
                   void rejectMark(selected).then((deleted) => {
