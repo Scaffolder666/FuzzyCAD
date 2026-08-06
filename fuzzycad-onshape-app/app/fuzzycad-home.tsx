@@ -1123,12 +1123,15 @@ export default function FuzzyCADHome() {
     // background — the ghost preview upgrades from mesh-clone to
     // geometrically exact automatically once/if it resolves.
     if (documentId && workspaceId && selectedPartStudioId) {
-      brepGhostSource.ensureLoaded({
-        documentId,
-        workspaceId,
-        assemblyElementId: selectedPartStudioId,
-        server,
-      });
+      brepGhostSource.ensureLoaded(
+        {
+          documentId,
+          workspaceId,
+          assemblyElementId: selectedPartStudioId,
+          server,
+        },
+        objectSummaries,
+      );
     }
 
     // Reuse the mate graph already fetched for the assembly (see
@@ -1421,12 +1424,15 @@ export default function FuzzyCADHome() {
     // pushAcceptedChangesToOnshape) but needs a resolved OCCT handle by
     // then — kick off the same lazy B-rep load Move/Rotate/Scale use.
     if (documentId && workspaceId && selectedPartStudioId) {
-      brepGhostSource.ensureLoaded({
-        documentId,
-        workspaceId,
-        assemblyElementId: selectedPartStudioId,
-        server,
-      });
+      brepGhostSource.ensureLoaded(
+        {
+          documentId,
+          workspaceId,
+          assemblyElementId: selectedPartStudioId,
+          server,
+        },
+        objectSummaries,
+      );
     }
   }
 
@@ -1482,12 +1488,15 @@ export default function FuzzyCADHome() {
     setBooleanFirstPathKey(null);
 
     if (documentId && workspaceId && selectedPartStudioId) {
-      brepGhostSource.ensureLoaded({
-        documentId,
-        workspaceId,
-        assemblyElementId: selectedPartStudioId,
-        server,
-      });
+      brepGhostSource.ensureLoaded(
+        {
+          documentId,
+          workspaceId,
+          assemblyElementId: selectedPartStudioId,
+          server,
+        },
+        objectSummaries,
+      );
     }
   }
 
@@ -1555,12 +1564,15 @@ export default function FuzzyCADHome() {
     // background — same as startMove(), the ghost preview upgrades from
     // mesh-clone to geometrically exact automatically once/if it resolves.
     if (documentId && workspaceId && selectedPartStudioId) {
-      brepGhostSource.ensureLoaded({
-        documentId,
-        workspaceId,
-        assemblyElementId: selectedPartStudioId,
-        server,
-      });
+      brepGhostSource.ensureLoaded(
+        {
+          documentId,
+          workspaceId,
+          assemblyElementId: selectedPartStudioId,
+          server,
+        },
+        objectSummaries,
+      );
     }
   }
 
@@ -1601,12 +1613,15 @@ export default function FuzzyCADHome() {
     // background — same as startMove(), the ghost preview upgrades from
     // mesh-clone to geometrically exact automatically once/if it resolves.
     if (documentId && workspaceId && selectedPartStudioId) {
-      brepGhostSource.ensureLoaded({
-        documentId,
-        workspaceId,
-        assemblyElementId: selectedPartStudioId,
-        server,
-      });
+      brepGhostSource.ensureLoaded(
+        {
+          documentId,
+          workspaceId,
+          assemblyElementId: selectedPartStudioId,
+          server,
+        },
+        objectSummaries,
+      );
     }
   }
 
