@@ -37,3 +37,21 @@ export function parseNumericMagnitude(expression: string): number | null {
   const value = parseFloat(match[0]);
   return Number.isNaN(value) ? null : value;
 }
+
+/**
+ * Replaces just the leading numeric magnitude in a quantity expression,
+ * keeping everything else (the "*mm" / " in" unit suffix, any surrounding
+ * formula text) intact -- so an accepted proposed value like "6.5" becomes
+ * "6.5*mm" when the original was "5*mm", instead of losing the unit.
+ * Falls back to the bare new value if the original had no leading number
+ * to anchor on.
+ */
+export function substituteNumericMagnitude(originalExpression: string, newMagnitude: string): string {
+  const match = originalExpression.match(/-?\d+(\.\d+)?/);
+  if (!match || match.index === undefined) {
+    return newMagnitude;
+  }
+  const before = originalExpression.slice(0, match.index);
+  const after = originalExpression.slice(match.index + match[0].length);
+  return `${before}${newMagnitude}${after}`;
+}

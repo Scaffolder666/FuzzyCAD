@@ -14,8 +14,16 @@ import {
   type FeatureParameterValueType,
   type FuzzyCADUncertaintyDocument,
 } from "../lib/uncertainty/document";
-import { loadFuzzycadProjectState, saveFuzzycadProjectState } from "../lib/onshapeClient";
-import { formatFeatureParameterValue, parseNumericMagnitude } from "../lib/featureParameterValue";
+import {
+  loadFuzzycadProjectState,
+  saveFuzzycadProjectState,
+  updatePartStudioFeatureSuppressed,
+} from "../lib/onshapeClient";
+import {
+  formatFeatureParameterValue,
+  parseNumericMagnitude,
+  substituteNumericMagnitude,
+} from "../lib/featureParameterValue";
 import {
   ONSHAPE_CONTEXT_STORAGE_KEY,
   readSharedOnshapeContext,
@@ -308,6 +316,53 @@ function ParameterMarkPanelInner() {
     }
   }
 
+  /**
+   * Resolving is the moment a proposed value actually takes effect --
+   * before this, "Save proposed value" only records the proposal in
+   * FuzzyCAD's own uncertainty document, the real Onshape feature is
+   * untouched. If there's a resolvedValue, patch the real parameter's
+   * expression via the Feature API first (preserving its original unit
+   * suffix), then mark the annotation resolved. If the Feature API patch
+   * fails, the mark stays open so nothing is silently lost.
+   */
+  async function resolveMark(entry: ValueParameterEntry) {
+    if (!context) return;
+    const annotation = findAnnotation(entry);
+
+    if (annotation?.resolvedValue) {
+      const confirmed = window.confirm(
+        `Change ${entry.parameterId} from ${annotation.currentValue} to ${annotation.resolvedValue}? ` +
+          "This writes the real value into Onshape and can't be edited again without reopening.",
+      );
+      if (!confirmed) {
+        return;
+      }
+
+      setSaving(true);
+      const expression = substituteNumericMagnitude(annotation.currentValue, annotation.resolvedValue);
+      const updateRes = await updatePartStudioFeatureSuppressed(
+        {
+          documentId: context.documentId,
+          workspaceId: context.workspaceId,
+          partStudioElementId: context.elementId,
+          server: context.server,
+        },
+        {
+          featureId: entry.featureId,
+          parameterUpdates: [{ parameterId: entry.parameterId, expression }],
+        },
+      );
+      setSaving(false);
+
+      if (!updateRes.ok) {
+        setStatus(`failed to apply value in Onshape (HTTP ${updateRes.status})`);
+        return;
+      }
+    }
+
+    await withSavedDocument((doc) => resolveUncertaintyAnnotation(doc, annotationIdFor(entry)));
+  }
+
   if (!context) {
     return (
       <div className={styles.page}>
@@ -342,9 +397,7 @@ function ParameterMarkPanelInner() {
             addFeatureParameterQuestionComment(doc, annotationIdFor(selected), text),
           )
         }
-        onResolve={() =>
-          withSavedDocument((doc) => resolveUncertaintyAnnotation(doc, annotationIdFor(selected)))
-        }
+        onResolve={() => resolveMark(selected)}
         onReopen={() =>
           withSavedDocument((doc) => reopenUncertaintyAnnotation(doc, annotationIdFor(selected)))
         }
@@ -532,35 +585,46 @@ function DetailView({
         )}
 
         <div className={styles.sectionLabel}>Proposed value</div>
-        {hasRange ? (
-          <div className={styles.sliderRow}>
-            <input
-              type="range"
-              className={styles.slider}
-              min={rangeMin!}
-              max={rangeMax!}
-              step={(rangeMax! - rangeMin!) / 100 || 1}
-              value={answerDraft || String(rangeMin)}
-              onChange={(event) => setAnswerDraft(event.target.value)}
-            />
-            <span className={styles.sliderValue}>{answerDraft}</span>
+        {resolved ? (
+          <div className={styles.rangeLockedRow}>
+            <span>{annotation?.resolvedValue}</span>
+            <span className={styles.rangeLockedNote}>
+              Confirmed and applied — reopen to change it
+            </span>
           </div>
         ) : (
-          <input
-            type="text"
-            className={styles.valueInput}
-            value={answerDraft}
-            onChange={(event) => setAnswerDraft(event.target.value)}
-          />
+          <>
+            {hasRange ? (
+              <div className={styles.sliderRow}>
+                <input
+                  type="range"
+                  className={styles.slider}
+                  min={rangeMin!}
+                  max={rangeMax!}
+                  step={(rangeMax! - rangeMin!) / 100 || 1}
+                  value={answerDraft || String(rangeMin)}
+                  onChange={(event) => setAnswerDraft(event.target.value)}
+                />
+                <span className={styles.sliderValue}>{answerDraft}</span>
+              </div>
+            ) : (
+              <input
+                type="text"
+                className={styles.valueInput}
+                value={answerDraft}
+                onChange={(event) => setAnswerDraft(event.target.value)}
+              />
+            )}
+            <button
+              type="button"
+              className={styles.primaryButton}
+              disabled={saving || !answerDraft.trim()}
+              onClick={() => onSaveAnswer(answerDraft.trim())}
+            >
+              {saving ? "Saving..." : "Save proposed value"}
+            </button>
+          </>
         )}
-        <button
-          type="button"
-          className={styles.primaryButton}
-          disabled={saving || !answerDraft.trim()}
-          onClick={() => onSaveAnswer(answerDraft.trim())}
-        >
-          {saving ? "Saving..." : "Save proposed value"}
-        </button>
       </div>
 
       <div className={styles.section}>
@@ -612,6 +676,11 @@ function DetailView({
             {resolved ? "Reopen to edit range" : "Mark resolved"}
           </button>
         </div>
+        {!resolved && annotation?.resolvedValue ? (
+          <div className={styles.rangeLockedNote}>
+            Resolving will write {annotation.resolvedValue} into the real Onshape feature.
+          </div>
+        ) : null}
       </div>
     </div>
   );

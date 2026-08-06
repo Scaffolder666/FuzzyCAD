@@ -303,7 +303,11 @@ export async function addPartStudioTransformFeature(
  */
 export async function updatePartStudioFeatureSuppressed(
   query: PartStudioQuery,
-  body: { featureId: string; suppressed: boolean },
+  body: {
+    featureId: string;
+    suppressed?: boolean;
+    parameterUpdates?: { parameterId: string; expression: string }[];
+  },
 ): Promise<ApiResult> {
   const res = await fetch(`/api/onshape/partstudio-update-feature`, {
     method: "POST",
