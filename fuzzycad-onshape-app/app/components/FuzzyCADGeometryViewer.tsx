@@ -90,6 +90,7 @@ import {
   STEP_MM_TO_THREE_M,
   type BrepGhostMesh,
 } from "./viewer/brepGhost";
+import { threeWorldPointToStep, threeWorldVectorToStep, threeWorldDirectionToStep } from "../lib/occt/stepSolidBinding";
 import { getOcctClient } from "../lib/occt/occtClient";
 import type { BrepGhostSource } from "../lib/occt/useBrepGhostSource";
 import {
@@ -1609,11 +1610,15 @@ function Model({
       return;
     }
 
-    const deltaMm: [number, number, number] = [
-      moveDelta.x / STEP_MM_TO_THREE_M,
-      moveDelta.y / STEP_MM_TO_THREE_M,
-      moveDelta.z / STEP_MM_TO_THREE_M,
-    ];
+    // Was dividing by STEP_MM_TO_THREE_M component-wise — scale-only,
+    // missing the Z-up/Y-up axis rotation between three.js world space
+    // and STEP/OCCT space (same bug just found and fixed for Fillet/
+    // Extrude's ghost — this B-rep-exact upgrade tier had it too, just
+    // less obviously since the cheap mesh-clone ghost shown underneath
+    // made a skewed exact ghost easy to miss).
+    const deltaMm = threeWorldVectorToStep(
+      new THREE.Vector3(moveDelta.x, moveDelta.y, moveDelta.z),
+    );
 
     if (brepMoveDebounceRef.current) {
       clearTimeout(brepMoveDebounceRef.current);
@@ -2182,16 +2187,10 @@ function Model({
       return;
     }
 
-    const pivotMm: [number, number, number] = [
-      activeRotateResolvedFrame.pivotWorld.x / STEP_MM_TO_THREE_M,
-      activeRotateResolvedFrame.pivotWorld.y / STEP_MM_TO_THREE_M,
-      activeRotateResolvedFrame.pivotWorld.z / STEP_MM_TO_THREE_M,
-    ];
-    const axis: [number, number, number] = [
-      activeRotateResolvedFrame.axisWorld.x,
-      activeRotateResolvedFrame.axisWorld.y,
-      activeRotateResolvedFrame.axisWorld.z,
-    ];
+    // Same missing-axis-rotation bug as Move's deltaMm above — pivotMm was
+    // scale-only, and axis wasn't converted into STEP space at all.
+    const pivotMm = threeWorldPointToStep(activeRotateResolvedFrame.pivotWorld);
+    const axis = threeWorldDirectionToStep(activeRotateResolvedFrame.axisWorld);
 
     if (brepRotateDebounceRef.current) {
       clearTimeout(brepRotateDebounceRef.current);
@@ -2274,11 +2273,17 @@ function Model({
       return;
     }
 
-    const edgePointMm: [number, number, number] = [
-      filletPick.edgePointWorld[0] / STEP_MM_TO_THREE_M,
-      filletPick.edgePointWorld[1] / STEP_MM_TO_THREE_M,
-      filletPick.edgePointWorld[2] / STEP_MM_TO_THREE_M,
-    ];
+    // Was dividing by STEP_MM_TO_THREE_M component-wise — a scale-only
+    // conversion that skipped the Z-up/Y-up axis rotation between three.js
+    // world space and STEP/OCCT space, so resolveNearestEdge/Face searched
+    // in the wrong frame and could resolve a completely different edge/
+    // face than the one actually clicked (confirmed live: a "2mm push"
+    // extrude ghost that looked like an unrelated floating box). Use the
+    // real conversion (rotation + scale) — same one already used correctly
+    // for the accept-time push in fuzzycad-home.tsx.
+    const edgePointMm = threeWorldPointToStep(
+      new THREE.Vector3(...filletPick.edgePointWorld),
+    );
 
     if (brepFilletDebounceRef.current) {
       clearTimeout(brepFilletDebounceRef.current);
@@ -2354,11 +2359,9 @@ function Model({
         continue;
       }
 
-      const edgePointMm: [number, number, number] = [
-        preview.edgePointWorld[0] / STEP_MM_TO_THREE_M,
-        preview.edgePointWorld[1] / STEP_MM_TO_THREE_M,
-        preview.edgePointWorld[2] / STEP_MM_TO_THREE_M,
-      ];
+      const edgePointMm = threeWorldPointToStep(
+        new THREE.Vector3(...preview.edgePointWorld),
+      );
       const radiusMm = preview.radiusMeters / STEP_MM_TO_THREE_M;
 
       getOcctClient()
@@ -2423,11 +2426,9 @@ function Model({
       return;
     }
 
-    const facePointMm: [number, number, number] = [
-      extrudePick.facePointWorld[0] / STEP_MM_TO_THREE_M,
-      extrudePick.facePointWorld[1] / STEP_MM_TO_THREE_M,
-      extrudePick.facePointWorld[2] / STEP_MM_TO_THREE_M,
-    ];
+    const facePointMm = threeWorldPointToStep(
+      new THREE.Vector3(...extrudePick.facePointWorld),
+    );
 
     if (brepExtrudeDebounceRef.current) {
       clearTimeout(brepExtrudeDebounceRef.current);
@@ -2499,11 +2500,9 @@ function Model({
         continue;
       }
 
-      const facePointMm: [number, number, number] = [
-        preview.facePointWorld[0] / STEP_MM_TO_THREE_M,
-        preview.facePointWorld[1] / STEP_MM_TO_THREE_M,
-        preview.facePointWorld[2] / STEP_MM_TO_THREE_M,
-      ];
+      const facePointMm = threeWorldPointToStep(
+        new THREE.Vector3(...preview.facePointWorld),
+      );
       const offsetMm = preview.offsetMeters / STEP_MM_TO_THREE_M;
 
       getOcctClient()
