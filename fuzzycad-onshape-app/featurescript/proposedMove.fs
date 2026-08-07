@@ -88,6 +88,13 @@ export const fuzzycadProposedMove = defineFeature(function(context is Context, i
         // two were visually indistinguishable. Coloring each dash/arrow
         // segment the same blue used for "proposed" elsewhere fixes
         // that: black solid = current, blue dashed = proposed.
+        //
+        // First attempt queried each dash by EntityType.EDGE and got a
+        // real compiler/runtime error, confirmed live: "APPEARANCE
+        // property can only be applied to bodies and faces" -- each
+        // opFitSpline call creates its own wire-type BODY (not a bare
+        // edge floating with no owning body), so the fix is querying
+        // EntityType.BODY for each dash/arrow id instead.
         const dashColor = color(0.25, 0.55, 0.95, 1.0);
 
         const proposedEdges = evaluateQuery(context, qCreatedBy(id + "duplicate", EntityType.EDGE));
@@ -103,7 +110,7 @@ export const fuzzycadProposedMove = defineFeature(function(context is Context, i
                 const dashId = id + "dash" + toString(e) + "_" + toString(i);
                 opFitSpline(context, dashId, { "points" : [p0, p1] });
                 setProperty(context, {
-                        "entities" : qCreatedBy(dashId, EntityType.EDGE),
+                        "entities" : qCreatedBy(dashId, EntityType.BODY),
                         "propertyType" : PropertyType.APPEARANCE,
                         "value" : dashColor
                 });
@@ -118,7 +125,7 @@ export const fuzzycadProposedMove = defineFeature(function(context is Context, i
         );
         opFitSpline(context, id + "arrow", { "points" : [originCenter, originCenter + offset] });
         setProperty(context, {
-                "entities" : qCreatedBy(id + "arrow", EntityType.EDGE),
+                "entities" : qCreatedBy(id + "arrow", EntityType.BODY),
                 "propertyType" : PropertyType.APPEARANCE,
                 "value" : dashColor
         });
