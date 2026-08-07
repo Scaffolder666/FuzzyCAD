@@ -132,7 +132,7 @@ export const fuzzycadProposedMove = defineFeature(function(context is Context, i
         const labelUv = worldToPlane(labelPlane, midPoint);
         const textSize = 3 * millimeter;
         skText(labelSketch, "distanceLabelText", {
-                "text" : toString(round(moveDistanceMm, 1)) + " mm",
+                "text" : toString(round(moveDistanceMm, 1)) ~ " mm",
                 "fontName" : "OpenSans-Regular.ttf",
                 "firstCorner" : vector(labelUv[0] - textSize, labelUv[1] - textSize),
                 "secondCorner" : vector(labelUv[0] + textSize, labelUv[1] + textSize)
