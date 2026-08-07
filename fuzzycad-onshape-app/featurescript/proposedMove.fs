@@ -1,39 +1,29 @@
-// FuzzyCAD "Proposed Move" custom feature -- v2, adds a dashed-outline
-// + directional-arrow visualization on top of the v1 mechanism (opPattern
-// duplication + setProperty fade/color), which was fully confirmed live.
+// FuzzyCAD "Proposed Move" custom feature -- v3.
 //
-// v2 is a genuinely experimental batch -- multiple NEW FeatureScript
-// calls, none used anywhere else in this codebase yet, found via web
-// research (not confirmed live) rather than guessed cold:
-//   1. opFitSpline(context, id, {"points": [p0, p1]}) -- draws a real,
-//      persistent 3D curve between two points, found via an Onshape
-//      forum example: "opFitSpline(context, id + "line_1", { "points" :
-//      [ startPoint, endPoint ] });". Used here in a loop to build many
-//      short segments = a dashed line.
-//   2. evBox3d(context, {"topology": ..., "tight": true}) -- bounding
-//      box, found via forum example: "var bbox = evBox3d(context, {
-//      "topology" : definition.SelectedBody, "tight" : true })",
-//      returning .minCorner/.maxCorner as (presumably) 3-element
-//      indexable arrays of length quantities. Used to find the original
-//      body's center as the arrow's start point.
-//   3. toString(number) -- guessed conversion for building unique ids
-//      inside the dash loop (id + "dash" + toString(e) + ...) -- id
-//      concatenation via "+" IS confirmed elsewhere (id + "extrude1"
-//      etc.), but concatenating a LOOP INDEX specifically is new.
+// v3 rewrite based on a real, working FeatureScript source the user
+// found (a "hand drawn sketchy wireframe" custom feature) which
+// confirmed several previously-guessed functions are real and
+// correctly shaped, and taught a cleaner pattern for the dashed
+// outline than v2's per-dash setProperty calls:
+//   - opCreateCompositePart(context, id, {"bodies": ..., "closed":
+//     boolean}) merges many wire bodies (like our dash segments) into
+//     ONE body -- confirmed live in that source. Used here so all the
+//     dash segments get ONE setProperty call instead of one per dash.
+//   - skText / newSketchOnPlane / worldToPlane / skSolve -- confirmed
+//     live: a real, working way to place 3D text. Used here to add an
+//     actual distance label ("12.5mm") near the arrow's midpoint --
+//     the "ruler" the user asked for, which I'd wrongly assumed was
+//     out of reach.
+//   - qUnion(...) to accumulate the per-dash body queries into one.
 //
-// Design: the proposed body itself is made fully invisible (alpha 0) --
-// what's actually visible is a dashed wire skeleton traced along its
-// edges (sample each edge at 10 parameter steps, connect only every
-// OTHER pair as a short opFitSpline segment, skip the rest -- the
-// skipped pairs become the gaps) plus a single straight line from the
-// original body's bounding-box center to its moved position, standing
-// in for a directional arrow (no arrowhead geometry yet -- keeping this
-// first pass simpler given how much else here is unconfirmed).
-//
-// If this doesn't compile, the exact line number in the error will say
-// which of the three new pieces above is wrong -- paste it back rather
-// than guessing further blind. Given how much is new here, expect more
-// than one round.
+// Still true from v2: Onshape draws every body's own edges as default
+// black lines regardless of face opacity, confirmed live -- there is
+// no way found to suppress a body's own edge rendering. The proposed
+// body's own complete outline will always be visible alongside the
+// dashed skeleton; the dashes are an additional cue on top, not a
+// replacement for the real outline (matches how the reference source
+// itself works too -- it doesn't try to hide the base model's edges
+// either, it draws additional sketchy strokes over/near them).
 
 FeatureScript 3029;
 import(path : "onshape/std/common.fs", version : "3029.0");
@@ -80,25 +70,15 @@ export const fuzzycadProposedMove = defineFeature(function(context is Context, i
                 "value" : color(0.25, 0.55, 0.95, 0.0)
         });
 
-        // Onshape draws every body's edges as plain black/dark lines by
-        // default REGARDLESS of face opacity -- confirmed live: the
-        // original body's own outline stayed fully visible even at
-        // alpha 0.08, and the dash segments below (with no appearance
-        // set of their own) rendered in that same default look, so the
-        // two were visually indistinguishable. Coloring each dash/arrow
-        // segment the same blue used for "proposed" elsewhere fixes
-        // that: black solid = current, blue dashed = proposed.
-        //
-        // First attempt queried each dash by EntityType.EDGE and got a
-        // real compiler/runtime error, confirmed live: "APPEARANCE
-        // property can only be applied to bodies and faces" -- each
-        // opFitSpline call creates its own wire-type BODY (not a bare
-        // edge floating with no owning body), so the fix is querying
-        // EntityType.BODY for each dash/arrow id instead.
         const dashColor = color(0.25, 0.55, 0.95, 1.0);
 
+        // Build every dash segment, but collect them into ONE query and
+        // style them with a single setProperty call via
+        // opCreateCompositePart -- confirmed pattern, instead of one
+        // setProperty per dash.
         const proposedEdges = evaluateQuery(context, qCreatedBy(id + "duplicate", EntityType.EDGE));
         const dashSteps = 10;
+        var allDashes = qNothing();
         for (var e = 0; e < size(proposedEdges); e += 1)
         {
             for (var i = 0; i < dashSteps; i += 2)
@@ -109,24 +89,53 @@ export const fuzzycadProposedMove = defineFeature(function(context is Context, i
                 const p1 = evEdgeTangentLine(context, { "edge" : proposedEdges[e], "parameter" : t1 }).origin;
                 const dashId = id + "dash" + toString(e) + "_" + toString(i);
                 opFitSpline(context, dashId, { "points" : [p0, p1] });
-                setProperty(context, {
-                        "entities" : qCreatedBy(dashId, EntityType.BODY),
-                        "propertyType" : PropertyType.APPEARANCE,
-                        "value" : dashColor
-                });
+                allDashes = qUnion(allDashes, qCreatedBy(dashId, EntityType.BODY));
             }
         }
 
+        opCreateCompositePart(context, id + "dashComposite", {
+                "bodies" : allDashes,
+                "closed" : false
+        });
+
+        setProperty(context, {
+                "entities" : qCreatedBy(id + "dashComposite", EntityType.BODY),
+                "propertyType" : PropertyType.APPEARANCE,
+                "value" : dashColor
+        });
+
+        // Directional arrow, same as v2.
         const bbox = evBox3d(context, { "topology" : originalBody, "tight" : true });
         const originCenter = vector(
                 (bbox.minCorner[0] + bbox.maxCorner[0]) / 2,
                 (bbox.minCorner[1] + bbox.maxCorner[1]) / 2,
                 (bbox.minCorner[2] + bbox.maxCorner[2]) / 2
         );
-        opFitSpline(context, id + "arrow", { "points" : [originCenter, originCenter + offset] });
+        const arrowEnd = originCenter + offset;
+        opFitSpline(context, id + "arrow", { "points" : [originCenter, arrowEnd] });
         setProperty(context, {
                 "entities" : qCreatedBy(id + "arrow", EntityType.BODY),
                 "propertyType" : PropertyType.APPEARANCE,
                 "value" : dashColor
         });
+
+        // Distance label ("the ruler") at the arrow's midpoint, on a
+        // plane facing along the move direction -- same skText pattern
+        // confirmed in the reference source (there used for rotation
+        // angles in degrees; here for a move distance in millimeters).
+        const moveDistanceMm = norm(offset) / millimeter;
+        const midPoint = (originCenter + arrowEnd) / 2;
+        const labelPlane = plane(midPoint, normalize(offset));
+        const labelSketch = newSketchOnPlane(context, id + "distanceLabelSketch", {
+                "sketchPlane" : labelPlane
+        });
+        const labelUv = worldToPlane(labelPlane, midPoint);
+        const textSize = 3 * millimeter;
+        skText(labelSketch, "distanceLabelText", {
+                "text" : toString(round(moveDistanceMm, 1)) + " mm",
+                "fontName" : "OpenSans-Regular.ttf",
+                "firstCorner" : vector(labelUv[0] - textSize, labelUv[1] - textSize),
+                "secondCorner" : vector(labelUv[0] + textSize, labelUv[1] + textSize)
+        });
+        skSolve(labelSketch);
     });

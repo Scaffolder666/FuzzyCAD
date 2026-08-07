@@ -6,12 +6,16 @@
 //
 // Geometry logic (duplicate the body, match the picked edge on the
 // copy, fillet it) is copied verbatim from proposedFillet.fs, confirmed
-// live. Only the final appearance styling differs: instead of filling
-// the whole duplicate body with a solid color, this colors just the
-// duplicate's EDGES (qCreatedBy(id + "duplicate", EntityType.EDGE),
-// already used and confirmed for the edge-matching step itself) with a
-// bright outline color -- "needs a decision" reads as an outline, not a
-// filled proposal.
+// live.
+//
+// Visual language CHANGED from the original plan: "outline only" (color
+// just the duplicate's edges, leave faces normal) is not achievable --
+// confirmed live, setProperty's APPEARANCE property only accepts BODY
+// or FACE entities, not EDGE ("APPEARANCE property can only be applied
+// to bodies and faces"). Fixed here by coloring the whole proposed body
+// instead, but in a DIFFERENT hue (amber) from Proposed*'s blue, so
+// Needs Input and Proposed stay visually distinguishable even though
+// both are now "filled" rather than one being an outline.
 //
 // "radius" starts at whatever placeholder value whoever inserts this
 // leaves it at -- someone else fills in the real number via the right
@@ -61,10 +65,10 @@ export const fuzzycadNeedsInputFillet = defineFeature(function(context is Contex
                 "value" : color(0.75, 0.75, 0.75, 0.08)
         });
 
-        const proposedEdges = qCreatedBy(id + "duplicate", EntityType.EDGE);
+        const proposedBody = qCreatedBy(id + "duplicate", EntityType.BODY);
         setProperty(context, {
-                "entities" : proposedEdges,
+                "entities" : proposedBody,
                 "propertyType" : PropertyType.APPEARANCE,
-                "value" : color(0.3, 0.7, 1.0, 1.0)
+                "value" : color(1.0, 0.65, 0.0, 1.0)
         });
     });

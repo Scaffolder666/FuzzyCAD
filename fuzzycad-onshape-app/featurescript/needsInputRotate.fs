@@ -2,12 +2,16 @@
 // proposedRotate.fs, a separate Cosmo Feature type -- see
 // needsInputExtrude.fs's header comment for the full rationale.
 //
-// Geometry logic copied verbatim from proposedRotate.fs, which is
-// itself still UNCONFIRMED (rotationAround()/line() haven't compiled
-// live yet as of this writing) -- test proposedRotate.fs first; once
-// that compiles, this sibling should too since the only difference is
-// the final appearance styling (edges-only-outline, same as
-// needsInputFillet.fs, instead of a filled duplicate).
+// Geometry logic copied verbatim from proposedRotate.fs. rotationAround()
+// and line() are now independently confirmed real (found used exactly
+// this way in a working reference source the user found), so this is
+// lower-risk than earlier noted.
+//
+// Visual language CHANGED from the original plan: "outline only" isn't
+// achievable -- confirmed live, setProperty's APPEARANCE property only
+// accepts BODY or FACE, not EDGE. Fixed by coloring the whole proposed
+// body in a different hue (amber) from Proposed*'s blue instead -- same
+// fix as needsInputFillet.fs.
 //
 // "Angle" starts at whatever placeholder value (e.g. 0) whoever inserts
 // this leaves it at -- someone else fills in the real angle via the
@@ -57,10 +61,10 @@ export const fuzzycadNeedsInputRotate = defineFeature(function(context is Contex
                 "value" : color(0.75, 0.75, 0.75, 0.08)
         });
 
-        const proposedEdges = qCreatedBy(id + "duplicate", EntityType.EDGE);
+        const proposedBody = qCreatedBy(id + "duplicate", EntityType.BODY);
         setProperty(context, {
-                "entities" : proposedEdges,
+                "entities" : proposedBody,
                 "propertyType" : PropertyType.APPEARANCE,
-                "value" : color(0.3, 0.7, 1.0, 1.0)
+                "value" : color(1.0, 0.65, 0.0, 1.0)
         });
     });

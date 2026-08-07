@@ -5,8 +5,13 @@
 // Geometry logic copied verbatim from proposedChamfer.fs (itself copied
 // from the confirmed-live proposedFillet.fs, swapping opFillet for
 // opChamfer with a "width" key -- still unconfirmed, same risk noted in
-// proposedChamfer.fs). Only the final appearance styling differs, same
-// edges-only-outline treatment as needsInputFillet.fs.
+// proposedChamfer.fs).
+//
+// Visual language CHANGED from the original plan: "outline only" isn't
+// achievable -- confirmed live, setProperty's APPEARANCE property only
+// accepts BODY or FACE, not EDGE. Fixed by coloring the whole proposed
+// body in a different hue (amber) from Proposed*'s blue instead --
+// same fix as needsInputFillet.fs.
 //
 // "width" starts at whatever placeholder value whoever inserts this
 // leaves it at -- someone else fills in the real number via the right
@@ -56,10 +61,10 @@ export const fuzzycadNeedsInputChamfer = defineFeature(function(context is Conte
                 "value" : color(0.75, 0.75, 0.75, 0.08)
         });
 
-        const proposedEdges = qCreatedBy(id + "duplicate", EntityType.EDGE);
+        const proposedBody = qCreatedBy(id + "duplicate", EntityType.BODY);
         setProperty(context, {
-                "entities" : proposedEdges,
+                "entities" : proposedBody,
                 "propertyType" : PropertyType.APPEARANCE,
-                "value" : color(0.3, 0.7, 1.0, 1.0)
+                "value" : color(1.0, 0.65, 0.0, 1.0)
         });
     });

@@ -1,39 +1,22 @@
-// FuzzyCAD "Proposed Scale" custom feature -- DRAFT v2, not yet
-// compiled. v1 guessed a dedicated opScale(context, id, definition) op,
-// which the compiler rejected outright ("Function opScale with 3
-// argument(s) not found") -- confirmed dead end.
+// FuzzyCAD "Proposed Scale" custom feature -- v3.
+// v1 guessed a dedicated opScale() op -- confirmed dead live ("Function
+// opScale with 3 argument(s) not found"). v2 tried building a scaling
+// Transform via identityMatrix(3) * scale -- never live-tested.
 //
-// Web research (Onshape's own FsDoc + forum posts) turned up two
-// corrections:
-//   1. opPattern's "transforms" do NOT have to be rigid (quoting
-//      Onshape's own docs) -- scaling can go through the SAME
-//      opPattern-with-a-Transform trick Move/Rotate already use,
-//      confirmed live for both. No separate scale op needed at all.
-//   2. A scaling Transform is built as transform(matrix, point) --
-//      found a real example: "transform(identityMatrix(3) * scale,
-//      fixedPoint)" (uniform scale about a point). identityMatrix(3)
-//      presumably returns a 3x3 identity Matrix; multiplying by a plain
-//      number scales it uniformly.
-//   3. REAL_BOUNDS isn't real either (confirmed live: "Variable
-//      REAL_BOUNDS not found"). Found real examples of
-//      POSITIVE_REAL_BOUNDS used for isReal(...) elsewhere (e.g. color
-//      channel values) -- a natural fit for a scale factor too, since
-//      scale should never be zero or negative.
+// v3 replaces that guess with scaleNonuniformly(sx, sy, sz, point),
+// confirmed real and working in a real FeatureScript source the user
+// found (used there as: "opTransform(context, id, { "bodies": ...,
+// "transform": scaleNonuniformly(sx, sy, sz, evVertexPoint(...)) })").
+// Much better grounded than the identityMatrix guess. Since opPattern's
+// own transforms don't have to be rigid (Onshape's own docs, and
+// confirmed working for the rotation case), passing
+// scaleNonuniformly(...) directly as one of opPattern's "transforms"
+// should work the same way -- untested, but this is the most
+// well-supported version of this file yet.
 //
-// Still UNCONFIRMED, none of this web research is a substitute for the
-// compiler actually accepting it:
-//   1. identityMatrix(3) -- guessed function name for a 3x3 identity
-//      matrix constructor, found referenced but not the exact call
-//      shape confirmed.
-//   2. transform(matrix, point) -- guessed 2-arg overload shape (matrix
-//      first, point second) by analogy with the "transform(identityMatrix(3)
-//      * scale, fixedPoint)" example found online, not from this
-//      codebase's own confirmed usage.
-//   3. evVertexPoint(context, {"vertex": ...}) -- same guess as v1,
-//      unconfirmed.
-//
-// Same appearance-styling approach and same known REST-override
-// limitation as proposedFillet.fs/proposedMove.fs/proposedRotate.fs.
+// POSITIVE_REAL_BOUNDS (confirmed via real isReal() usage examples
+// elsewhere) and evVertexPoint (now ALSO independently confirmed real
+// in that same reference source) are unchanged from v2.
 
 FeatureScript 3029;
 import(path : "onshape/std/common.fs", version : "3029.0");
@@ -55,10 +38,16 @@ export const fuzzycadProposedScale = defineFeature(function(context is Context, 
         const originalBody = definition.body;
 
         const pivot = evVertexPoint(context, { "vertex" : definition.originPoint });
+        const scaleTransform = scaleNonuniformly(
+                definition.scaleFactor,
+                definition.scaleFactor,
+                definition.scaleFactor,
+                pivot
+        );
 
         opPattern(context, id + "duplicate", {
                 "entities" : originalBody,
-                "transforms" : [transform(identityMatrix(3) * definition.scaleFactor, pivot)],
+                "transforms" : [scaleTransform],
                 "instanceNames" : ["proposed"]
         });
 

@@ -16,14 +16,17 @@
 // guess for someone else to confirm).
 //
 // Geometry logic is copied verbatim from proposedExtrude.fs (confirmed
-// live). The ONLY change: proposedExtrude.fs deliberately has NO
-// in-script appearance styling (relies on the right panel's REST-based
-// opacity toggle instead) -- this version DOES self-style, using the
-// same setProperty-on-edges technique confirmed working for
-// proposedFillet.fs, so it reads as an "outline highlight" (edges only,
-// bright) rather than Proposed*'s "filled volume" look, distinguishing
-// "needs a decision" from "here's a concrete proposal" at a glance
-// without needing a different color family.
+// live). proposedExtrude.fs deliberately has NO in-script appearance
+// styling (relies on the right panel's REST-based opacity toggle
+// instead) -- this version DOES self-style.
+//
+// Visual language CHANGED from the original plan: an "outline only"
+// (edges colored, faces normal) look isn't achievable -- confirmed
+// live, setProperty's APPEARANCE property only accepts BODY or FACE,
+// not EDGE. Fixed by coloring the whole new body instead, in a
+// DIFFERENT hue (amber) from Proposed*'s blue, so Needs Input and
+// Proposed stay visually distinguishable -- same fix as
+// needsInputFillet.fs.
 
 FeatureScript 3029;
 import(path : "onshape/std/common.fs", version : "3029.0");
@@ -60,10 +63,10 @@ export const fuzzycadNeedsInputExtrude = defineFeature(function(context is Conte
                 "operationType" : NewBodyOperationType.NEW
         });
 
-        const newEdges = qCreatedBy(id + "extrude1", EntityType.EDGE);
+        const newBody = qCreatedBy(id + "extrude1", EntityType.BODY);
         setProperty(context, {
-                "entities" : newEdges,
+                "entities" : newBody,
                 "propertyType" : PropertyType.APPEARANCE,
-                "value" : color(0.3, 0.7, 1.0, 1.0)
+                "value" : color(1.0, 0.65, 0.0, 1.0)
         });
     });

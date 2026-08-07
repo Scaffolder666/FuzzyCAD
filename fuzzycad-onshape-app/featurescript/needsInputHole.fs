@@ -6,9 +6,13 @@
 // still UNCONFIRMED (NewBodyOperationType.REMOVE + "booleanScope" have
 // not compiled live yet as of this writing) -- test proposedHole.fs
 // first, INCLUDING its safety check that the original body doesn't get
-// cut too, before trusting this sibling. Only difference here is the
-// final appearance styling (edges-only-outline instead of a filled
-// duplicate).
+// cut too, before trusting this sibling.
+//
+// Visual language CHANGED from the original plan: "outline only" isn't
+// achievable -- confirmed live, setProperty's APPEARANCE property only
+// accepts BODY or FACE, not EDGE. Fixed by coloring the whole proposed
+// body in a different hue (amber) from Proposed*'s blue instead -- same
+// fix as needsInputFillet.fs.
 //
 // "Depth" starts at whatever placeholder value whoever inserts this
 // leaves it at -- someone else fills in the real depth via the right
@@ -69,10 +73,9 @@ export const fuzzycadNeedsInputHole = defineFeature(function(context is Context,
                 "value" : color(0.75, 0.75, 0.75, 0.08)
         });
 
-        const proposedEdges = qCreatedBy(id + "duplicate", EntityType.EDGE);
         setProperty(context, {
-                "entities" : proposedEdges,
+                "entities" : proposedBody,
                 "propertyType" : PropertyType.APPEARANCE,
-                "value" : color(0.3, 0.7, 1.0, 1.0)
+                "value" : color(1.0, 0.65, 0.0, 1.0)
         });
     });

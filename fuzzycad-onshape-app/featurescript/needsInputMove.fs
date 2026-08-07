@@ -2,10 +2,17 @@
 // proposedMove.fs, a separate Cosmo Feature type -- see
 // needsInputExtrude.fs's header comment for the full rationale.
 //
-// Geometry logic copied verbatim from proposedMove.fs (confirmed live:
-// built entirely from opPattern-with-a-nonzero-transform + setProperty).
-// Only the final appearance styling differs, same edges-only-outline
-// treatment as needsInputFillet.fs.
+// Geometry logic copied from proposedMove.fs's core mechanism (confirmed
+// live: opPattern-with-a-nonzero-transform + setProperty) -- NOT the
+// dashed-outline/arrow/label styling proposedMove.fs v3 adds, since
+// that's extra polish for a KNOWN value, not needed for a placeholder
+// one here.
+//
+// Visual language CHANGED from the original plan: "outline only" isn't
+// achievable -- confirmed live, setProperty's APPEARANCE property only
+// accepts BODY or FACE, not EDGE. Fixed by coloring the whole proposed
+// body in a different hue (amber) from Proposed*'s blue instead -- same
+// fix as needsInputFillet.fs.
 //
 // "Move X/Y/Z" start at whatever placeholder values (e.g. 0) whoever
 // inserts this leaves them at -- someone else fills in the real numbers
@@ -48,10 +55,10 @@ export const fuzzycadNeedsInputMove = defineFeature(function(context is Context,
                 "value" : color(0.75, 0.75, 0.75, 0.08)
         });
 
-        const proposedEdges = qCreatedBy(id + "duplicate", EntityType.EDGE);
+        const proposedBody = qCreatedBy(id + "duplicate", EntityType.BODY);
         setProperty(context, {
-                "entities" : proposedEdges,
+                "entities" : proposedBody,
                 "propertyType" : PropertyType.APPEARANCE,
-                "value" : color(0.3, 0.7, 1.0, 1.0)
+                "value" : color(1.0, 0.65, 0.0, 1.0)
         });
     });

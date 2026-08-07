@@ -2,14 +2,19 @@
 // proposedScale.fs, a separate Cosmo Feature type -- see
 // needsInputExtrude.fs's header comment for the full rationale.
 //
-// Geometry logic copied verbatim from proposedScale.fs v2, which
-// dropped the dead-end opScale guess in favor of opPattern with a
-// scaling Transform (transform(identityMatrix(3) * scale, point)) --
-// see proposedScale.fs's header for the full research trail and what's
-// still unconfirmed there. Test proposedScale.fs first; once that
-// compiles, this sibling should too since the only difference is the
-// final appearance styling (edges-only-outline instead of a filled
-// duplicate).
+// Geometry logic copied from proposedScale.fs v3 (scaleNonuniformly,
+// confirmed real in a working reference source the user found,
+// replacing the earlier identityMatrix(3) guess).
+//
+// Visual language CHANGED from the original plan: "outline only" (color
+// just the duplicate's edges, leave faces normal) is not achievable --
+// confirmed live, setProperty's APPEARANCE property only accepts BODY
+// or FACE entities, not EDGE ("APPEARANCE property can only be applied
+// to bodies and faces"). Every needsInput*.fs file had this same bug.
+// Fixed here by coloring the whole proposed body instead, but in a
+// DIFFERENT hue (amber) from Proposed*'s blue, so Needs Input and
+// Proposed are still visually distinguishable at a glance even though
+// both are now "filled" rather than one being an outline.
 //
 // "Scale factor" starts at whatever placeholder value (e.g. 1, meaning
 // no change yet) whoever inserts this leaves it at -- someone else
@@ -36,12 +41,20 @@ export const fuzzycadNeedsInputScale = defineFeature(function(context is Context
         const originalBody = definition.body;
 
         const pivot = evVertexPoint(context, { "vertex" : definition.originPoint });
+        const scaleTransform = scaleNonuniformly(
+                definition.scaleFactor,
+                definition.scaleFactor,
+                definition.scaleFactor,
+                pivot
+        );
 
         opPattern(context, id + "duplicate", {
                 "entities" : originalBody,
-                "transforms" : [transform(identityMatrix(3) * definition.scaleFactor, pivot)],
+                "transforms" : [scaleTransform],
                 "instanceNames" : ["proposed"]
         });
+
+        const proposedBody = qCreatedBy(id + "duplicate", EntityType.BODY);
 
         setProperty(context, {
                 "entities" : originalBody,
@@ -49,10 +62,9 @@ export const fuzzycadNeedsInputScale = defineFeature(function(context is Context
                 "value" : color(0.75, 0.75, 0.75, 0.08)
         });
 
-        const proposedEdges = qCreatedBy(id + "duplicate", EntityType.EDGE);
         setProperty(context, {
-                "entities" : proposedEdges,
+                "entities" : proposedBody,
                 "propertyType" : PropertyType.APPEARANCE,
-                "value" : color(0.3, 0.7, 1.0, 1.0)
+                "value" : color(1.0, 0.65, 0.0, 1.0)
         });
     });
