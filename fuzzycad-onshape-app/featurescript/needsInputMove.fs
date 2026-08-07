@@ -116,7 +116,15 @@ export const fuzzycadNeedsInputMove = defineFeature(function(context is Context,
         // 3. Hand-drawn face scribble fill across the proposed body.
         drawSketchyFaceFill(context, id + "faceFill", proposedBody);
 
-        // 4. Movement arrows, black instead of Proposed*'s blue.
+        // 4. Movement arrows, black instead of Proposed*'s blue. Per axis:
+        // if that axis is still flagged "needs input", a precise filled
+        // arrow with an exact distance label would be FAKE PRECISION --
+        // nobody has confirmed that number yet, it's just whatever
+        // placeholder is sitting in moveX/Y/Z. So a still-open axis gets
+        // a loose, hand-gestured indicator instead (see
+        // drawFuzzyDirectionGesture below): a rough direction, no claimed
+        // distance. Only an axis whose flag has been unchecked (someone
+        // has actually confirmed it) gets the precise arrow + number.
         const arrowColor = color(0, 0, 0, 0.85);
 
         const bbox = evBox3d(context, { "topology" : originalBody, "tight" : true });
@@ -126,9 +134,38 @@ export const fuzzycadNeedsInputMove = defineFeature(function(context is Context,
                 (bbox.minCorner[2] + bbox.maxCorner[2]) / 2
         );
 
-        drawAxisArrow(context, id + "arrowX", bboxCenter, vector(definition.moveX, 0 * meter, 0 * meter), "X", arrowColor);
-        drawAxisArrow(context, id + "arrowY", bboxCenter, vector(0 * meter, definition.moveY, 0 * meter), "Y", arrowColor);
-        drawAxisArrow(context, id + "arrowZ", bboxCenter, vector(0 * meter, 0 * meter, definition.moveZ), "Z", arrowColor);
+        const bboxDiagonal = norm(bbox.maxCorner - bbox.minCorner);
+        const gestureLength = min(max(bboxDiagonal * 0.25, 8 * millimeter), 40 * millimeter);
+
+        if (definition.moveXNeedsInput)
+        {
+            const xDir = (definition.moveX < 0 * meter) ? vector(-1, 0, 0) : vector(1, 0, 0);
+            drawFuzzyDirectionGesture(context, id + "gestureX", bboxCenter, xDir, gestureLength, "X: ?", arrowColor);
+        }
+        else
+        {
+            drawAxisArrow(context, id + "arrowX", bboxCenter, vector(definition.moveX, 0 * meter, 0 * meter), "X", arrowColor);
+        }
+
+        if (definition.moveYNeedsInput)
+        {
+            const yDir = (definition.moveY < 0 * meter) ? vector(0, -1, 0) : vector(0, 1, 0);
+            drawFuzzyDirectionGesture(context, id + "gestureY", bboxCenter, yDir, gestureLength, "Y: ?", arrowColor);
+        }
+        else
+        {
+            drawAxisArrow(context, id + "arrowY", bboxCenter, vector(0 * meter, definition.moveY, 0 * meter), "Y", arrowColor);
+        }
+
+        if (definition.moveZNeedsInput)
+        {
+            const zDir = (definition.moveZ < 0 * meter) ? vector(0, 0, -1) : vector(0, 0, 1);
+            drawFuzzyDirectionGesture(context, id + "gestureZ", bboxCenter, zDir, gestureLength, "Z: ?", arrowColor);
+        }
+        else
+        {
+            drawAxisArrow(context, id + "arrowZ", bboxCenter, vector(0 * meter, 0 * meter, definition.moveZ), "Z", arrowColor);
+        }
 
         // 5. Delete the temporary exact proposed solid -- only the
         // scribble strokes and arrows (independent wire/surface bodies)
@@ -468,6 +505,108 @@ function drawAxisArrow(
             "fontName" : "OpenSans-Regular.ttf",
             "firstCorner" : vector(labelUv[0] - textHeight * 1.5, labelUv[1] + labelOffset),
             "secondCorner" : vector(labelUv[0] + textHeight * 1.5, labelUv[1] + labelOffset + textHeight)
+    });
+
+    skSolve(labelSketch);
+}
+
+
+
+//////////////////////////////////////////////////////////////////////
+//
+// FUZZY DIRECTION GESTURE
+//
+// Used instead of drawAxisArrow when the paired <param>NeedsInput flag
+// is still true: a precise filled arrow with an exact distance label
+// would just be dressing up an unconfirmed placeholder as a real
+// number. Draws a few short, heavily jittered freehand strokes along
+// `direction` instead of one filled arrow shape, with a plain "?"
+// label instead of a distance. `nominalLength` is a fixed fraction of
+// the body's own bounding-box diagonal, NOT derived from the
+// placeholder's magnitude -- so the gesture's length never implies
+// that magnitude means anything. The jitter spread widens toward the
+// tip so the strokes visually "trail off" instead of terminating at a
+// precise point, echoing drawSketchyFaceFill/handDrawScribbleGuide's
+// jitter technique but applied to a straight gesture rather than a
+// sampled real edge.
+//
+//////////////////////////////////////////////////////////////////////
+
+function drawFuzzyDirectionGesture(
+    context is Context,
+    id is Id,
+    start is Vector,
+    direction is Vector,
+    nominalLength is ValueWithUnits,
+    labelText is string,
+    gestureColor is map)
+{
+    if (norm(direction) < 0.0001)
+    {
+        return;
+    }
+
+    const dir = normalize(direction);
+
+    const reference = (abs(dir[2]) < 0.9) ? vector(0, 0, 1) : vector(0, 1, 0);
+    const perp1 = normalize(cross(dir, reference));
+    const perp2 = cross(dir, perp1);
+
+    var rnd = RandomNumberFunctionWithSalt(id, "gesture");
+
+    const strokeCount = 3;
+    const pointCount = 6;
+
+    var allStrokes = qNothing();
+
+    for (var s = 0; s < strokeCount; s += 1)
+    {
+        var pts = makeArray(pointCount, undefined);
+
+        for (var i = 0; i < pointCount; i += 1)
+        {
+            const t = i / (pointCount - 1);
+            const basePt = start + dir * (nominalLength * t);
+
+            const spread = nominalLength * (0.04 + 0.10 * t);
+
+            const s1 = rnd();
+            const jitter1 = ((s1 + i * 19 + s * 53) % 100) / 100.0 - 0.5;
+            const jitter2 = ((s1 + i * 41 + s * 67) % 100) / 100.0 - 0.5;
+
+            pts[i] = basePt + perp1 * (spread * jitter1) + perp2 * (spread * jitter2 * 0.6);
+        }
+
+        const strokeId = id + ("_gesture" ~ toString(s));
+        opFitSpline(context, strokeId, { "points" : pts });
+        allStrokes = qUnion(allStrokes, qCreatedBy(strokeId, EntityType.BODY));
+    }
+
+    if (!isQueryEmpty(context, allStrokes))
+    {
+        opCreateCompositePart(context, id + "gestureComposite", {
+                "bodies" : allStrokes,
+                "closed" : false
+        });
+
+        setProperty(context, {
+                "entities" : qCreatedBy(id + "gestureComposite", EntityType.BODY),
+                "propertyType" : PropertyType.APPEARANCE,
+                "value" : gestureColor
+        });
+    }
+
+    const tipPt = start + dir * nominalLength;
+    const labelPlane = plane(tipPt, perp1, dir);
+    const labelSketch = newSketchOnPlane(context, id + "labelSketch", { "sketchPlane" : labelPlane });
+    const labelUv = worldToPlane(labelPlane, tipPt);
+    const textHeight = 2.5 * millimeter;
+
+    skText(labelSketch, "labelText", {
+            "text" : labelText,
+            "fontName" : "OpenSans-Regular.ttf",
+            "firstCorner" : vector(labelUv[0] - textHeight * 1.5, labelUv[1] + 1.5 * millimeter),
+            "secondCorner" : vector(labelUv[0] + textHeight * 1.5, labelUv[1] + 1.5 * millimeter + textHeight)
     });
 
     skSolve(labelSketch);

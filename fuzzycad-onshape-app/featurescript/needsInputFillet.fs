@@ -102,14 +102,32 @@ export const fuzzycadNeedsInputFillet = defineFeature(function(context is Contex
         const radiusDir = normalize(cross(tangentDir, perpReference));
         const dimensionColor = color(0, 0, 0, 0.85);
 
-        drawDimensionArrow(
-                context,
-                id + "radiusArrow",
-                midpoint,
-                radiusDir * definition.radius,
-                "R: " ~ toString(round(definition.radius / millimeter, 1)) ~ " mm",
-                dimensionColor
-        );
+        // A precise filled arrow + exact mm label would be fake precision
+        // while "radius" is still just a placeholder -- see
+        // needsInputMove.fs's drawFuzzyDirectionGesture for the rationale.
+        if (definition.radiusNeedsInput)
+        {
+            drawFuzzyDirectionGesture(
+                    context,
+                    id + "radiusGesture",
+                    midpoint,
+                    radiusDir,
+                    8 * millimeter,
+                    "R: ?",
+                    dimensionColor
+            );
+        }
+        else
+        {
+            drawDimensionArrow(
+                    context,
+                    id + "radiusArrow",
+                    midpoint,
+                    radiusDir * definition.radius,
+                    "R: " ~ toString(round(definition.radius / millimeter, 1)) ~ " mm",
+                    dimensionColor
+            );
+        }
 
         opDeleteBodies(context, id + "deleteTemporaryProposal", {
                 "entities" : proposedBody
@@ -406,6 +424,95 @@ function handDrawScribbleGuide(
 
     return strokesQuery;
 }
+
+//////////////////////////////////////////////////////////////////////
+//
+// FUZZY DIRECTION GESTURE (copied verbatim from needsInputMove.fs --
+// see that file for the full rationale)
+//
+//////////////////////////////////////////////////////////////////////
+
+function drawFuzzyDirectionGesture(
+    context is Context,
+    id is Id,
+    start is Vector,
+    direction is Vector,
+    nominalLength is ValueWithUnits,
+    labelText is string,
+    gestureColor is map)
+{
+    if (norm(direction) < 0.0001)
+    {
+        return;
+    }
+
+    const dir = normalize(direction);
+
+    const reference = (abs(dir[2]) < 0.9) ? vector(0, 0, 1) : vector(0, 1, 0);
+    const perp1 = normalize(cross(dir, reference));
+    const perp2 = cross(dir, perp1);
+
+    var rnd = RandomNumberFunctionWithSalt(id, "gesture");
+
+    const strokeCount = 3;
+    const pointCount = 6;
+
+    var allStrokes = qNothing();
+
+    for (var s = 0; s < strokeCount; s += 1)
+    {
+        var pts = makeArray(pointCount, undefined);
+
+        for (var i = 0; i < pointCount; i += 1)
+        {
+            const t = i / (pointCount - 1);
+            const basePt = start + dir * (nominalLength * t);
+
+            const spread = nominalLength * (0.04 + 0.10 * t);
+
+            const s1 = rnd();
+            const jitter1 = ((s1 + i * 19 + s * 53) % 100) / 100.0 - 0.5;
+            const jitter2 = ((s1 + i * 41 + s * 67) % 100) / 100.0 - 0.5;
+
+            pts[i] = basePt + perp1 * (spread * jitter1) + perp2 * (spread * jitter2 * 0.6);
+        }
+
+        const strokeId = id + ("_gesture" ~ toString(s));
+        opFitSpline(context, strokeId, { "points" : pts });
+        allStrokes = qUnion(allStrokes, qCreatedBy(strokeId, EntityType.BODY));
+    }
+
+    if (!isQueryEmpty(context, allStrokes))
+    {
+        opCreateCompositePart(context, id + "gestureComposite", {
+                "bodies" : allStrokes,
+                "closed" : false
+        });
+
+        setProperty(context, {
+                "entities" : qCreatedBy(id + "gestureComposite", EntityType.BODY),
+                "propertyType" : PropertyType.APPEARANCE,
+                "value" : gestureColor
+        });
+    }
+
+    const tipPt = start + dir * nominalLength;
+    const labelPlane = plane(tipPt, perp1, dir);
+    const labelSketch = newSketchOnPlane(context, id + "labelSketch", { "sketchPlane" : labelPlane });
+    const labelUv = worldToPlane(labelPlane, tipPt);
+    const textHeight = 2.5 * millimeter;
+
+    skText(labelSketch, "labelText", {
+            "text" : labelText,
+            "fontName" : "OpenSans-Regular.ttf",
+            "firstCorner" : vector(labelUv[0] - textHeight * 1.5, labelUv[1] + 1.5 * millimeter),
+            "secondCorner" : vector(labelUv[0] + textHeight * 1.5, labelUv[1] + 1.5 * millimeter + textHeight)
+    });
+
+    skSolve(labelSketch);
+}
+
+
 
 //////////////////////////////////////////////////////////////////////
 //

@@ -143,18 +143,41 @@ export const fuzzycadNeedsInputRotate = defineFeature(function(context is Contex
             const arcCenter = axisStart + bestAlongAxis;
             const dimensionColor = color(0, 0, 0, 0.85);
 
-            drawAngleArc(
-                    context,
-                    id + "angleArc",
-                    arcCenter,
-                    axisDirection,
-                    perpVec,
-                    perpVec2,
-                    arcRadius,
-                    definition.angle,
-                    toString(round(definition.angle / degree, 1)) ~ "°",
-                    dimensionColor
-            );
+            // A precise dashed arc swept through the exact placeholder
+            // angle would be fake precision -- see needsInputMove.fs's
+            // drawFuzzyDirectionGesture for the rationale. Here that
+            // means: sweep a fixed, arbitrary nominal angle (NOT
+            // definition.angle) with a wobbly radius per dash, and label
+            // it "?" instead of a degree number.
+            if (definition.angleNeedsInput)
+            {
+                drawFuzzyAngleGesture(
+                        context,
+                        id + "angleGesture",
+                        arcCenter,
+                        axisDirection,
+                        perpVec,
+                        perpVec2,
+                        arcRadius,
+                        "?°",
+                        dimensionColor
+                );
+            }
+            else
+            {
+                drawAngleArc(
+                        context,
+                        id + "angleArc",
+                        arcCenter,
+                        axisDirection,
+                        perpVec,
+                        perpVec2,
+                        arcRadius,
+                        definition.angle,
+                        toString(round(definition.angle / degree, 1)) ~ "°",
+                        dimensionColor
+                );
+            }
         }
 
         opDeleteBodies(context, id + "deleteTemporaryProposal", {
@@ -218,6 +241,94 @@ function drawAngleArc(
     }
 
     const midAng = angle * 0.5;
+    const midDir = startDir * cos(midAng) + otherDir * sin(midAng);
+    const midPt = center + midDir * radius;
+    const eps = 0.01 * millimeter;
+    const labelPlane = plane(midPt + axisDirection * eps, axisDirection);
+    const labelSketch = newSketchOnPlane(context, id + "labelSketch", { "sketchPlane" : labelPlane });
+    const labelUv = worldToPlane(labelPlane, midPt);
+    const textSize = 3 * millimeter;
+
+    skText(labelSketch, "labelText", {
+            "text" : labelText,
+            "fontName" : "OpenSans-Regular.ttf",
+            "firstCorner" : vector(labelUv[0] - textSize, labelUv[1] - textSize),
+            "secondCorner" : vector(labelUv[0] + textSize, labelUv[1] + textSize)
+    });
+
+    skSolve(labelSketch);
+}
+
+//////////////////////////////////////////////////////////////////////
+//
+// FUZZY ANGLE GESTURE
+//
+// Used instead of drawAngleArc when "angleNeedsInput" is still true: a
+// precise dashed arc swept through the exact placeholder angle would be
+// fake precision -- see needsInputMove.fs's drawFuzzyDirectionGesture
+// for the full rationale. Sweeps a fixed, arbitrary NOMINAL angle
+// (never definition.angle) with a wobbly radius per dash instead of a
+// clean constant one, and labels it with plain text ("?°") instead of a
+// degree number.
+//
+//////////////////////////////////////////////////////////////////////
+
+function drawFuzzyAngleGesture(
+    context is Context,
+    id is Id,
+    center is Vector,
+    axisDirection is Vector,
+    startDir is Vector,
+    otherDir is Vector,
+    radius is ValueWithUnits,
+    labelText is string,
+    gestureColor is map)
+{
+    const nominalAngle = 40 * degree;
+    const dashCount = 14;
+    const dashRatio = 0.55;
+
+    var rnd = RandomNumberFunctionWithSalt(id, "gesture");
+    var allDashes = qNothing();
+
+    for (var d = 0; d < dashCount; d += 1)
+    {
+        const t0 = d / dashCount;
+        const t1 = t0 + dashRatio / dashCount;
+        var pts = makeArray(4, undefined);
+
+        const s1 = rnd();
+        const radiusJitter = 1.0 + (((s1 + d * 23) % 100) / 100.0 - 0.5) * 0.18;
+        const dashRadius = radius * radiusJitter;
+
+        for (var j = 0; j < 4; j += 1)
+        {
+            const tt = t0 + (t1 - t0) * (j / 3);
+            const ang = nominalAngle * tt;
+            const dir = startDir * cos(ang) + otherDir * sin(ang);
+            pts[j] = center + dir * dashRadius;
+        }
+
+        const dashId = id + "dash" + toString(d);
+        opFitSpline(context, dashId, { "points" : pts });
+        allDashes = qUnion(allDashes, qCreatedBy(dashId, EntityType.BODY));
+    }
+
+    if (!isQueryEmpty(context, allDashes))
+    {
+        opCreateCompositePart(context, id + "composite", {
+                "bodies" : allDashes,
+                "closed" : false
+        });
+
+        setProperty(context, {
+                "entities" : qCreatedBy(id + "composite", EntityType.BODY),
+                "propertyType" : PropertyType.APPEARANCE,
+                "value" : gestureColor
+        });
+    }
+
+    const midAng = nominalAngle * 0.5;
     const midDir = startDir * cos(midAng) + otherDir * sin(midAng);
     const midPt = center + midDir * radius;
     const eps = 0.01 * millimeter;
