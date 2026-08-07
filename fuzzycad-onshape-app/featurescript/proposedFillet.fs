@@ -46,6 +46,13 @@
 //     original's geometry is, so the "proposed" and "current" states
 //     visually align -- distinguishing them is entirely down to the
 //     appearance styling below.
+//
+// "accepted" (hidden, same mechanism as proposedMove.fs): while false,
+// this feature only ever previews -- the original body is untouched, a
+// duplicate gets the fillet instead. The right panel patches this to
+// true on Accept, which makes this SAME feature instance fillet the
+// REAL edge on the REAL body instead of a throwaway copy -- no separate
+// "apply for real" step, no second feature.
 
 FeatureScript 3029;
 import(path : "onshape/std/common.fs", version : "3029.0");
@@ -62,9 +69,32 @@ export const fuzzycadProposedFillet = defineFeature(function(context is Context,
 
         annotation { "Name" : "Radius" }
         isLength(definition.radius, LENGTH_BOUNDS);
+
+        // Controlled internally by the FuzzyCAD right panel.
+        // The normal Feature dialog will not show this parameter.
+        annotation {
+            "Name" : "Accepted",
+            "Default" : false,
+            "UIHint" : UIHint.ALWAYS_HIDDEN
+        }
+        definition.accepted is boolean;
     }
     {
         const originalBody = definition.body;
+
+        // ACCEPTED STATE: fillet the real edge on the real body directly,
+        // no duplicate/preview machinery at all, then stop.
+        if (definition.accepted)
+        {
+            opFillet(context, id + "acceptedFillet", {
+                    "entities" : definition.edge,
+                    "radius" : definition.radius
+            });
+
+            return;
+        }
+
+        // PENDING STATE below (unchanged).
 
         opPattern(context, id + "duplicate", {
                 "entities" : originalBody,

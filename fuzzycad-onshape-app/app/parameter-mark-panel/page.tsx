@@ -146,16 +146,28 @@ const NEEDS_INPUT_COSMO_FEATURE_TYPES = new Set([
  * boolean parameter (UIHint.ALWAYS_HIDDEN -- invisible in Onshape's own
  * feature dialog, but still a real, patchable parameter over the API,
  * same as any other). For these, the pending-state body shown in the
- * viewport (fuzzycadProposedMove: faded original + hand-drawn sketchy
- * preview + arrows) is NOT the final geometry -- the feature only
- * performs the real opTransform once accepted flips to true, replacing
- * its own preview output. Accept/Reopen for these types must patch this
- * parameter via the API; there's no separate "final geometry" to reveal
- * the way SELF_STYLING_COSMO_FEATURE_TYPES normally implies (accepting
- * one of those just leaves its already-final geometry as is). Every
- * type in this set is necessarily also in SELF_STYLING_COSMO_FEATURE_TYPES.
+ * viewport (e.g. fuzzycadProposedMove: faded original + hand-drawn
+ * sketchy preview + arrows; fuzzycadProposedFillet/Chamfer/Rotate/Scale/
+ * Hole: faded original + a duplicate carrying the proposed edit) is NOT
+ * the final geometry -- the feature only performs the real op (fillet/
+ * chamfer/opTransform/extrude-remove) directly on the ORIGINAL body once
+ * accepted flips to true, replacing its own preview output. Accept/
+ * Reopen for these types must patch this parameter via the API; there's
+ * no separate "final geometry" to reveal the way
+ * SELF_STYLING_COSMO_FEATURE_TYPES normally implies (accepting one of
+ * those just leaves its already-final geometry as is -- true today only
+ * for fuzzycadNeedsInput*, which have no "accepted" parameter and never
+ * touch the original body at all). Every type in this set is necessarily
+ * also in SELF_STYLING_COSMO_FEATURE_TYPES.
  */
-const ACCEPT_VIA_HIDDEN_PARAMETER_COSMO_FEATURE_TYPES = new Set(["fuzzycadProposedMove"]);
+const ACCEPT_VIA_HIDDEN_PARAMETER_COSMO_FEATURE_TYPES = new Set([
+  "fuzzycadProposedFillet",
+  "fuzzycadProposedChamfer",
+  "fuzzycadProposedMove",
+  "fuzzycadProposedRotate",
+  "fuzzycadProposedScale",
+  "fuzzycadProposedHole",
+]);
 
 function isValidUncertaintyDocument(value: unknown): value is FuzzyCADUncertaintyDocument {
   return (

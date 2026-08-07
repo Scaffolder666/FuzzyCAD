@@ -24,6 +24,12 @@
 //
 // Same appearance-styling approach and same known REST-override
 // limitation as proposedFillet.fs/proposedMove.fs.
+//
+// "accepted" (hidden, same mechanism as proposedMove.fs): while false,
+// this feature only ever previews -- the original body is untouched, a
+// duplicate gets rotated instead. The right panel patches this to true
+// on Accept, which makes this SAME feature instance apply the rotation
+// to the REAL body instead of a throwaway copy.
 
 FeatureScript 3029;
 import(path : "onshape/std/common.fs", version : "3029.0");
@@ -40,6 +46,15 @@ export const fuzzycadProposedRotate = defineFeature(function(context is Context,
 
         annotation { "Name" : "Angle" }
         isAngle(definition.angle, ANGLE_360_BOUNDS);
+
+        // Controlled internally by the FuzzyCAD right panel.
+        // The normal Feature dialog will not show this parameter.
+        annotation {
+            "Name" : "Accepted",
+            "Default" : false,
+            "UIHint" : UIHint.ALWAYS_HIDDEN
+        }
+        definition.accepted is boolean;
     }
     {
         const originalBody = definition.body;
@@ -56,6 +71,20 @@ export const fuzzycadProposedRotate = defineFeature(function(context is Context,
 
         const axisDirection = normalize(axisEnd - axisStart);
         const rotation = rotationAround(line(axisStart, axisDirection), definition.angle);
+
+        // ACCEPTED STATE: rotate the real body directly, no
+        // duplicate/preview machinery at all, then stop.
+        if (definition.accepted)
+        {
+            opTransform(context, id + "acceptedRotate", {
+                    "bodies" : originalBody,
+                    "transform" : rotation
+            });
+
+            return;
+        }
+
+        // PENDING STATE below (unchanged).
 
         opPattern(context, id + "duplicate", {
                 "entities" : originalBody,

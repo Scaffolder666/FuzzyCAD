@@ -36,6 +36,13 @@
 //
 // Same appearance-styling approach and same known REST-override
 // limitation as the other Proposed* features in this directory.
+//
+// "accepted" (hidden, same mechanism as proposedMove.fs): while false,
+// this feature only ever previews -- the original body is untouched, a
+// duplicate gets cut instead. The right panel patches this to true on
+// Accept, which makes this SAME feature instance cut the REAL body
+// directly (no "booleanScope" needed there -- there's no duplicate
+// coincident with it to accidentally also cut, unlike the pending path).
 
 FeatureScript 3029;
 import(path : "onshape/std/common.fs", version : "3029.0");
@@ -55,17 +62,18 @@ export const fuzzycadProposedHole = defineFeature(function(context is Context, i
 
         annotation { "Name" : "Opposite direction", "Default" : false }
         definition.oppositeDirection is boolean;
+
+        // Controlled internally by the FuzzyCAD right panel.
+        // The normal Feature dialog will not show this parameter.
+        annotation {
+            "Name" : "Accepted",
+            "Default" : false,
+            "UIHint" : UIHint.ALWAYS_HIDDEN
+        }
+        definition.accepted is boolean;
     }
     {
         const originalBody = definition.body;
-
-        opPattern(context, id + "duplicate", {
-                "entities" : originalBody,
-                "transforms" : [transform(vector(0, 0, 0) * meter)],
-                "instanceNames" : ["proposed"]
-        });
-
-        const proposedBody = qCreatedBy(id + "duplicate", EntityType.BODY);
 
         const facesToCut = evaluateQuery(context, definition.entities);
         var direction = evFaceTangentPlane(context, {
@@ -76,6 +84,31 @@ export const fuzzycadProposedHole = defineFeature(function(context is Context, i
         {
             direction = -direction;
         }
+
+        // ACCEPTED STATE: cut the real body directly, no
+        // duplicate/preview machinery at all, then stop.
+        if (definition.accepted)
+        {
+            opExtrude(context, id + "acceptedHole", {
+                    "entities" : definition.entities,
+                    "direction" : direction,
+                    "endBound" : BoundingType.BLIND,
+                    "endDepth" : definition.depth,
+                    "operationType" : NewBodyOperationType.REMOVE
+            });
+
+            return;
+        }
+
+        // PENDING STATE below (unchanged).
+
+        opPattern(context, id + "duplicate", {
+                "entities" : originalBody,
+                "transforms" : [transform(vector(0, 0, 0) * meter)],
+                "instanceNames" : ["proposed"]
+        });
+
+        const proposedBody = qCreatedBy(id + "duplicate", EntityType.BODY);
 
         opExtrude(context, id + "hole", {
                 "entities" : definition.entities,

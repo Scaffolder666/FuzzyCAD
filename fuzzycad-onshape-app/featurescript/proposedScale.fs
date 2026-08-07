@@ -17,6 +17,12 @@
 // POSITIVE_REAL_BOUNDS (confirmed via real isReal() usage examples
 // elsewhere) and evVertexPoint (now ALSO independently confirmed real
 // in that same reference source) are unchanged from v2.
+//
+// "accepted" (hidden, same mechanism as proposedMove.fs): while false,
+// this feature only ever previews -- the original body is untouched, a
+// duplicate gets scaled instead. The right panel patches this to true
+// on Accept, which makes this SAME feature instance apply the scale to
+// the REAL body instead of a throwaway copy.
 
 FeatureScript 3029;
 import(path : "onshape/std/common.fs", version : "3029.0");
@@ -33,6 +39,15 @@ export const fuzzycadProposedScale = defineFeature(function(context is Context, 
 
         annotation { "Name" : "Scale factor" }
         isReal(definition.scaleFactor, POSITIVE_REAL_BOUNDS);
+
+        // Controlled internally by the FuzzyCAD right panel.
+        // The normal Feature dialog will not show this parameter.
+        annotation {
+            "Name" : "Accepted",
+            "Default" : false,
+            "UIHint" : UIHint.ALWAYS_HIDDEN
+        }
+        definition.accepted is boolean;
     }
     {
         const originalBody = definition.body;
@@ -44,6 +59,20 @@ export const fuzzycadProposedScale = defineFeature(function(context is Context, 
                 definition.scaleFactor,
                 pivot
         );
+
+        // ACCEPTED STATE: scale the real body directly, no
+        // duplicate/preview machinery at all, then stop.
+        if (definition.accepted)
+        {
+            opTransform(context, id + "acceptedScale", {
+                    "bodies" : originalBody,
+                    "transform" : scaleTransform
+            });
+
+            return;
+        }
+
+        // PENDING STATE below (unchanged).
 
         opPattern(context, id + "duplicate", {
                 "entities" : originalBody,

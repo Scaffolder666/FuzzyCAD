@@ -12,6 +12,13 @@
 // "width" isn't the real key, expect a similarly-shaped compiler error to
 // what opFillet would give for a wrong key name -- paste it back and
 // I'll adjust.
+//
+// "accepted" (hidden, same mechanism as proposedMove.fs/proposedFillet.fs):
+// while false, this feature only ever previews -- the original body is
+// untouched, a duplicate gets the chamfer instead. The right panel
+// patches this to true on Accept, which makes this SAME feature
+// instance chamfer the REAL edge on the REAL body instead of a
+// throwaway copy.
 
 FeatureScript 3029;
 import(path : "onshape/std/common.fs", version : "3029.0");
@@ -28,9 +35,32 @@ export const fuzzycadProposedChamfer = defineFeature(function(context is Context
 
         annotation { "Name" : "Width" }
         isLength(definition.width, LENGTH_BOUNDS);
+
+        // Controlled internally by the FuzzyCAD right panel.
+        // The normal Feature dialog will not show this parameter.
+        annotation {
+            "Name" : "Accepted",
+            "Default" : false,
+            "UIHint" : UIHint.ALWAYS_HIDDEN
+        }
+        definition.accepted is boolean;
     }
     {
         const originalBody = definition.body;
+
+        // ACCEPTED STATE: chamfer the real edge on the real body
+        // directly, no duplicate/preview machinery at all, then stop.
+        if (definition.accepted)
+        {
+            opChamfer(context, id + "acceptedChamfer", {
+                    "entities" : definition.edge,
+                    "width" : definition.width
+            });
+
+            return;
+        }
+
+        // PENDING STATE below (unchanged).
 
         opPattern(context, id + "duplicate", {
                 "entities" : originalBody,
