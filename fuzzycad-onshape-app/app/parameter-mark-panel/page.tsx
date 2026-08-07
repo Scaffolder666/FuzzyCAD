@@ -351,7 +351,18 @@ function ParameterMarkPanelInner() {
 
     const paramsData = await paramsRes.json();
 
-    setNotConnected(paramsRes.status === 401);
+    // partstudio-feature-parameters-debug always answers its OWN caller
+    // with HTTP 200 -- the upstream Onshape call's real outcome is
+    // embedded inside the JSON body as paramsData.ok/paramsData.status
+    // instead (confirmed live: a 429 from Onshape's own rate limiter
+    // came back this way, and checking paramsRes.ok/paramsRes.status
+    // here missed it entirely -- paramsRes.ok is always true for this
+    // route, so the panel silently reported "ready" with zero results
+    // instead of surfacing the real rate-limit error).
+    const upstreamOk = paramsData.ok !== false;
+    const upstreamStatus = typeof paramsData.status === "number" ? paramsData.status : paramsRes.status;
+
+    setNotConnected(upstreamStatus === 401);
 
     const cosmoOnly = Array.isArray(paramsData.valueParameters)
       ? (paramsData.valueParameters as ValueParameterEntry[]).filter(
@@ -399,7 +410,13 @@ function ParameterMarkPanelInner() {
     }
 
     setUncertaintyDoc(currentDoc);
-    setStatus(paramsRes.ok ? "ready" : `error loading parameters (HTTP ${paramsRes.status})`);
+    setStatus(
+      upstreamOk
+        ? "ready"
+        : upstreamStatus === 429
+          ? "Onshape is rate-limiting this document (HTTP 429) -- results below may be incomplete until it clears, try Refresh again shortly"
+          : `error loading parameters from Onshape (HTTP ${upstreamStatus})`,
+    );
 
     for (const found of detected) {
       const annotation = currentDoc.annotations.find(
@@ -426,10 +443,13 @@ function ParameterMarkPanelInner() {
     }
 
     runLoad();
-    // 15s so newly-inserted proposals (or edits made directly in
-    // Onshape's own feature dialog) show up without a manual reopen,
-    // without hammering the feature-tree-walk endpoint too hard.
-    const interval = setInterval(runLoad, 15000);
+    // 30s (widened from 15s after hitting Onshape's own rate limiter --
+    // confirmed live, HTTP 429 -- during a heavy testing session) so
+    // newly-inserted proposals (or edits made directly in Onshape's own
+    // feature dialog) still show up without a manual reopen, without
+    // polling this hard against the feature-tree-walk endpoint. Manual
+    // Refresh still re-checks immediately regardless of this interval.
+    const interval = setInterval(runLoad, 30000);
 
     return () => {
       clearInterval(interval);
