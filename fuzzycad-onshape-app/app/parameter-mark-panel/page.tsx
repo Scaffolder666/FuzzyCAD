@@ -104,9 +104,14 @@ const COSMO_FEATURE_TYPES = new Set([
  * part blocks FeatureScript's own setProperty from visibly taking effect
  * on it, so double-styling a self-styling type would just leave it stuck
  * at whatever opacity the REST call last set, silently overriding the
- * feature's own styling.
+ * feature's own styling. fuzzycadProposedExtrude used to be the one
+ * exception (REST-styled instead, since it has no pre-existing body to
+ * duplicate-and-fade) -- moved into this set once its own FeatureScript
+ * grew the same hand-drawn sketchy-preview treatment as the rest of
+ * Proposed*, so it no longer needs different handling here.
  */
 const SELF_STYLING_COSMO_FEATURE_TYPES = new Set([
+  "fuzzycadProposedExtrude",
   "fuzzycadProposedFillet",
   "fuzzycadProposedChamfer",
   "fuzzycadProposedMove",
@@ -161,6 +166,7 @@ const NEEDS_INPUT_COSMO_FEATURE_TYPES = new Set([
  * also in SELF_STYLING_COSMO_FEATURE_TYPES.
  */
 const ACCEPT_VIA_HIDDEN_PARAMETER_COSMO_FEATURE_TYPES = new Set([
+  "fuzzycadProposedExtrude",
   "fuzzycadProposedFillet",
   "fuzzycadProposedChamfer",
   "fuzzycadProposedMove",
