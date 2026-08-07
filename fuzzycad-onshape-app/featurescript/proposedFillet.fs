@@ -25,23 +25,16 @@
 //     only to make the copy visually distinguishable for testing), the
 //     real feature duplicates in place so the proposed body sits exactly
 //     where the original's geometry is.
-//   - Hiding the original in-script (new in this version, UNCONFIRMED):
-//     with the duplicate coincident with the original, both bodies render
-//     opaque and overlapping, which just looks broken -- there's no need
-//     for the right panel's opacity-styling trick here at all if the
-//     original is simply hidden for as long as this feature exists. Tying
-//     the hide to the feature's own recompute means Accept (feature stays)
-//     keeps the original hidden -- exactly right, since the fillet is now
-//     the "final" look -- and Reject (feature gets deleted) automatically
-//     un-hides the original with zero extra bookkeeping on the app side.
-//     setVisibility's real call shape is still unconfirmed: an earlier
-//     attempt at setVisibility(context, query, boolean) (3 positional
-//     args) was rejected by the compiler, but every other "op"-style
-//     function in this codebase's FeatureScript takes (context, id, map)
-//     -- this version guesses that setVisibility follows the same
-//     convention, just with a different type signature than what was
-//     tried before (hence "3 arguments not found" both times: not an
-//     arg-count problem, an arg-type problem).
+//   - The original body is left fully opaque and coincident with the
+//     duplicate on purpose for now -- an in-script hide via setVisibility
+//     was tried three times (4-arg, 3-arg with (query, boolean), 3-arg
+//     with (id, map)) and rejected every time, so it's very likely not a
+//     real/importable function under that name in this scope. Visibility
+//     styling for review is being moved back to the right panel's own
+//     REST-based part-appearance mechanism (already confirmed working for
+//     proposedExtrude), which needs to resolve "body" to a partId --
+//     that's the next thing being investigated, not a FeatureScript
+//     change.
 
 FeatureScript 3029;
 import(path : "onshape/std/common.fs", version : "3029.0");
@@ -77,10 +70,5 @@ export const fuzzycadProposedFillet = defineFeature(function(context is Context,
         opFillet(context, id + "fillet", {
                 "entities" : matchedEdge,
                 "radius" : definition.radius
-        });
-
-        setVisibility(context, id + "hideOriginal", {
-                "entities" : definition.body,
-                "visible" : false
         });
     });
