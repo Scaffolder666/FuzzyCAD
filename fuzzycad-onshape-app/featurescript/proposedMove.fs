@@ -9,12 +9,10 @@
 //      This part is MY OWN construction, not from the reference source
 //      -- higher risk than the rest of this file.
 //   3. Hand-drawn jitter on the dashed outline's segment endpoints.
-//      RandomNumberFunction(id), used for this in the reference source,
-//      turned out to come from a separate library document that source
-//      imported -- confirmed live ("Function RandomNumberFunction with
-//      1 argument(s) not found"), not part of the standard library, not
-//      available here. Uses a deterministic pseudo-random substitute
-//      instead (loop indices times arbitrary primes, modulo 100).
+//      v4 first tried RandomNumberFunction(id) directly, got "Function
+//      RandomNumberFunction with 1 argument(s) not found", and (wrongly)
+//      concluded it needed an external library import -- see the v6 note
+//      below for the actual fix.
 //
 // v5 (per explicit request: "我要一摸一样" -- match the reference exactly):
 // replaced v4's jitter, which applied ONE shared scalar offset to all
@@ -22,8 +20,17 @@
 // SEPARATE offsets (x/y/z), each keyed off its own pair of primes
 // (17/23/31 against the edge index, 29/37/41 against the stroke index),
 // plus a jitterFactor multiplier -- mirroring the reference source's
-// handDrawEdgeSketchy structure directly. The rnd()/RandomNumberFunction
-// substitution itself is unchanged (still unavailable, see below).
+// handDrawEdgeSketchy structure directly.
+//
+// v6 corrects a wrong diagnosis from v4: RandomNumberFunction is NOT in
+// an external library import -- the two follow-up reference source
+// dumps confirm it's three ordinary helper functions
+// (RandomNumberFunction/idToNum/lcprng) defined directly at the bottom
+// of that same Feature Studio file. The earlier "not found" compile
+// error just meant we'd copied the CALL without copying those three
+// function bodies. They're copied verbatim below now, and
+// jitterOffset() calls the real rnd() (via RandomNumberFunction(id)),
+// not a loop-index pseudo-random substitute.
 //
 // Everything else (opCreateCompositePart merging many wire bodies into
 // one before a single setProperty call, skText/newSketchOnPlane/
@@ -83,26 +90,20 @@ export const fuzzycadProposedMove = defineFeature(function(context is Context, i
 
         const dashColor = color(0.25, 0.55, 0.95, 1.0);
         const jitter = 0.15 * millimeter;
-        const jitterFactor = 1.0;
 
         // Hand-drawn-style dashed outline: each dash endpoint gets its
         // OWN x/y/z jitter, matching the reference source's
-        // handDrawEdgeSketchy structure exactly -- three separate offset
-        // formulas (offsetX/offsetY/offsetZ), each keyed off a distinct
-        // pair of prime multipliers: 17/23/31 against the edge index,
-        // 29/37/41 against the stroke (point-within-edge) index, scaled
-        // by jitterFactor. The one deviation from the reference is
-        // unavoidable: RandomNumberFunction (used there for this) turned
-        // out to live in a separate library document that source
-        // imported -- confirmed live ("Function RandomNumberFunction
-        // with 1 argument(s) not found"), not part of the standard
-        // library, not available here. jitterOffset() below substitutes
-        // a deterministic pseudo-random value (modulo arithmetic on the
-        // same indices) everywhere the reference called rnd(), keeping
-        // the surrounding per-axis structure identical.
+        // handDrawEdgeSketchy exactly -- real rnd() (RandomNumberFunction
+        // (id), a deterministic linear-congruential generator seeded off
+        // the feature's own id, copied verbatim below), sampled twice per
+        // point (s1 for the three offsets, s2 for jitterFactor), then
+        // three separate offset formulas keyed off distinct prime pairs:
+        // 17/23/31 against the edge index, 29/37/41 against the stroke
+        // (point-within-edge) index.
         const proposedEdges = evaluateQuery(context, qCreatedBy(id + "duplicate", EntityType.EDGE));
         const dashSteps = 10;
         var allDashes = qNothing();
+        var rnd = RandomNumberFunction(id);
         for (var e = 0; e < size(proposedEdges); e += 1)
         {
             for (var i = 0; i < dashSteps; i += 2)
@@ -112,8 +113,8 @@ export const fuzzycadProposedMove = defineFeature(function(context is Context, i
                 var p0 = evEdgeTangentLine(context, { "edge" : proposedEdges[e], "parameter" : t0 }).origin;
                 var p1 = evEdgeTangentLine(context, { "edge" : proposedEdges[e], "parameter" : t1 }).origin;
 
-                p0 = p0 + jitterOffset(e, i, jitter, jitterFactor);
-                p1 = p1 + jitterOffset(e, i + 1, jitter, jitterFactor);
+                p0 = p0 + jitterOffset(rnd, e, i, jitter);
+                p1 = p1 + jitterOffset(rnd, e, i + 1, jitter);
 
                 const dashId = id + "dash" + toString(e) + "_" + toString(i);
                 opFitSpline(context, dashId, { "points" : [p0, p1] });
@@ -146,31 +147,31 @@ export const fuzzycadProposedMove = defineFeature(function(context is Context, i
         drawAxisArrow(context, id + "arrowZ", bboxCenter, vector(0 * meter, 0 * meter, definition.moveZ), "Z", dashColor);
     });
 
-// Deterministic pseudo-random per-axis jitter offset for one dash
-// endpoint, mirroring the reference source's handDrawEdgeSketchy offset
-// formula structure: THREE separate offsets (x/y/z), each seeded off a
-// distinct pair of primes -- 17/23/31 against `edgeIndex`, 29/37/41
-// against `strokeIndex` -- instead of one shared scalar applied to all
-// three axes. jitterFactor is kept as its own multiplier (as in the
-// reference) so the effect can be dialed up/down without touching the
-// prime constants. Substitutes modulo-100 arithmetic on the two indices
-// for the reference's rnd()/RandomNumberFunction calls, which are not
-// available here (confirmed live -- see header comment).
+// Per-axis jitter offset for one dash endpoint, matching the reference
+// source's handDrawEdgeSketchy offset formula exactly: THREE separate
+// offsets (x/y/z), each keyed off a distinct pair of primes -- 17/23/31
+// against `edgeIndex`, 29/37/41 against `strokeIndex` -- scaled by a
+// jitterFactor derived from a second rnd() sample, same as the
+// reference. `rnd` is the stateful generator returned by
+// RandomNumberFunction(id) below -- calling it advances its internal
+// state, so s1/s2 here really are two different pseudo-random draws,
+// not the same value reused.
 function jitterOffset(
+    rnd is function,
     edgeIndex is number,
     strokeIndex is number,
-    jitter is ValueWithUnits,
-    jitterFactor is number
+    jitter is ValueWithUnits
 )
 returns Vector
 {
-    const seedX = (edgeIndex * 17 + strokeIndex * 29) % 100;
-    const seedY = (edgeIndex * 23 + strokeIndex * 37) % 100;
-    const seedZ = (edgeIndex * 31 + strokeIndex * 41) % 100;
+    const s1 = rnd();
+    const s2 = rnd();
 
-    const offsetX = (seedX / 100.0 - 0.5) * 2 * jitter * jitterFactor;
-    const offsetY = (seedY / 100.0 - 0.5) * 2 * jitter * jitterFactor;
-    const offsetZ = (seedZ / 100.0 - 0.5) * 2 * jitter * jitterFactor;
+    const jitterFactor = 0.5 + ((s2 % 100) / 100.0) * 0.5;
+
+    const offsetX = 2 * ((((s1 + edgeIndex * 17 + strokeIndex * 29) % 100) / 100.0) - 0.5) * jitter * jitterFactor;
+    const offsetY = 2 * ((((s1 + edgeIndex * 23 + strokeIndex * 37) % 100) / 100.0) - 0.5) * jitter * jitterFactor;
+    const offsetZ = 2 * ((((s1 + edgeIndex * 31 + strokeIndex * 41) % 100) / 100.0) - 0.5) * jitter * jitterFactor;
 
     return vector(offsetX, offsetY, offsetZ);
 }
@@ -243,4 +244,58 @@ function drawAxisArrow(
             "secondCorner" : vector(labelUv[0] + textSize, labelUv[1] + textSize)
     });
     skSolve(labelSketch);
+}
+
+// The three helpers below are copied verbatim from the reference
+// source's own bottom-of-file definitions -- NOT a standard-library
+// import (that was last version's wrong guess). RandomNumberFunction(id)
+// returns a stateful generator function seeded from the feature's own
+// Id; each call to it advances an internal linear-congruential PRNG
+// state and returns the new state as a large number (callers reduce it
+// mod whatever range they need, e.g. jitterOffset()'s `% 100` above).
+function RandomNumberFunction(id) returns function
+{
+    return lcprng(idToNum(id[0]));
+}
+
+function idToNum(input is string) returns number
+{
+    const chrMap = {
+            'A' : 0, 'B' : 1, 'C' : 2, 'D' : 3, 'E' : 4, 'F' : 5, 'G' : 6,
+            'H' : 7, 'I' : 8, 'J' : 9, 'K' : 10, 'L' : 11, 'M' : 12, 'N' : 13,
+            'O' : 14, 'P' : 15, 'Q' : 16, 'R' : 17, 'S' : 18, 'T' : 19, 'U' : 20,
+            'V' : 21, 'W' : 22, 'X' : 23, 'Y' : 24, 'Z' : 25,
+            'a' : 26, 'b' : 27, 'c' : 28, 'd' : 29, 'e' : 30, 'f' : 31, 'g' : 32,
+            'h' : 33, 'i' : 34, 'j' : 35, 'k' : 36, 'l' : 37, 'm' : 38, 'n' : 39,
+            'o' : 40, 'p' : 41, 'q' : 42, 'r' : 43, 's' : 44, 't' : 45, 'u' : 46,
+            'v' : 47, 'w' : 48, 'x' : 49, 'y' : 50, 'z' : 51,
+            '_' : 99, '-' : 98
+    };
+    var out is string = "";
+    for (var char in splitIntoCharacters(input))
+    {
+        var res = match(char, REGEX_NUMBER);
+        if (res.hasMatch)
+        {
+            out = out ~ toString(res.captures[0]);
+        }
+        else
+        {
+            out = out ~ toString(chrMap[char]);
+        }
+    }
+    return stringToNumber(out) % 100000;
+}
+
+function lcprng(seed is number) returns function
+{
+    const a = 1103515245;
+    const c = 12345;
+    const m = 2^31;
+    var state = new box(seed);
+    return function()
+    {
+        state[] = (a * state[] + c) % m;
+        return state[];
+    };
 }
