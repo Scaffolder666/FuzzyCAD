@@ -1,29 +1,39 @@
-// FuzzyCAD "Proposed Move" custom feature -- built ENTIRELY from pieces
-// already confirmed live in Onshape's editor (see proposedFillet.fs for
-// the individual confirmations):
-//   - opPattern() duplicates a body while leaving the original untouched.
-//   - opPattern's own "transforms" array doesn't have to be a zero
-//     offset -- passing the real desired translation directly means the
-//     duplicate is created ALREADY moved, no separate opTransform() call
-//     needed at all (opTransform itself is still unconfirmed for a plain
-//     move -- the one live test of it was for the abandoned "makeCopy"
-//     duplication attempt, not a clean move-only case, so this avoids
-//     relying on it).
-//   - setProperty(context, {"entities": ..., "propertyType":
-//     PropertyType.APPEARANCE, "value": color(r,g,b,alpha)}) fades the
-//     original and colors the proposal, confirmed live for Fillet.
+// FuzzyCAD "Proposed Move" custom feature -- v2, adds a dashed-outline
+// + directional-arrow visualization on top of the v1 mechanism (opPattern
+// duplication + setProperty fade/color), which was fully confirmed live.
 //
-// Since every piece here is already-confirmed, this one has the highest
-// chance of compiling clean on the first try of the three requested
-// (Move/Scale/Rotate) -- Scale and Rotate each need at least one
-// genuinely new, unconfirmed FeatureScript call.
+// v2 is a genuinely experimental batch -- multiple NEW FeatureScript
+// calls, none used anywhere else in this codebase yet, found via web
+// research (not confirmed live) rather than guessed cold:
+//   1. opFitSpline(context, id, {"points": [p0, p1]}) -- draws a real,
+//      persistent 3D curve between two points, found via an Onshape
+//      forum example: "opFitSpline(context, id + "line_1", { "points" :
+//      [ startPoint, endPoint ] });". Used here in a loop to build many
+//      short segments = a dashed line.
+//   2. evBox3d(context, {"topology": ..., "tight": true}) -- bounding
+//      box, found via forum example: "var bbox = evBox3d(context, {
+//      "topology" : definition.SelectedBody, "tight" : true })",
+//      returning .minCorner/.maxCorner as (presumably) 3-element
+//      indexable arrays of length quantities. Used to find the original
+//      body's center as the arrow's start point.
+//   3. toString(number) -- guessed conversion for building unique ids
+//      inside the dash loop (id + "dash" + toString(e) + ...) -- id
+//      concatenation via "+" IS confirmed elsewhere (id + "extrude1"
+//      etc.), but concatenating a LOOP INDEX specifically is new.
 //
-// Same KNOWN LIMITATION as proposedFillet.fs: if "body" is itself the
-// output of an earlier Cosmo Feature proposal already styled via the
-// right panel's REST mechanism, the appearance styling below silently
-// has no visible effect (manual REST override wins) -- geometry is still
-// correct. The right panel's SELF_STYLING_COSMO_FEATURE_TYPES set knows
-// this type styles itself and skips its own REST opacity toggling here.
+// Design: the proposed body itself is made fully invisible (alpha 0) --
+// what's actually visible is a dashed wire skeleton traced along its
+// edges (sample each edge at 10 parameter steps, connect only every
+// OTHER pair as a short opFitSpline segment, skip the rest -- the
+// skipped pairs become the gaps) plus a single straight line from the
+// original body's bounding-box center to its moved position, standing
+// in for a directional arrow (no arrowhead geometry yet -- keeping this
+// first pass simpler given how much else here is unconfirmed).
+//
+// If this doesn't compile, the exact line number in the error will say
+// which of the three new pieces above is wrong -- paste it back rather
+// than guessing further blind. Given how much is new here, expect more
+// than one round.
 
 FeatureScript 3029;
 import(path : "onshape/std/common.fs", version : "3029.0");
@@ -46,10 +56,11 @@ export const fuzzycadProposedMove = defineFeature(function(context is Context, i
     }
     {
         const originalBody = definition.body;
+        const offset = vector(definition.moveX, definition.moveY, definition.moveZ);
 
         opPattern(context, id + "duplicate", {
                 "entities" : originalBody,
-                "transforms" : [transform(vector(definition.moveX, definition.moveY, definition.moveZ))],
+                "transforms" : [transform(offset)],
                 "instanceNames" : ["proposed"]
         });
 
@@ -61,9 +72,33 @@ export const fuzzycadProposedMove = defineFeature(function(context is Context, i
                 "value" : color(0.75, 0.75, 0.75, 0.08)
         });
 
+        // The proposed body is invisible -- the dashed wire skeleton
+        // below is what actually represents it visually.
         setProperty(context, {
                 "entities" : proposedBody,
                 "propertyType" : PropertyType.APPEARANCE,
-                "value" : color(0.25, 0.55, 0.95, 1.0)
+                "value" : color(0.25, 0.55, 0.95, 0.0)
         });
+
+        const proposedEdges = evaluateQuery(context, qCreatedBy(id + "duplicate", EntityType.EDGE));
+        const dashSteps = 10;
+        for (var e = 0; e < size(proposedEdges); e += 1)
+        {
+            for (var i = 0; i < dashSteps; i += 2)
+            {
+                const t0 = i / dashSteps;
+                const t1 = (i + 1) / dashSteps;
+                const p0 = evEdgeTangentLine(context, { "edge" : proposedEdges[e], "parameter" : t0 }).origin;
+                const p1 = evEdgeTangentLine(context, { "edge" : proposedEdges[e], "parameter" : t1 }).origin;
+                opFitSpline(context, id + "dash" + toString(e) + "_" + toString(i), { "points" : [p0, p1] });
+            }
+        }
+
+        const bbox = evBox3d(context, { "topology" : originalBody, "tight" : true });
+        const originCenter = vector(
+                (bbox.minCorner[0] + bbox.maxCorner[0]) / 2,
+                (bbox.minCorner[1] + bbox.maxCorner[1]) / 2,
+                (bbox.minCorner[2] + bbox.maxCorner[2]) / 2
+        );
+        opFitSpline(context, id + "arrow", { "points" : [originCenter, originCenter + offset] });
     });
