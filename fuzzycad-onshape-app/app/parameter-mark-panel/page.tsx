@@ -236,6 +236,13 @@ function ParameterMarkPanelInner() {
   // Hammering it further during a known cooldown can't help and risks
   // extending the block, so this is a hard stop, not a suggestion.
   const rateLimitedUntilRef = useRef<number | null>(null);
+  // Set once loadEverything sees HTTP 402 from the feature-parameters
+  // route (Onshape's own annual API allocation exhausted -- confirmed
+  // live; unlike 429 this has no Retry-After, so there's no known time to
+  // wait out). Blocks automatic reloads (mount, post-action) until a
+  // manual Refresh click explicitly retries; a successful call clears it
+  // again in case the allocation resets mid-session.
+  const annualQuotaExhaustedRef = useRef(false);
   // Onshape-supplied context read straight from the iframe's own URL query
   // string (Action URL configured with {$documentId}/{$workspaceOrVersionId}/
   // {$elementId} replacement parameters in the Developer Portal -- confirmed
@@ -482,8 +489,15 @@ function ParameterMarkPanelInner() {
    * interval so newly-inserted proposals show up without a manual
    * reopen, and from the header's Refresh button for an immediate check.
    */
-  async function loadEverything() {
+  async function loadEverything(options?: { manual?: boolean }) {
     if (!context) return;
+
+    if (annualQuotaExhaustedRef.current && !options?.manual) {
+      setStatus(
+        "Onshape's annual API allocation appears exhausted (HTTP 402 earlier) -- automatic reloads paused. Click Refresh to check again.",
+      );
+      return;
+    }
 
     if (rateLimitedUntilRef.current !== null) {
       const remainingMs = rateLimitedUntilRef.current - Date.now();
@@ -532,6 +546,10 @@ function ParameterMarkPanelInner() {
       if (Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0) {
         rateLimitedUntilRef.current = Date.now() + retryAfterSeconds * 1000;
       }
+    } else if (upstreamStatus === 402) {
+      annualQuotaExhaustedRef.current = true;
+    } else if (upstreamOk) {
+      annualQuotaExhaustedRef.current = false;
     }
 
     setNotConnected(upstreamStatus === 401);
@@ -593,7 +611,9 @@ function ParameterMarkPanelInner() {
           ? `Onshape is rate-limiting this document (HTTP 429)${
               paramsData.retryAfter ? ` -- retry after ~${paramsData.retryAfter}s` : ""
             } -- results below may be incomplete until it clears`
-          : `error loading parameters from Onshape (HTTP ${upstreamStatus})`,
+          : upstreamStatus === 402
+            ? "Onshape's annual API allocation appears exhausted (HTTP 402) -- automatic reloads paused, click Refresh to check again"
+            : `error loading parameters from Onshape (HTTP ${upstreamStatus})`,
     );
 
     for (const found of detected) {
@@ -608,35 +628,33 @@ function ParameterMarkPanelInner() {
     }
   }
 
+  // NO auto-polling anymore -- load once when context first resolves,
+  // then only on manual Refresh or right after this panel's own actions
+  // (accept/reject/reopen already call loadEverything() themselves).
+  // This used to setInterval(runLoad, 15000), widened to 30000 after
+  // hitting Onshape's per-endpoint rate limiter (429) once, but that
+  // wasn't the real problem: at 30s this alone was ~120 real Onshape
+  // /features calls/hour (plus ~120/hour for the project-state blob GET
+  // it triggers) just sitting idle with the panel open and nothing
+  // clicked -- confirmed to be able to burn a full annual API allocation
+  // (2,500 calls on Onshape's Free/Standard/EDU tier) in under a day of
+  // active development, which is what actually happened (HTTP 402,
+  // "Payment Required", on this exact route). Newly-inserted proposals or
+  // edits made directly in Onshape's own feature dialog now only show up
+  // after a manual Refresh click, or automatically once the SELECTION-
+  // based click-to-highlight path is the primary way of noticing live
+  // viewport changes -- that path costs zero REST calls (postMessage
+  // only).
   useEffect(() => {
     if (!context) {
       return;
     }
 
-    // Wrapped in a locally-declared function (rather than calling
-    // loadEverything directly) to match this file's existing "fetch on
-    // mount" effect pattern -- see resolveElementName above.
-    function runLoad() {
-      void loadEverything();
-    }
-
-    runLoad();
-    // 30s (widened from 15s after hitting Onshape's own rate limiter --
-    // confirmed live, HTTP 429 -- during a heavy testing session) so
-    // newly-inserted proposals (or edits made directly in Onshape's own
-    // feature dialog) still show up without a manual reopen, without
-    // polling this hard against the feature-tree-walk endpoint. Manual
-    // Refresh still re-checks immediately regardless of this interval.
-    const interval = setInterval(runLoad, 30000);
-
-    return () => {
-      clearInterval(interval);
-    };
+    void loadEverything();
     // loadEverything is intentionally omitted -- it's a stable,
     // re-created-per-render component function (not memoized), so adding
-    // it here would refire this effect (tearing down and restarting the
-    // interval) on every unrelated re-render instead of only when the
-    // Part Studio changes.
+    // it here would refire this effect on every unrelated re-render
+    // instead of only when the Part Studio actually changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [context]);
 
@@ -1033,7 +1051,11 @@ function ParameterMarkPanelInner() {
       <div className={styles.header}>
         <div className={styles.titleRow}>
           <h1 className={styles.title}>Overall</h1>
-          <button type="button" className={styles.refreshButton} onClick={() => void loadEverything()}>
+          <button
+            type="button"
+            className={styles.refreshButton}
+            onClick={() => void loadEverything({ manual: true })}
+          >
             &#8635; Refresh
           </button>
         </div>
@@ -1204,7 +1226,16 @@ function DiscussionThread({
   );
 }
 
-/** One editable Cosmo Feature parameter -- debounced live-edit straight into Onshape, same rhythm as the old detail view's slider/text input. */
+/**
+ * One editable Cosmo Feature parameter. Used to write to Onshape on a
+ * 400ms keystroke debounce -- looked like "one live-edit call" but
+ * partstudio-update-feature has no single-feature GET to work with, so
+ * every write is actually a GET (full feature list) + POST (patched
+ * feature) round trip: typing "20" -> "25" one digit at a time could
+ * easily cost 8-10 real Onshape API calls for a single edit. Now commits
+ * only on blur or Enter -- at most 2 calls per intentionally-finished
+ * edit, same rhythm as a normal spreadsheet cell.
+ */
 function ParamValueRow({
   entry,
   disabled,
@@ -1217,20 +1248,14 @@ function ParamValueRow({
   const currentValueLabel = formatFeatureParameterValue(entry.typeName, entry.message);
   const currentMagnitude = parseNumericMagnitude(currentValueLabel);
   const [draft, setDraft] = useState(currentMagnitude !== null ? String(currentMagnitude) : "");
-  const lastPreviewedRef = useRef(draft);
+  const lastCommittedRef = useRef(draft);
 
-  useEffect(() => {
-    if (disabled) return;
+  function commit() {
     const trimmed = draft.trim();
-    if (!trimmed || trimmed === lastPreviewedRef.current) return;
-
-    const timer = setTimeout(() => {
-      lastPreviewedRef.current = trimmed;
-      onLivePreview(trimmed);
-    }, 400);
-
-    return () => clearTimeout(timer);
-  }, [draft, disabled, onLivePreview]);
+    if (disabled || !trimmed || trimmed === lastCommittedRef.current) return;
+    lastCommittedRef.current = trimmed;
+    onLivePreview(trimmed);
+  }
 
   return (
     <div className={styles.paramEditRow}>
@@ -1241,6 +1266,12 @@ function ParamValueRow({
         value={draft}
         disabled={disabled}
         onChange={(event) => setDraft(event.target.value)}
+        onBlur={commit}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") {
+            event.currentTarget.blur();
+          }
+        }}
         onClick={(event) => event.stopPropagation()}
       />
     </div>
