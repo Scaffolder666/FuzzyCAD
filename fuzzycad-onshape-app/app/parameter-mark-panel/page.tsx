@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import {
   addCustomFeatureProposalComment,
   createEmptyUncertaintyDocument,
@@ -276,7 +276,9 @@ function ParameterMarkPanelInner() {
 
     const cosmoOnly = Array.isArray(paramsData.valueParameters)
       ? (paramsData.valueParameters as ValueParameterEntry[]).filter(
-          (entry) => COSMO_FEATURE_TYPES.has(entry.featureType) && entry.typeName === "BTMParameterQuantity",
+          (entry) =>
+            COSMO_FEATURE_TYPES.has(entry.featureType) &&
+            (entry.typeName === "BTMParameterQuantity" || entry.typeName === "BTMParameterBoolean"),
         )
       : [];
     setParameters(cosmoOnly);
@@ -493,6 +495,24 @@ function ParameterMarkPanelInner() {
     );
   }
 
+  /** Flips a boolean parameter (e.g. "oppositeDirection") immediately -- no debounce needed, unlike the quantity inputs. */
+  async function toggleDirection(entry: ValueParameterEntry, next: boolean) {
+    if (!context) return;
+    await updatePartStudioFeatureSuppressed(
+      {
+        documentId: context.documentId,
+        workspaceId: context.workspaceId,
+        partStudioElementId: context.elementId,
+        server: context.server,
+      },
+      {
+        featureId: entry.featureId,
+        parameterUpdates: [{ parameterId: entry.parameterId, value: next }],
+      },
+    );
+    void loadEverything();
+  }
+
   /**
    * Accept: confirms the proposal is final and restores its output
    * parts' normal appearance. Does not write into any other feature --
@@ -623,85 +643,92 @@ function ParameterMarkPanelInner() {
           Extrude&quot;) from Onshape&apos;s own feature toolbar to see it here.
         </p>
       ) : (
-        <div className={styles.overallGrid}>
+        <div className={styles.proposalList}>
           {featureGroups.map((group) => {
             const annotation = findAnnotation(group.featureId);
             const resolved = annotation?.status === "resolved";
 
             return (
-              <Fragment key={group.featureId}>
-                <div className={styles.proposalRow}>
-                  <div
-                    className={styles.proposalHeader}
-                    onClick={() => openFeatureDialog(group.featureId)}
-                    title="Click to highlight this feature in Onshape"
-                  >
-                    <span className={styles.cardTitle}>{group.featureName}</span>
-                    <span className={styles.cardTypeTag}>({group.featureType})</span>
-                  </div>
+              <div key={group.featureId} className={styles.proposalCard}>
+                <div
+                  className={styles.proposalHeader}
+                  onClick={() => openFeatureDialog(group.featureId)}
+                  title="Click to highlight this feature in Onshape"
+                >
+                  <span className={styles.cardTitle}>{group.featureName}</span>
+                  <span className={styles.cardTypeTag}>({group.featureType})</span>
+                </div>
 
-                  {group.parameters.map((entry) => (
+                {group.parameters.map((entry) =>
+                  entry.typeName === "BTMParameterBoolean" ? (
+                    <DirectionToggleRow
+                      key={entry.parameterId}
+                      entry={entry}
+                      disabled={resolved}
+                      onToggle={(next) => void toggleDirection(entry, next)}
+                    />
+                  ) : (
                     <ParamValueRow
                       key={entry.parameterId}
                       entry={entry}
                       disabled={resolved}
                       onLivePreview={(value) => void livePreviewValue(entry, value)}
                     />
-                  ))}
+                  ),
+                )}
 
-                  <div className={styles.rowActions}>
-                    {resolved ? (
-                      <>
-                        <span className={styles.tagAnswered}>Resolved</span>
-                        <button
-                          type="button"
-                          className={styles.secondaryButton}
-                          disabled={saving}
-                          onClick={() => reopenMark(group)}
-                        >
-                          Reopen
-                        </button>
-                      </>
-                    ) : (
-                      <>
-                        <span className={styles.tagProposed}>Proposed</span>
-                        <button
-                          type="button"
-                          className={styles.acceptButton}
-                          disabled={saving}
-                          onClick={() => void resolveMark(group)}
-                        >
-                          Accept
-                        </button>
-                        <button
-                          type="button"
-                          className={styles.rejectButton}
-                          disabled={saving}
-                          onClick={() => void rejectMark(group)}
-                        >
-                          Reject
-                        </button>
-                      </>
-                    )}
-                  </div>
-                </div>
-
-                <div className={styles.discussionCard}>
-                  {annotation ? (
-                    <DiscussionThread
-                      annotation={annotation}
-                      saving={saving}
-                      onAddComment={(text) =>
-                        withSavedDocument((doc) =>
-                          addCustomFeatureProposalComment(doc, annotationIdFor(group.featureId), text),
-                        )
-                      }
-                    />
+                <div className={styles.rowActions}>
+                  {resolved ? (
+                    <>
+                      <span className={styles.tagAnswered}>Resolved</span>
+                      <button
+                        type="button"
+                        className={styles.secondaryButton}
+                        disabled={saving}
+                        onClick={() => reopenMark(group)}
+                      >
+                        Reopen
+                      </button>
+                    </>
                   ) : (
-                    <div className={styles.commentEmpty}>Registering this proposal...</div>
+                    <>
+                      <span className={styles.tagProposed}>Proposed</span>
+                      <button
+                        type="button"
+                        className={styles.acceptButton}
+                        disabled={saving}
+                        onClick={() => void resolveMark(group)}
+                      >
+                        Accept
+                      </button>
+                      <button
+                        type="button"
+                        className={styles.rejectButton}
+                        disabled={saving}
+                        onClick={() => void rejectMark(group)}
+                      >
+                        Reject
+                      </button>
+                    </>
                   )}
                 </div>
-              </Fragment>
+
+                <div className={styles.discussionDivider} />
+
+                {annotation ? (
+                  <DiscussionThread
+                    annotation={annotation}
+                    saving={saving}
+                    onAddComment={(text) =>
+                      withSavedDocument((doc) =>
+                        addCustomFeatureProposalComment(doc, annotationIdFor(group.featureId), text),
+                      )
+                    }
+                  />
+                ) : (
+                  <div className={styles.commentEmpty}>Registering this proposal...</div>
+                )}
+              </div>
             );
           })}
         </div>
@@ -797,6 +824,37 @@ function ParamValueRow({
         onChange={(event) => setDraft(event.target.value)}
         onClick={(event) => event.stopPropagation()}
       />
+    </div>
+  );
+}
+
+/** A boolean parameter (currently just "oppositeDirection") rendered as an arrow button instead of a text field -- click flips it immediately, no debounce needed. */
+function DirectionToggleRow({
+  entry,
+  disabled,
+  onToggle,
+}: {
+  entry: ValueParameterEntry;
+  disabled: boolean;
+  onToggle: (next: boolean) => void;
+}) {
+  const current = Boolean(entry.message.value);
+
+  return (
+    <div className={styles.paramEditRow}>
+      <span className={styles.paramEditLabel}>direction</span>
+      <button
+        type="button"
+        className={styles.directionButton}
+        disabled={disabled}
+        title="Flip extrude direction"
+        onClick={(event) => {
+          event.stopPropagation();
+          onToggle(!current);
+        }}
+      >
+        {current ? "↓ reversed" : "↑ normal"}
+      </button>
     </div>
   );
 }

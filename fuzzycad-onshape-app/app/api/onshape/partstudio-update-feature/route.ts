@@ -5,7 +5,11 @@ export const runtime = "nodejs";
 
 type ParameterUpdate = {
   parameterId: string;
-  expression: string;
+  // BTMParameterQuantity uses "expression"; BTMParameterBoolean uses
+  // "value" (true/false), not an expression string -- exactly one should
+  // be set per update, matched to the target parameter's real type.
+  expression?: string;
+  value?: boolean;
 };
 
 type RequestBody = {
@@ -146,7 +150,14 @@ export async function POST(req: NextRequest) {
       if (!update) {
         return param;
       }
-      return { ...param, message: { ...param.message, expression: update.expression } };
+      return {
+        ...param,
+        message: {
+          ...param.message,
+          ...(update.expression !== undefined ? { expression: update.expression } : {}),
+          ...(update.value !== undefined ? { value: update.value } : {}),
+        },
+      };
     });
   }
 
