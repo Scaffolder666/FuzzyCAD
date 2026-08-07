@@ -1,4 +1,4 @@
-// FuzzyCAD "Proposed Move" custom feature -- v5.
+// FuzzyCAD "Proposed Move" custom feature -- v7.
 //
 // v4 adds three things requested after seeing v3 render correctly:
 //   1. Per-axis arrows (X/Y/Z each get their own arrow + label) instead
@@ -31,6 +31,19 @@
 // function bodies. They're copied verbatim below now, and
 // jitterOffset() calls the real rnd() (via RandomNumberFunction(id)),
 // not a loop-index pseudo-random substitute.
+//
+// v7 fixes the actual reported symptom: v4-v6's "dashes" were a single
+// 2-point straight-line spline per half-edge chunk -- structurally
+// nothing like the reference's dense scribble (confirmed against the
+// reference's own screenshot). Replaced with a direct port of
+// handDrawEdgeSketchy/drawSketchyWireframe: 2-4 FULL-length strokes per
+// edge, each a spline through many points sampled the whole way along
+// the edge (point count driven by chordLength, jitter driven by
+// variance -- same names/defaults as the reference), every point
+// independently jittered via jitterOffset(). See that function's own
+// comment for the one deliberate deviation (evEdgeTangentLine singular
+// in a loop, instead of the reference's evEdgeTangentLines batch call,
+// whose unit convention is unconfirmed).
 //
 // Everything else (opCreateCompositePart merging many wire bodies into
 // one before a single setProperty call, skText/newSketchOnPlane/
@@ -89,41 +102,64 @@ export const fuzzycadProposedMove = defineFeature(function(context is Context, i
         });
 
         const dashColor = color(0.25, 0.55, 0.95, 1.0);
-        const jitter = 0.15 * millimeter;
+        const variance = 0.5 * millimeter;
+        const chordLength = 1 * millimeter;
 
-        // Hand-drawn-style dashed outline: each dash endpoint gets its
-        // OWN x/y/z jitter, matching the reference source's
-        // handDrawEdgeSketchy exactly -- real rnd() (RandomNumberFunction
-        // (id), a deterministic linear-congruential generator seeded off
-        // the feature's own id, copied verbatim below), sampled twice per
-        // point (s1 for the three offsets, s2 for jitterFactor), then
-        // three separate offset formulas keyed off distinct prime pairs:
-        // 17/23/31 against the edge index, 29/37/41 against the stroke
-        // (point-within-edge) index.
+        // v7 replaces v4-v6's short 2-point "dash" segments (which only
+        // jittered the two endpoints of alternating half-edge chunks --
+        // confirmed live to be visually indistinguishable from a plain
+        // edge at these magnitudes) with a direct port of the reference
+        // source's actual handDrawEdgeSketchy/drawSketchyWireframe
+        // structure: for EACH edge, 2-4 FULL-LENGTH strokes, each one a
+        // spline through many points sampled the whole way along the
+        // edge (density set by chordLength), with EVERY point
+        // independently jittered. This is what produces the dense,
+        // overlapping scribble look (confirmed from the reference's own
+        // screenshot) -- a single straight 2-point dash never could.
+        //
+        // One deliberate deviation from the reference: it samples all
+        // points in one batch via evEdgeTangentLines (plural). That
+        // function's exact return-unit convention is unconfirmed here
+        // (the reference's own copies disagree on whether to multiply
+        // the result by `meter`), so this loops evEdgeTangentLine
+        // (singular, already confirmed live and unit-correct elsewhere
+        // in this file) once per sample point instead -- same point
+        // positions, no unverified API surface.
         const proposedEdges = evaluateQuery(context, qCreatedBy(id + "duplicate", EntityType.EDGE));
-        const dashSteps = 10;
-        var allDashes = qNothing();
+        var allStrokes = qNothing();
         var rnd = RandomNumberFunction(id);
         for (var e = 0; e < size(proposedEdges); e += 1)
         {
-            for (var i = 0; i < dashSteps; i += 2)
+            const edgeQuery = proposedEdges[e];
+            const edgeLength = evLength(context, { "entities" : edgeQuery });
+            const pointCount = ceil(max(edgeLength / chordLength, 5));
+
+            var basePoints = makeArray(pointCount, undefined);
+            const params = range(0.0, 1.0, pointCount);
+            for (var p = 0; p < pointCount; p += 1)
             {
-                const t0 = i / dashSteps;
-                const t1 = (i + 1) / dashSteps;
-                var p0 = evEdgeTangentLine(context, { "edge" : proposedEdges[e], "parameter" : t0 }).origin;
-                var p1 = evEdgeTangentLine(context, { "edge" : proposedEdges[e], "parameter" : t1 }).origin;
+                basePoints[p] = evEdgeTangentLine(context, { "edge" : edgeQuery, "parameter" : params[p] }).origin;
+            }
 
-                p0 = p0 + jitterOffset(rnd, e, i, jitter);
-                p1 = p1 + jitterOffset(rnd, e, i + 1, jitter);
+            const rawRandom = rnd() % 100;
+            const numStrokes = 2 + floor(rawRandom / 33);
 
-                const dashId = id + "dash" + toString(e) + "_" + toString(i);
-                opFitSpline(context, dashId, { "points" : [p0, p1] });
-                allDashes = qUnion(allDashes, qCreatedBy(dashId, EntityType.BODY));
+            for (var strokeIndex = 0; strokeIndex < numStrokes; strokeIndex += 1)
+            {
+                var newPoints = makeArray(pointCount, undefined);
+                for (var i = 0; i < pointCount; i += 1)
+                {
+                    newPoints[i] = basePoints[i] + jitterOffset(rnd, i, strokeIndex, variance);
+                }
+
+                const strokeId = id + "stroke" + toString(e) + "_" + toString(strokeIndex);
+                opFitSpline(context, strokeId, { "points" : newPoints });
+                allStrokes = qUnion(allStrokes, qCreatedBy(strokeId, EntityType.BODY));
             }
         }
 
         opCreateCompositePart(context, id + "dashComposite", {
-                "bodies" : allDashes,
+                "bodies" : allStrokes,
                 "closed" : false
         });
 
@@ -147,20 +183,21 @@ export const fuzzycadProposedMove = defineFeature(function(context is Context, i
         drawAxisArrow(context, id + "arrowZ", bboxCenter, vector(0 * meter, 0 * meter, definition.moveZ), "Z", dashColor);
     });
 
-// Per-axis jitter offset for one dash endpoint, matching the reference
-// source's handDrawEdgeSketchy offset formula exactly: THREE separate
-// offsets (x/y/z), each keyed off a distinct pair of primes -- 17/23/31
-// against `edgeIndex`, 29/37/41 against `strokeIndex` -- scaled by a
-// jitterFactor derived from a second rnd() sample, same as the
-// reference. `rnd` is the stateful generator returned by
-// RandomNumberFunction(id) below -- calling it advances its internal
-// state, so s1/s2 here really are two different pseudo-random draws,
-// not the same value reused.
+// Per-axis jitter offset for one sample point on one hand-drawn stroke,
+// matching the reference source's handDrawEdgeSketchy offset formula
+// exactly: THREE separate offsets (x/y/z), each keyed off a distinct
+// pair of primes -- 17/23/31 against `pointIndex` (this point's
+// position along the edge, NOT which edge), 29/37/41 against
+// `strokeIndex` (which of the 2-4 overlapping strokes this is) --
+// scaled by a jitterFactor derived from a second rnd() sample. Edge-to-
+// edge variation comes purely from `rnd` being a stateful generator
+// whose position keeps advancing across the whole edge loop, exactly as
+// in the reference -- there's no edge-index term in the formula itself.
 function jitterOffset(
     rnd is function,
-    edgeIndex is number,
+    pointIndex is number,
     strokeIndex is number,
-    jitter is ValueWithUnits
+    variance is ValueWithUnits
 )
 returns Vector
 {
@@ -169,9 +206,9 @@ returns Vector
 
     const jitterFactor = 0.5 + ((s2 % 100) / 100.0) * 0.5;
 
-    const offsetX = 2 * ((((s1 + edgeIndex * 17 + strokeIndex * 29) % 100) / 100.0) - 0.5) * jitter * jitterFactor;
-    const offsetY = 2 * ((((s1 + edgeIndex * 23 + strokeIndex * 37) % 100) / 100.0) - 0.5) * jitter * jitterFactor;
-    const offsetZ = 2 * ((((s1 + edgeIndex * 31 + strokeIndex * 41) % 100) / 100.0) - 0.5) * jitter * jitterFactor;
+    const offsetX = 2 * ((((s1 + pointIndex * 17 + strokeIndex * 29) % 100) / 100.0) - 0.5) * variance * jitterFactor;
+    const offsetY = 2 * ((((s1 + pointIndex * 23 + strokeIndex * 37) % 100) / 100.0) - 0.5) * variance * jitterFactor;
+    const offsetZ = 2 * ((((s1 + pointIndex * 31 + strokeIndex * 41) % 100) / 100.0) - 0.5) * variance * jitterFactor;
 
     return vector(offsetX, offsetY, offsetZ);
 }
