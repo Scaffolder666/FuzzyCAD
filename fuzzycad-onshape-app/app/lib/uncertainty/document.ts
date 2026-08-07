@@ -343,6 +343,34 @@ export type FeatureParameterQuestionUncertaintyAnnotation = BaseAnnotationFields
   proposedFeatureId: string | null;
 };
 
+/**
+ * "Custom feature proposal": a FeatureScript custom feature instance
+ * ("Cosmo Feature" -- e.g. "FuzzyCAD Proposed Extrude") inserted directly
+ * into the Part Studio's own feature tree, in Onshape's own UI, by
+ * whoever's reviewing -- NOT triggered from this app's right panel. The
+ * custom feature itself IS the proposal: its own parameters (depth, etc.)
+ * carry the proposed value, and it produces real, separate geometry
+ * (operationType NEW) sitting next to whatever's already in the tree, so
+ * nothing else in the model is touched. Unlike
+ * FeatureParameterQuestionUncertaintyAnnotation (which questions an
+ * EXISTING feature's parameter and needs an explicit answer written back
+ * into it), this type has no link back to any other feature at all --
+ * reviewing it is purely: detect the instance, style its own output
+ * transparent while open, comment/accept/reject. Accept does not write
+ * into any other feature -- it just confirms the proposal and restores
+ * normal appearance; reconciling the tree (e.g. suppressing whatever this
+ * is meant to replace) is a manual CAD step for whoever has that
+ * judgment, out of scope here. Reject deletes the feature outright,
+ * discarding the proposed geometry entirely.
+ */
+export type CustomFeatureProposalUncertaintyAnnotation = BaseAnnotationFields & {
+  type: "customFeatureProposal";
+  featureId: string;
+  featureName: string;
+  featureType: string;
+  commentThread: FeatureParameterComment[];
+};
+
 export type FuzzyCADUncertaintyAnnotation =
   | SizeUncertaintyAnnotation
   | ProposalUncertaintyAnnotation
@@ -356,7 +384,8 @@ export type FuzzyCADUncertaintyAnnotation =
   | FilletUncertaintyAnnotation
   | BooleanUncertaintyAnnotation
   | ExtrudeUncertaintyAnnotation
-  | FeatureParameterQuestionUncertaintyAnnotation;
+  | FeatureParameterQuestionUncertaintyAnnotation
+  | CustomFeatureProposalUncertaintyAnnotation;
 
 export function createEmptyUncertaintyDocument(
   source: FuzzyCADUncertaintySource,
@@ -2273,5 +2302,92 @@ export function toFeatureParameterQuestionSummaries(
       resolvedValue: annotation.resolvedValue,
       status: annotation.status,
     }));
+}
+
+export function makeCustomFeatureProposalAnnotationId(featureId: string) {
+  return `customFeatureProposal:${featureId}`;
+}
+
+/**
+ * Registers a detected Cosmo Feature instance as a proposal to review --
+ * idempotent (a re-detection on a later load doesn't overwrite an
+ * existing annotation's status/comments), since the featureId is stable
+ * for the life of the instance and detection just needs to notice "this
+ * exists, is it already tracked."
+ */
+export function upsertCustomFeatureProposal(
+  document: FuzzyCADUncertaintyDocument,
+  input: {
+    featureId: string;
+    featureName: string;
+    featureType: string;
+    author?: string;
+  },
+): FuzzyCADUncertaintyDocument {
+  const id = makeCustomFeatureProposalAnnotationId(input.featureId);
+  if (document.annotations.some((annotation) => annotation.id === id)) {
+    return document;
+  }
+
+  const now = new Date().toISOString();
+  const pathKey = `customFeature:${input.featureId}`;
+
+  const annotation: CustomFeatureProposalUncertaintyAnnotation = {
+    id,
+    type: "customFeatureProposal",
+    target: {
+      pathKeys: [pathKey],
+      referencePathKey: pathKey,
+      scope: "single",
+    },
+    featureId: input.featureId,
+    featureName: input.featureName,
+    featureType: input.featureType,
+    commentThread: [],
+    author: input.author,
+    status: "open",
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  return {
+    ...document,
+    annotations: [...document.annotations, annotation],
+  };
+}
+
+/** Appends one reply to a custom-feature proposal's discussion thread. */
+export function addCustomFeatureProposalComment(
+  document: FuzzyCADUncertaintyDocument,
+  annotationId: string,
+  text: string,
+  author?: string,
+): FuzzyCADUncertaintyDocument {
+  if (!text.trim()) {
+    return document;
+  }
+
+  const now = new Date().toISOString();
+  const newComment: FeatureParameterComment = {
+    id: `${annotationId}:comment:${now}:${Math.random().toString(36).slice(2, 8)}`,
+    author,
+    text: text.trim(),
+    createdAt: now,
+  };
+
+  return {
+    ...document,
+    annotations: document.annotations.map((annotation) => {
+      if (annotation.id !== annotationId || annotation.type !== "customFeatureProposal") {
+        return annotation;
+      }
+
+      return {
+        ...annotation,
+        commentThread: [...annotation.commentThread, newComment],
+        updatedAt: now,
+      };
+    }),
+  };
 }
 

@@ -5,6 +5,7 @@ import type {
   AlternativeUncertaintyAnnotation,
   BendUncertaintyAnnotation,
   BooleanUncertaintyAnnotation,
+  CustomFeatureProposalUncertaintyAnnotation,
   DistanceMoveMode,
   DistanceUncertaintyAnnotation,
   ExtrudeUncertaintyAnnotation,
@@ -1585,12 +1586,23 @@ export default function UncertaintyMarksPanel({
   const [activeFilter, setActiveFilter] = useState<FilterKey | null>(null);
   const [resolvedOpen, setResolvedOpen] = useState(false);
 
+  // Custom-feature proposals (Cosmo Features) have no mesh/pathKey
+  // representation in this Three.js app -- they're a right-panel-only
+  // concept (see parameter-mark-panel/page.tsx), so this panel never
+  // renders a card for them. The explicit type predicate (not just a
+  // boolean filter) is needed so downstream type-narrowing on
+  // `annotation.type` still excludes this type structurally.
+  const isRenderableInThisPanel = (
+    annotation: FuzzyCADUncertaintyAnnotation,
+  ): annotation is Exclude<FuzzyCADUncertaintyAnnotation, CustomFeatureProposalUncertaintyAnnotation> =>
+    annotation.type !== "customFeatureProposal";
+
   const openAnnotations = document.annotations.filter(
     (annotation) => annotation.status === "open",
-  );
+  ).filter(isRenderableInThisPanel);
   const resolvedAnnotations = document.annotations.filter(
     (annotation) => annotation.status === "resolved",
-  );
+  ).filter(isRenderableInThisPanel);
 
   const visibleAnnotations = activeFilter
     ? openAnnotations.filter((annotation) =>
