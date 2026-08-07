@@ -76,5 +76,5 @@ export const fuzzycadTestDuplicateEdgeMatch = defineFeature(function(context is 
         const copiedEdges = qCreatedBy(id + "duplicate", EntityType.EDGE);
         const matchedEdge = qClosestTo(copiedEdges, targetPoint);
 
-        setVisibility(context, id + "highlight", matchedEdge, true);
+        setVisibility(context, matchedEdge, true);
     });
