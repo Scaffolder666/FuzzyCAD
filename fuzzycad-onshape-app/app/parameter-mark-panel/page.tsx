@@ -57,25 +57,41 @@ type FeatureGroup = {
 /**
  * Cosmo Feature types this panel knows how to review -- FeatureScript
  * custom features published for FuzzyCAD's tracked-changes workflow.
- * Boolean/Move/Rotate/Scale land here once their own custom features
- * exist; the panel needs no other feature-type-specific code since it
- * just reads whatever Quantity/Boolean parameters each type happens to
- * expose.
+ * Boolean lands here once its own custom feature exists; the panel
+ * needs no other feature-type-specific code since it just reads
+ * whatever Quantity/Boolean parameters each type happens to expose.
+ * fuzzycadProposedRotate/fuzzycadProposedScale are drafted
+ * (featurescript/proposedRotate.fs, proposedScale.fs) but use
+ * unconfirmed FeatureScript calls -- registered here so the panel picks
+ * them up the moment they compile and get inserted, no app change
+ * needed once that happens.
  */
-const COSMO_FEATURE_TYPES = new Set(["fuzzycadProposedExtrude", "fuzzycadProposedFillet"]);
+const COSMO_FEATURE_TYPES = new Set([
+  "fuzzycadProposedExtrude",
+  "fuzzycadProposedFillet",
+  "fuzzycadProposedMove",
+  "fuzzycadProposedRotate",
+  "fuzzycadProposedScale",
+]);
 
 /**
  * Cosmo Feature types whose own FeatureScript already fades/colors the
  * relevant bodies via setProperty (confirmed live for
  * fuzzycadProposedFillet: fades the original body it duplicated, colors
- * the proposal). The right panel must NOT also apply its REST-based
- * part-appearance opacity toggling to these -- confirmed live that a
- * manual REST appearance override on a part blocks FeatureScript's own
- * setProperty from visibly taking effect on it, so double-styling a
- * self-styling type would just leave it stuck at whatever opacity the
- * REST call last set, silently overriding the feature's own styling.
+ * the proposal; Move/Rotate/Scale follow the identical pattern). The
+ * right panel must NOT also apply its REST-based part-appearance
+ * opacity toggling to these -- confirmed live that a manual REST
+ * appearance override on a part blocks FeatureScript's own setProperty
+ * from visibly taking effect on it, so double-styling a self-styling
+ * type would just leave it stuck at whatever opacity the REST call last
+ * set, silently overriding the feature's own styling.
  */
-const SELF_STYLING_COSMO_FEATURE_TYPES = new Set(["fuzzycadProposedFillet"]);
+const SELF_STYLING_COSMO_FEATURE_TYPES = new Set([
+  "fuzzycadProposedFillet",
+  "fuzzycadProposedMove",
+  "fuzzycadProposedRotate",
+  "fuzzycadProposedScale",
+]);
 
 function isValidUncertaintyDocument(value: unknown): value is FuzzyCADUncertaintyDocument {
   return (
