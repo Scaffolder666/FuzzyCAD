@@ -157,18 +157,50 @@ export const fuzzycadProposedRotate = defineFeature(function(context is Context,
             });
         }
 
+        // Pick whichever of the bounding box's 8 corners sits FARTHEST
+        // (perpendicular distance) from the rotation axis, instead of
+        // always using one fixed corner (maxCorner) that might happen to
+        // sit close to the axis and give a barely-visible arc. Since
+        // linear displacement under a rotation is radius * angle, the
+        // corner with the largest perpendicular radius is also the point
+        // that physically moves the most -- drawing the arc there both
+        // reads clearer and matches "where the change is biggest."
         const bbox = evBox3d(context, { "topology" : originalBody, "tight" : true });
-        const farCorner = bbox.maxCorner;
-        const cornerOffset = farCorner - axisStart;
-        const alongAxis = dot(cornerOffset, axisDirection) * axisDirection;
-        const perpOffset = cornerOffset - alongAxis;
-        const arcRadius = norm(perpOffset);
+        const corners = [
+            vector(bbox.minCorner[0], bbox.minCorner[1], bbox.minCorner[2]),
+            vector(bbox.minCorner[0], bbox.minCorner[1], bbox.maxCorner[2]),
+            vector(bbox.minCorner[0], bbox.maxCorner[1], bbox.minCorner[2]),
+            vector(bbox.minCorner[0], bbox.maxCorner[1], bbox.maxCorner[2]),
+            vector(bbox.maxCorner[0], bbox.minCorner[1], bbox.minCorner[2]),
+            vector(bbox.maxCorner[0], bbox.minCorner[1], bbox.maxCorner[2]),
+            vector(bbox.maxCorner[0], bbox.maxCorner[1], bbox.minCorner[2]),
+            vector(bbox.maxCorner[0], bbox.maxCorner[1], bbox.maxCorner[2])
+        ];
+
+        var arcRadius = 0 * meter;
+        var bestPerpOffset = vector(0, 0, 0) * meter;
+        var bestAlongAxis = vector(0, 0, 0) * meter;
+
+        for (var c = 0; c < 8; c += 1)
+        {
+            const cornerOffset = corners[c] - axisStart;
+            const alongAxisC = dot(cornerOffset, axisDirection) * axisDirection;
+            const perpOffsetC = cornerOffset - alongAxisC;
+            const radiusC = norm(perpOffsetC);
+
+            if (radiusC > arcRadius)
+            {
+                arcRadius = radiusC;
+                bestPerpOffset = perpOffsetC;
+                bestAlongAxis = alongAxisC;
+            }
+        }
 
         if (arcRadius / millimeter > 0.001)
         {
-            const perpVec = normalize(perpOffset);
+            const perpVec = normalize(bestPerpOffset);
             const perpVec2 = cross(axisDirection, perpVec);
-            const arcCenter = axisStart + alongAxis;
+            const arcCenter = axisStart + bestAlongAxis;
             const dimensionColor = color(0.25, 0.55, 0.95, 1.0);
 
             drawAngleArc(
