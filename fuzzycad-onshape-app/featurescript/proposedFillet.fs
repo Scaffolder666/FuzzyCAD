@@ -24,9 +24,24 @@
 //   - Zero-offset transform: unlike the test script's 50mm offset (used
 //     only to make the copy visually distinguishable for testing), the
 //     real feature duplicates in place so the proposed body sits exactly
-//     where the original's geometry is. Distinguishing it visually is the
-//     right panel's job (the same opacity-styling mechanism already
-//     confirmed working for proposedExtrude, applied here by featureId).
+//     where the original's geometry is.
+//   - Hiding the original in-script (new in this version, UNCONFIRMED):
+//     with the duplicate coincident with the original, both bodies render
+//     opaque and overlapping, which just looks broken -- there's no need
+//     for the right panel's opacity-styling trick here at all if the
+//     original is simply hidden for as long as this feature exists. Tying
+//     the hide to the feature's own recompute means Accept (feature stays)
+//     keeps the original hidden -- exactly right, since the fillet is now
+//     the "final" look -- and Reject (feature gets deleted) automatically
+//     un-hides the original with zero extra bookkeeping on the app side.
+//     setVisibility's real call shape is still unconfirmed: an earlier
+//     attempt at setVisibility(context, query, boolean) (3 positional
+//     args) was rejected by the compiler, but every other "op"-style
+//     function in this codebase's FeatureScript takes (context, id, map)
+//     -- this version guesses that setVisibility follows the same
+//     convention, just with a different type signature than what was
+//     tried before (hence "3 arguments not found" both times: not an
+//     arg-count problem, an arg-type problem).
 
 FeatureScript 3029;
 import(path : "onshape/std/common.fs", version : "3029.0");
@@ -64,9 +79,8 @@ export const fuzzycadProposedFillet = defineFeature(function(context is Context,
                 "radius" : definition.radius
         });
 
-        // No in-script visual styling on purpose, same rationale as
-        // proposedExtrude.fs: the right panel's part-appearance mechanism
-        // (qCreatedBy + partId -> transparent/black-edge styling) already
-        // works generically by featureId, no feature-type-specific code
-        // needed here.
+        setVisibility(context, id + "hideOriginal", {
+                "entities" : definition.body,
+                "visible" : false
+        });
     });
