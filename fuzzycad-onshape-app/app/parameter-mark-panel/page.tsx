@@ -5,13 +5,18 @@ import { useSearchParams } from "next/navigation";
 import {
   addCustomFeatureProposalComment,
   createEmptyUncertaintyDocument,
+  groupCustomFeatureProposals,
   makeCustomFeatureProposalAnnotationId,
+  removeFromProposalGroup,
   removeUncertaintyAnnotationById,
+  renameProposalGroup,
   reopenUncertaintyAnnotation,
   resolveUncertaintyAnnotation,
+  ungroupProposals,
   upsertCustomFeatureProposal,
   type CustomFeatureProposalUncertaintyAnnotation,
   type FuzzyCADUncertaintyDocument,
+  type ProposalGroup,
 } from "../lib/uncertainty/document";
 import {
   deletePartStudioFeature,
@@ -54,6 +59,16 @@ type FeatureGroup = {
   featureType: string;
   parameters: ValueParameterEntry[];
 };
+
+/**
+ * One item in the rendered card list: either a standalone card, or a
+ * cluster of cards sharing a ProposalGroup label. Not to be confused
+ * with FeatureGroup above (one Cosmo Feature's own parameters) -- this
+ * is purely about how cards are visually clustered in the list.
+ */
+type CardRenderBlock =
+  | { kind: "single"; group: FeatureGroup }
+  | { kind: "cluster"; proposalGroup: ProposalGroup; members: FeatureGroup[] };
 
 /**
  * Cosmo Feature types this panel knows how to review -- FeatureScript
@@ -290,6 +305,14 @@ function ParameterMarkPanelInner() {
   // DOM nodes for each proposal card, keyed by featureId, so a SELECTION
   // match can scrollIntoView the right one.
   const cardNodesRef = useRef<Map<string, HTMLDivElement>>(new Map());
+  // Proposal grouping (see document.ts's ProposalGroup): a purely
+  // cosmetic cluster of cards a reviewer thinks belong to the same
+  // design intent. groupSelectMode toggles a checkbox on every card;
+  // groupSelectionIds is which featureIds are currently checked. Each
+  // card inside a group keeps its own full Accept/Reject/comment
+  // controls -- grouping never bundles that behavior.
+  const [groupSelectMode, setGroupSelectMode] = useState(false);
+  const [groupSelectionIds, setGroupSelectionIds] = useState<Set<string>>(new Set());
 
   function extractAppearance(
     data: unknown,
@@ -714,6 +737,53 @@ function ParameterMarkPanelInner() {
   }, [parameters]);
 
   /**
+   * Buckets featureGroups (one per card) into render blocks: either a
+   * standalone card, or a cluster of cards sharing a ProposalGroup.
+   * Clustering is purely a rendering concern -- every card inside a
+   * cluster still renders its own full header/params/Accept-Reject/
+   * discussion thread exactly as if it were standalone.
+   */
+  const cardRenderBlocks = useMemo<CardRenderBlock[]>(() => {
+    const groupsById = new Map<string, ProposalGroup>();
+    for (const proposalGroup of uncertaintyDoc?.groups ?? []) {
+      groupsById.set(proposalGroup.id, proposalGroup);
+    }
+
+    const annotationByFeatureId = new Map<string, CustomFeatureProposalUncertaintyAnnotation>();
+    for (const annotation of uncertaintyDoc?.annotations ?? []) {
+      if (annotation.type === "customFeatureProposal") {
+        annotationByFeatureId.set(annotation.featureId, annotation);
+      }
+    }
+
+    const blocks: CardRenderBlock[] = [];
+    const clusterIndexByGroupId = new Map<string, number>();
+
+    for (const group of featureGroups) {
+      const groupId = annotationByFeatureId.get(group.featureId)?.groupId;
+      const proposalGroup = groupId ? groupsById.get(groupId) : undefined;
+
+      if (!groupId || !proposalGroup) {
+        blocks.push({ kind: "single", group });
+        continue;
+      }
+
+      const existingIndex = clusterIndexByGroupId.get(groupId);
+      const existingBlock = existingIndex === undefined ? undefined : blocks[existingIndex];
+
+      if (existingBlock && existingBlock.kind === "cluster") {
+        existingBlock.members.push(group);
+        continue;
+      }
+
+      clusterIndexByGroupId.set(groupId, blocks.length);
+      blocks.push({ kind: "cluster", proposalGroup, members: [group] });
+    }
+
+    return blocks;
+  }, [featureGroups, uncertaintyDoc]);
+
+  /**
    * Builds/refreshes entityToFeatureRef whenever the set of open Cosmo
    * Feature IDs changes (not on every poll -- lastEntityMapKeyRef skips
    * redundant rebuilds when nothing actually changed, since each rebuild
@@ -845,6 +915,46 @@ function ParameterMarkPanelInner() {
     } finally {
       setSaving(false);
     }
+  }
+
+  /** Enter/exit "select cards to group" mode -- always clears any half-made selection. */
+  function toggleGroupSelectMode() {
+    setGroupSelectMode((prev) => !prev);
+    setGroupSelectionIds(new Set());
+  }
+
+  function toggleGroupSelectionMember(featureId: string) {
+    setGroupSelectionIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(featureId)) {
+        next.delete(featureId);
+      } else {
+        next.add(featureId);
+      }
+      return next;
+    });
+  }
+
+  async function createGroupFromSelection() {
+    if (groupSelectionIds.size < 2) return;
+    const name = window.prompt("Name this group:", "Group") ?? undefined;
+    await withSavedDocument((doc) => groupCustomFeatureProposals(doc, Array.from(groupSelectionIds), name));
+    setGroupSelectMode(false);
+    setGroupSelectionIds(new Set());
+  }
+
+  async function handleRenameGroup(group: ProposalGroup) {
+    const name = window.prompt("Rename group:", group.name);
+    if (!name) return;
+    await withSavedDocument((doc) => renameProposalGroup(doc, group.id, name));
+  }
+
+  async function handleUngroup(groupId: string) {
+    await withSavedDocument((doc) => ungroupProposals(doc, groupId));
+  }
+
+  async function handleRemoveFromGroup(featureId: string) {
+    await withSavedDocument((doc) => removeFromProposalGroup(doc, featureId));
   }
 
   /**
@@ -998,6 +1108,134 @@ function ParameterMarkPanelInner() {
     void withSavedDocument((doc) => reopenUncertaintyAnnotation(doc, annotationIdFor(group.featureId)));
   }
 
+  /**
+   * Renders one Cosmo Feature's card -- shared by the standalone-card
+   * path and the grouped-cluster path in the list below, so grouping
+   * never has to duplicate (or drift from) a card's own header/params/
+   * Accept-Reject/discussion-thread logic. `insideGroup` only adds a
+   * "Remove from group" affordance; every other control here works
+   * exactly the same whether or not the card is in a group.
+   */
+  function renderProposalCard(group: FeatureGroup, options?: { insideGroup?: boolean }) {
+    const annotation = findAnnotation(group.featureId);
+    const resolved = annotation?.status === "resolved";
+    const isSelected = selectedFeatureIds.has(group.featureId);
+    const isQuestion = NEEDS_INPUT_COSMO_FEATURE_TYPES.has(group.featureType);
+    const isCheckedForGrouping = groupSelectionIds.has(group.featureId);
+
+    return (
+      <div
+        key={group.featureId}
+        ref={(node) => {
+          if (node) {
+            cardNodesRef.current.set(group.featureId, node);
+          } else {
+            cardNodesRef.current.delete(group.featureId);
+          }
+        }}
+        className={isSelected ? `${styles.proposalCard} ${styles.proposalCardSelected}` : styles.proposalCard}
+      >
+        <div
+          className={styles.proposalHeader}
+          onClick={() => openFeatureDialog(group.featureId)}
+          title="Click to highlight this feature in Onshape"
+        >
+          {groupSelectMode ? (
+            <input
+              type="checkbox"
+              checked={isCheckedForGrouping}
+              onClick={(event) => event.stopPropagation()}
+              onChange={() => toggleGroupSelectionMember(group.featureId)}
+              style={{ marginRight: 6 }}
+            />
+          ) : null}
+          <span className={styles.cardTitle}>{group.featureName}</span>
+          <span className={styles.cardTypeTag}>({group.featureType})</span>
+        </div>
+
+        {group.parameters.map((entry) =>
+          entry.typeName === "BTMParameterBoolean" ? (
+            <DirectionToggleRow
+              key={entry.parameterId}
+              entry={entry}
+              disabled={resolved}
+              onToggle={(next) => void toggleDirection(entry, next)}
+            />
+          ) : (
+            <ParamValueRow
+              key={entry.parameterId}
+              entry={entry}
+              disabled={resolved}
+              onLivePreview={(value) => void livePreviewValue(entry, value)}
+            />
+          ),
+        )}
+
+        <div className={styles.rowActions}>
+          {resolved ? (
+            <>
+              <span className={styles.tagAnswered}>{isQuestion ? "Answered" : "Resolved"}</span>
+              <button
+                type="button"
+                className={styles.secondaryButton}
+                disabled={saving}
+                onClick={() => reopenMark(group)}
+              >
+                Reopen
+              </button>
+            </>
+          ) : (
+            <>
+              <span className={styles.tagProposed}>{isQuestion ? "Needs Input" : "Proposed"}</span>
+              <button
+                type="button"
+                className={styles.acceptButton}
+                disabled={saving}
+                onClick={() => void resolveMark(group)}
+              >
+                {isQuestion ? "Mark Answered" : "Accept"}
+              </button>
+              <button
+                type="button"
+                className={styles.rejectButton}
+                disabled={saving}
+                onClick={() => void rejectMark(group)}
+              >
+                Reject
+              </button>
+            </>
+          )}
+          {options?.insideGroup ? (
+            <button
+              type="button"
+              className={styles.secondaryButton}
+              disabled={saving}
+              onClick={() => void handleRemoveFromGroup(group.featureId)}
+            >
+              Remove from group
+            </button>
+          ) : null}
+        </div>
+
+        <div className={styles.discussionDivider} />
+
+        {annotation ? (
+          <DiscussionThread
+            annotation={annotation}
+            saving={saving}
+            onAddComment={(text) =>
+              withSavedDocument((doc) =>
+                addCustomFeatureProposalComment(doc, annotationIdFor(group.featureId), text),
+              )
+            }
+          />
+        ) : (
+          <div className={styles.commentEmpty}>Registering this proposal...</div>
+        )}
+      </div>
+    );
+  }
+
   if (!context) {
     return (
       <div className={styles.page}>
@@ -1063,13 +1301,34 @@ function ParameterMarkPanelInner() {
       <div className={styles.header}>
         <div className={styles.titleRow}>
           <h1 className={styles.title}>Overall</h1>
-          <button
-            type="button"
-            className={styles.refreshButton}
-            onClick={() => void loadEverything({ manual: true })}
-          >
-            &#8635; Refresh
-          </button>
+          <div style={{ display: "flex", gap: 6 }}>
+            {groupSelectMode && groupSelectionIds.size >= 2 ? (
+              <button
+                type="button"
+                className={styles.acceptButton}
+                disabled={saving}
+                onClick={() => void createGroupFromSelection()}
+              >
+                Group selected ({groupSelectionIds.size})
+              </button>
+            ) : null}
+            {featureGroups.length >= 2 ? (
+              <button
+                type="button"
+                className={styles.secondaryButton}
+                onClick={toggleGroupSelectMode}
+              >
+                {groupSelectMode ? "Cancel" : "Group cards..."}
+              </button>
+            ) : null}
+            <button
+              type="button"
+              className={styles.refreshButton}
+              onClick={() => void loadEverything({ manual: true })}
+            >
+              &#8635; Refresh
+            </button>
+          </div>
         </div>
         <p className={styles.status}>{status}</p>
       </div>
@@ -1081,109 +1340,37 @@ function ParameterMarkPanelInner() {
         </p>
       ) : (
         <div className={styles.proposalList}>
-          {featureGroups.map((group) => {
-            const annotation = findAnnotation(group.featureId);
-            const resolved = annotation?.status === "resolved";
-            const isSelected = selectedFeatureIds.has(group.featureId);
-
-            return (
-              <div
-                key={group.featureId}
-                ref={(node) => {
-                  if (node) {
-                    cardNodesRef.current.set(group.featureId, node);
-                  } else {
-                    cardNodesRef.current.delete(group.featureId);
-                  }
-                }}
-                className={isSelected ? `${styles.proposalCard} ${styles.proposalCardSelected}` : styles.proposalCard}
-              >
-                <div
-                  className={styles.proposalHeader}
-                  onClick={() => openFeatureDialog(group.featureId)}
-                  title="Click to highlight this feature in Onshape"
-                >
-                  <span className={styles.cardTitle}>{group.featureName}</span>
-                  <span className={styles.cardTypeTag}>({group.featureType})</span>
+          {cardRenderBlocks.map((block) =>
+            block.kind === "single" ? (
+              renderProposalCard(block.group)
+            ) : (
+              <div key={block.proposalGroup.id} className={styles.proposalGroupCluster}>
+                <div className={styles.proposalGroupHeader}>
+                  <span className={styles.proposalGroupName}>{block.proposalGroup.name}</span>
+                  <span className={styles.proposalGroupCount}>{block.members.length} cards</span>
+                  <button
+                    type="button"
+                    className={styles.secondaryButton}
+                    disabled={saving}
+                    onClick={() => void handleRenameGroup(block.proposalGroup)}
+                  >
+                    Rename
+                  </button>
+                  <button
+                    type="button"
+                    className={styles.secondaryButton}
+                    disabled={saving}
+                    onClick={() => void handleUngroup(block.proposalGroup.id)}
+                  >
+                    Ungroup
+                  </button>
                 </div>
-
-                {group.parameters.map((entry) =>
-                  entry.typeName === "BTMParameterBoolean" ? (
-                    <DirectionToggleRow
-                      key={entry.parameterId}
-                      entry={entry}
-                      disabled={resolved}
-                      onToggle={(next) => void toggleDirection(entry, next)}
-                    />
-                  ) : (
-                    <ParamValueRow
-                      key={entry.parameterId}
-                      entry={entry}
-                      disabled={resolved}
-                      onLivePreview={(value) => void livePreviewValue(entry, value)}
-                    />
-                  ),
-                )}
-
-                {(() => {
-                  const isQuestion = NEEDS_INPUT_COSMO_FEATURE_TYPES.has(group.featureType);
-                  return (
-                    <div className={styles.rowActions}>
-                      {resolved ? (
-                        <>
-                          <span className={styles.tagAnswered}>{isQuestion ? "Answered" : "Resolved"}</span>
-                          <button
-                            type="button"
-                            className={styles.secondaryButton}
-                            disabled={saving}
-                            onClick={() => reopenMark(group)}
-                          >
-                            Reopen
-                          </button>
-                        </>
-                      ) : (
-                        <>
-                          <span className={styles.tagProposed}>{isQuestion ? "Needs Input" : "Proposed"}</span>
-                          <button
-                            type="button"
-                            className={styles.acceptButton}
-                            disabled={saving}
-                            onClick={() => void resolveMark(group)}
-                          >
-                            {isQuestion ? "Mark Answered" : "Accept"}
-                          </button>
-                          <button
-                            type="button"
-                            className={styles.rejectButton}
-                            disabled={saving}
-                            onClick={() => void rejectMark(group)}
-                          >
-                            Reject
-                          </button>
-                        </>
-                      )}
-                    </div>
-                  );
-                })()}
-
-                <div className={styles.discussionDivider} />
-
-                {annotation ? (
-                  <DiscussionThread
-                    annotation={annotation}
-                    saving={saving}
-                    onAddComment={(text) =>
-                      withSavedDocument((doc) =>
-                        addCustomFeatureProposalComment(doc, annotationIdFor(group.featureId), text),
-                      )
-                    }
-                  />
-                ) : (
-                  <div className={styles.commentEmpty}>Registering this proposal...</div>
-                )}
+                <div className={styles.proposalGroupMembers}>
+                  {block.members.map((member) => renderProposalCard(member, { insideGroup: true }))}
+                </div>
               </div>
-            );
-          })}
+            ),
+          )}
         </div>
       )}
     </div>

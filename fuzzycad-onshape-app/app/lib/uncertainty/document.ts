@@ -11,6 +11,27 @@ export type FuzzyCADUncertaintyDocument = {
   version: "0.1";
   source: FuzzyCADUncertaintySource;
   annotations: FuzzyCADUncertaintyAnnotation[];
+  /**
+   * Optional -- documents saved before proposal grouping existed won't
+   * have this key, so every read defensively falls back to `?? []`
+   * rather than assuming it's present.
+   */
+  groups?: ProposalGroup[];
+};
+
+/**
+ * A lightweight, purely-cosmetic cluster of CustomFeatureProposal cards
+ * that a reviewer has decided belong to the same design intent (e.g.
+ * "lower the support surface" = a Move + a Fillet together). Grouping
+ * does NOT bundle their Accept/Reject/comment behavior -- each member
+ * annotation keeps its own status and is still accepted/rejected
+ * individually; the group is just a shared visual label in the right
+ * panel, nothing more.
+ */
+export type ProposalGroup = {
+  id: string;
+  name: string;
+  createdAt: string;
 };
 
 export type FuzzyCADUncertaintySource = {
@@ -369,6 +390,8 @@ export type CustomFeatureProposalUncertaintyAnnotation = BaseAnnotationFields & 
   featureName: string;
   featureType: string;
   commentThread: FeatureParameterComment[];
+  /** Which ProposalGroup (if any) this card has been clustered into -- see ProposalGroup. */
+  groupId?: string | null;
 };
 
 export type FuzzyCADUncertaintyAnnotation =
@@ -2387,6 +2410,147 @@ export function addCustomFeatureProposalComment(
         commentThread: [...annotation.commentThread, newComment],
         updatedAt: now,
       };
+    }),
+  };
+}
+
+function makeProposalGroupId() {
+  return `group:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
+}
+
+/**
+ * Clusters the given customFeatureProposal cards (by featureId) under a
+ * brand-new ProposalGroup -- purely a shared visual label in the right
+ * panel. Does NOT touch status, does NOT link the underlying
+ * FeatureScript instances in any way, and does NOT change how each
+ * card is accepted/rejected -- that stays entirely per-card. A
+ * featureId with no matching open annotation is silently skipped.
+ */
+export function groupCustomFeatureProposals(
+  document: FuzzyCADUncertaintyDocument,
+  featureIds: string[],
+  name?: string,
+): FuzzyCADUncertaintyDocument {
+  const idSet = new Set(featureIds);
+  if (idSet.size < 2) {
+    return document;
+  }
+
+  const now = new Date().toISOString();
+  const group: ProposalGroup = {
+    id: makeProposalGroupId(),
+    name: name?.trim() || "Group",
+    createdAt: now,
+  };
+
+  return {
+    ...document,
+    groups: [...(document.groups ?? []), group],
+    annotations: document.annotations.map((annotation) => {
+      if (annotation.type !== "customFeatureProposal" || !idSet.has(annotation.featureId)) {
+        return annotation;
+      }
+
+      return {
+        ...annotation,
+        groupId: group.id,
+        updatedAt: now,
+      };
+    }),
+  };
+}
+
+/**
+ * Dissolves a ProposalGroup: every member card goes back to being an
+ * ungrouped, individually-standing proposal. The cards themselves and
+ * their status are untouched.
+ */
+export function ungroupProposals(
+  document: FuzzyCADUncertaintyDocument,
+  groupId: string,
+): FuzzyCADUncertaintyDocument {
+  const now = new Date().toISOString();
+
+  return {
+    ...document,
+    groups: (document.groups ?? []).filter((group) => group.id !== groupId),
+    annotations: document.annotations.map((annotation) => {
+      if (annotation.type !== "customFeatureProposal" || annotation.groupId !== groupId) {
+        return annotation;
+      }
+
+      return {
+        ...annotation,
+        groupId: null,
+        updatedAt: now,
+      };
+    }),
+  };
+}
+
+/** Renames a ProposalGroup's shared label. Empty names are ignored. */
+export function renameProposalGroup(
+  document: FuzzyCADUncertaintyDocument,
+  groupId: string,
+  name: string,
+): FuzzyCADUncertaintyDocument {
+  const trimmed = name.trim();
+  if (!trimmed) {
+    return document;
+  }
+
+  return {
+    ...document,
+    groups: (document.groups ?? []).map((group) =>
+      group.id === groupId ? { ...group, name: trimmed } : group,
+    ),
+  };
+}
+
+/**
+ * Moves a single card back out of whatever group it's in, without
+ * dissolving the group itself (unlike ungroupProposals). If that leaves
+ * the group with 0 or 1 members, the group is dissolved too -- a
+ * "group" of one card isn't meaningful.
+ */
+export function removeFromProposalGroup(
+  document: FuzzyCADUncertaintyDocument,
+  featureId: string,
+): FuzzyCADUncertaintyDocument {
+  const target = document.annotations.find(
+    (annotation): annotation is CustomFeatureProposalUncertaintyAnnotation =>
+      annotation.type === "customFeatureProposal" && annotation.featureId === featureId,
+  );
+  const groupId = target?.groupId;
+  if (!groupId) {
+    return document;
+  }
+
+  const now = new Date().toISOString();
+  const remainingMemberCount = document.annotations.filter(
+    (annotation) =>
+      annotation.type === "customFeatureProposal" &&
+      annotation.groupId === groupId &&
+      annotation.featureId !== featureId,
+  ).length;
+
+  const dissolveGroup = remainingMemberCount < 2;
+
+  return {
+    ...document,
+    groups: dissolveGroup
+      ? (document.groups ?? []).filter((group) => group.id !== groupId)
+      : document.groups,
+    annotations: document.annotations.map((annotation) => {
+      if (annotation.type !== "customFeatureProposal" || annotation.groupId !== groupId) {
+        return annotation;
+      }
+
+      if (annotation.featureId === featureId || dissolveGroup) {
+        return { ...annotation, groupId: null, updatedAt: now };
+      }
+
+      return annotation;
     }),
   };
 }
