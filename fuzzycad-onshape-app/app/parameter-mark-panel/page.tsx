@@ -69,6 +69,7 @@ type FeatureGroup = {
 const COSMO_FEATURE_TYPES = new Set([
   "fuzzycadProposedExtrude",
   "fuzzycadProposedFillet",
+  "fuzzycadProposedChamfer",
   "fuzzycadProposedMove",
   "fuzzycadProposedRotate",
   "fuzzycadProposedScale",
@@ -88,6 +89,7 @@ const COSMO_FEATURE_TYPES = new Set([
  */
 const SELF_STYLING_COSMO_FEATURE_TYPES = new Set([
   "fuzzycadProposedFillet",
+  "fuzzycadProposedChamfer",
   "fuzzycadProposedMove",
   "fuzzycadProposedRotate",
   "fuzzycadProposedScale",
