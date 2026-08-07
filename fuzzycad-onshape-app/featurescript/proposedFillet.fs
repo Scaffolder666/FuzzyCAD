@@ -25,16 +25,19 @@
 //     only to make the copy visually distinguishable for testing), the
 //     real feature duplicates in place so the proposed body sits exactly
 //     where the original's geometry is.
-//   - The original body is left fully opaque and coincident with the
-//     duplicate on purpose for now -- an in-script hide via setVisibility
-//     was tried three times (4-arg, 3-arg with (query, boolean), 3-arg
-//     with (id, map)) and rejected every time, so it's very likely not a
-//     real/importable function under that name in this scope. Visibility
-//     styling for review is being moved back to the right panel's own
-//     REST-based part-appearance mechanism (already confirmed working for
-//     proposedExtrude), which needs to resolve "body" to a partId --
-//     that's the next thing being investigated, not a FeatureScript
-//     change.
+//   - setVisibility (a hide, not a fade) was tried three times (4-arg,
+//     3-arg with (query, boolean), 3-arg with (id, map)) and rejected
+//     every time -- not a real/importable function under that name here.
+//     FeatureScript apparently can't hide arbitrary entities outright,
+//     but it CAN restyle their appearance: setProperty(context, {
+//     "entities": ..., "propertyType": PropertyType.APPEARANCE, "value":
+//     color(r, g, b, alpha) }) is a real documented function (per
+//     Onshape's own FeatureScript reference). Using it here to fade the
+//     ORIGINAL body to near-transparent (not the duplicate) while this
+//     feature exists -- same "tied to the feature's own lifecycle, no
+//     app-side bookkeeping needed" reasoning as the abandoned hide
+//     attempt, just with a real function this time. UNCONFIRMED live --
+//     first real use of setProperty/color() in this codebase.
 
 FeatureScript 3029;
 import(path : "onshape/std/common.fs", version : "3029.0");
@@ -70,5 +73,11 @@ export const fuzzycadProposedFillet = defineFeature(function(context is Context,
         opFillet(context, id + "fillet", {
                 "entities" : matchedEdge,
                 "radius" : definition.radius
+        });
+
+        setProperty(context, {
+                "entities" : definition.body,
+                "propertyType" : PropertyType.APPEARANCE,
+                "value" : color(1, 1, 1, 0.15)
         });
     });
