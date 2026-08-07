@@ -151,6 +151,15 @@ export const fuzzycadNeedsInputMove = defineFeature(function(context is Context,
         const bboxDiagonal = norm(bbox.maxCorner - bbox.minCorner);
         const gestureLength = min(max(bboxDiagonal * 0.25, 8 * millimeter), 40 * millimeter);
 
+        // Reference bounding-box wireframe + W/D/H callouts on the
+        // ORIGINAL body -- purely cosmetic, "look like a professional
+        // engineering drawing" polish, not a proposal about anything.
+        // No fake-precision concern here: the body's own current size is
+        // a real, known fact regardless of what moveX/Y/Z are, so this
+        // draws unconditionally (not gated by any NeedsInput flag).
+        const bboxColor = color(0.45, 0.45, 0.45, 0.7);
+        drawBoundingBoxDimensions(context, id + "bboxDims", bbox, bboxColor);
+
         if (definition.moveXNeedsInput)
         {
             const xDir = (definition.moveX < 0 * meter) ? vector(-1, 0, 0) : vector(1, 0, 0);
@@ -648,6 +657,105 @@ function drawFuzzyDirectionGesture(
             "fontName" : "OpenSans-Regular.ttf",
             "firstCorner" : vector(labelUv[0] - textHeight * 1.5, labelUv[1] + 1.5 * millimeter),
             "secondCorner" : vector(labelUv[0] + textHeight * 1.5, labelUv[1] + 1.5 * millimeter + textHeight)
+    });
+
+    skSolve(labelSketch);
+}
+
+
+
+//////////////////////////////////////////////////////////////////////
+//
+// BOUNDING BOX WIREFRAME + W/D/H DIMENSIONS
+//
+// Purely cosmetic "professional engineering drawing" polish -- draws
+// the 12-edge wireframe of a bounding box plus three dimension labels
+// (width/depth/height along X/Y/Z respectively) at three of its edge
+// midpoints, offset slightly outward so the text doesn't sit on top of
+// the wireframe itself. Uses opFitSpline for each edge (same technique
+// as the hand-drawn strokes elsewhere in this file) rather than sketch
+// line segments, since the 12 edges aren't all coplanar.
+//
+//////////////////////////////////////////////////////////////////////
+
+function drawBoundingBoxDimensions(context is Context, id is Id, bbox is map, wireColor is map)
+{
+    const minC = bbox.minCorner;
+    const maxC = bbox.maxCorner;
+
+    const c000 = vector(minC[0], minC[1], minC[2]);
+    const c100 = vector(maxC[0], minC[1], minC[2]);
+    const c010 = vector(minC[0], maxC[1], minC[2]);
+    const c110 = vector(maxC[0], maxC[1], minC[2]);
+    const c001 = vector(minC[0], minC[1], maxC[2]);
+    const c101 = vector(maxC[0], minC[1], maxC[2]);
+    const c011 = vector(minC[0], maxC[1], maxC[2]);
+    const c111 = vector(maxC[0], maxC[1], maxC[2]);
+
+    const edges = [
+        [c000, c100], [c100, c110], [c110, c010], [c010, c000],
+        [c001, c101], [c101, c111], [c111, c011], [c011, c001],
+        [c000, c001], [c100, c101], [c110, c111], [c010, c011]
+    ];
+
+    var allEdges = qNothing();
+
+    for (var e = 0; e < 12; e += 1)
+    {
+        const edgeId = id + ("bboxEdge" ~ toString(e));
+        opFitSpline(context, edgeId, { "points" : [edges[e][0], edges[e][1]] });
+        allEdges = qUnion(allEdges, qCreatedBy(edgeId, EntityType.BODY));
+    }
+
+    if (!isQueryEmpty(context, allEdges))
+    {
+        opCreateCompositePart(context, id + "bboxComposite", {
+                "bodies" : allEdges,
+                "closed" : false
+        });
+
+        setProperty(context, {
+                "entities" : qCreatedBy(id + "bboxComposite", EntityType.BODY),
+                "propertyType" : PropertyType.APPEARANCE,
+                "value" : wireColor
+        });
+    }
+
+    const width = maxC[0] - minC[0];
+    const depth = maxC[1] - minC[1];
+    const height = maxC[2] - minC[2];
+
+    drawBoxDimensionLabel(context, id + "labelW", (c000 + c100) / 2, vector(0, -1, 0),
+        "W: " ~ toString(round(width / millimeter, 1)) ~ " mm");
+    drawBoxDimensionLabel(context, id + "labelD", (c000 + c010) / 2, vector(-1, 0, 0),
+        "D: " ~ toString(round(depth / millimeter, 1)) ~ " mm");
+    drawBoxDimensionLabel(context, id + "labelH", (c000 + c001) / 2, vector(-1, 0, 0),
+        "H: " ~ toString(round(height / millimeter, 1)) ~ " mm");
+}
+
+function drawBoxDimensionLabel(
+    context is Context,
+    id is Id,
+    edgeMidpoint is Vector,
+    outwardDirection is Vector,
+    labelText is string)
+{
+    const dir = normalize(outwardDirection);
+    const labelPoint = edgeMidpoint + dir * (3 * millimeter);
+
+    const reference = (abs(dir[2]) < 0.9) ? vector(0, 0, 1) : vector(0, 1, 0);
+    const planeNormal = normalize(cross(dir, reference));
+    const labelPlane = plane(labelPoint, planeNormal, dir);
+
+    const labelSketch = newSketchOnPlane(context, id + "labelSketch", { "sketchPlane" : labelPlane });
+    const labelUv = worldToPlane(labelPlane, labelPoint);
+    const textHeight = 2.5 * millimeter;
+
+    skText(labelSketch, "labelText", {
+            "text" : labelText,
+            "fontName" : "OpenSans-Regular.ttf",
+            "firstCorner" : vector(labelUv[0] - textHeight * 1.5, labelUv[1]),
+            "secondCorner" : vector(labelUv[0] + textHeight * 1.5, labelUv[1] + textHeight)
     });
 
     skSolve(labelSketch);
