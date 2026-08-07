@@ -53,6 +53,17 @@
 // true on Accept, which makes this SAME feature instance fillet the
 // REAL edge on the REAL body instead of a throwaway copy -- no separate
 // "apply for real" step, no second feature.
+//
+// Pending-state preview now matches proposedMove.fs's hand-drawn
+// sketchy-wireframe treatment instead of a solid-colored duplicate: the
+// duplicate gets filleted first (so the new rounded edge is captured
+// too, via qOwnedByBody reading its CURRENT edges post-fillet, not just
+// its original topology), a 2-4-stroke hand-drawn overlay is built from
+// those edges, then the duplicate itself is deleted -- only the sketchy
+// strokes remain, avoiding the same "solid body's own edges always
+// render" problem proposedMove.fs hit. handDrawEdgeSketchy/
+// RandomNumberFunction/idToNum/lcprng below are copied verbatim from
+// proposedMove.fs's own confirmed-working versions of the same helpers.
 
 FeatureScript 3029;
 import(path : "onshape/std/common.fs", version : "3029.0");
@@ -117,19 +128,170 @@ export const fuzzycadProposedFillet = defineFeature(function(context is Context,
                 "radius" : definition.radius
         });
 
-        // Fade the original, give the proposal a clearly distinct color --
-        // no-ops silently if "originalBody" already carries a manual
-        // appearance override from the right panel's REST mechanism (see
-        // the KNOWN LIMITATION note above).
+        // Fade the original -- no-ops silently if "originalBody" already
+        // carries a manual appearance override from the right panel's
+        // REST mechanism (see the KNOWN LIMITATION note above).
         setProperty(context, {
                 "entities" : originalBody,
                 "propertyType" : PropertyType.APPEARANCE,
                 "value" : color(0.75, 0.75, 0.75, 0.08)
         });
 
-        setProperty(context, {
-                "entities" : proposedBody,
-                "propertyType" : PropertyType.APPEARANCE,
-                "value" : color(0.25, 0.55, 0.95, 1.0)
+        const chordLength = 3 * millimeter;
+        const variance = 0.5 * millimeter;
+
+        var rnd = RandomNumberFunction(id);
+        var allSketchyStrokes = qNothing();
+        var edgeIndex = 0;
+
+        for (var edgeQuery in evaluateQuery(context, qOwnedByBody(qEverything(EntityType.EDGE), proposedBody)))
+        {
+            const strokes = handDrawEdgeSketchy(
+                    context,
+                    id + ("sketchyEdge" ~ toString(edgeIndex)),
+                    chordLength,
+                    variance,
+                    rnd,
+                    edgeQuery
+            );
+            allSketchyStrokes = qUnion(allSketchyStrokes, strokes);
+            edgeIndex += 1;
+        }
+
+        if (!isQueryEmpty(context, allSketchyStrokes))
+        {
+            opCreateCompositePart(context, id + "sketchyComposite", {
+                    "bodies" : allSketchyStrokes,
+                    "closed" : false
+            });
+
+            setProperty(context, {
+                    "entities" : qCreatedBy(id + "sketchyComposite", EntityType.BODY),
+                    "propertyType" : PropertyType.APPEARANCE,
+                    "value" : color(0.25, 0.55, 0.95, 1.0)
+            });
+        }
+
+        // Remove the temporary filleted duplicate now that its edges have
+        // been sampled into the sketchy strokes -- this is what removes
+        // the solid black CAD edges that setProperty alone can never hide
+        // (Onshape always renders a body's own edges regardless of its
+        // face appearance).
+        opDeleteBodies(context, id + "deleteTemporaryProposal", {
+                "entities" : proposedBody
         });
     });
+
+//////////////////////////////////////////////////////////////////////
+//
+// HAND-DRAWN EDGE (copied verbatim from proposedMove.fs)
+//
+//////////////////////////////////////////////////////////////////////
+
+function handDrawEdgeSketchy(
+    context is Context,
+    id is Id,
+    chordLength is ValueWithUnits,
+    variance is ValueWithUnits,
+    rnd is function,
+    edgeQuery is Query)
+{
+    var edgeLength = evLength(context, { "entities" : edgeQuery });
+    var pointCount = ceil(max(edgeLength / chordLength, 5));
+
+    var tangents = @evEdgeTangentLines(context, {
+            "edge" : edgeQuery,
+            "parameters" : range(0.0, 1.0, pointCount)
+    });
+
+    var rawRandom = rnd() % 100;
+    var numStrokes = 2 + floor(rawRandom / 33);
+
+    var strokesQuery = qNothing();
+
+    for (var strokeIndex = 0; strokeIndex < numStrokes; strokeIndex += 1)
+    {
+        var newPoints = makeArray(pointCount, undefined);
+
+        for (var i = 0; i < pointCount; i += 1)
+        {
+            // .origin already carries length units -- do NOT multiply by meter.
+            var basePt = tangents[i].origin as Vector;
+
+            var s1 = rnd();
+            var s2 = rnd();
+
+            var jitterFactor = 0.5 + ((s2 % 100) / 100.0) * 0.5;
+
+            var offsetX = 2 * ((((s1 + i * 17 + strokeIndex * 29) % 100) / 100.0) - 0.5) * variance * jitterFactor;
+            var offsetY = 2 * ((((s1 + i * 23 + strokeIndex * 37) % 100) / 100.0) - 0.5) * variance * jitterFactor;
+            var offsetZ = 2 * ((((s1 + i * 31 + strokeIndex * 41) % 100) / 100.0) - 0.5) * variance * jitterFactor;
+
+            var perturbed = basePt;
+            perturbed[0] += offsetX;
+            perturbed[1] += offsetY;
+            perturbed[2] += offsetZ;
+
+            newPoints[i] = perturbed;
+        }
+
+        const strokeId = id + ("_stroke" ~ toString(strokeIndex));
+        opFitSpline(context, strokeId, { "points" : newPoints });
+        strokesQuery = qUnion(strokesQuery, qCreatedBy(strokeId, EntityType.BODY));
+    }
+
+    return strokesQuery;
+}
+
+//////////////////////////////////////////////////////////////////////
+//
+// RANDOM NUMBER GENERATOR (copied verbatim from proposedMove.fs)
+//
+//////////////////////////////////////////////////////////////////////
+
+function RandomNumberFunction(id) returns function
+{
+    return lcprng(idToNum(id[0]));
+}
+
+function idToNum(input is string) returns number
+{
+    const chrMap = {
+            'A' : 0, 'B' : 1, 'C' : 2, 'D' : 3, 'E' : 4, 'F' : 5, 'G' : 6,
+            'H' : 7, 'I' : 8, 'J' : 9, 'K' : 10, 'L' : 11, 'M' : 12, 'N' : 13,
+            'O' : 14, 'P' : 15, 'Q' : 16, 'R' : 17, 'S' : 18, 'T' : 19, 'U' : 20,
+            'V' : 21, 'W' : 22, 'X' : 23, 'Y' : 24, 'Z' : 25,
+            'a' : 26, 'b' : 27, 'c' : 28, 'd' : 29, 'e' : 30, 'f' : 31, 'g' : 32,
+            'h' : 33, 'i' : 34, 'j' : 35, 'k' : 36, 'l' : 37, 'm' : 38, 'n' : 39,
+            'o' : 40, 'p' : 41, 'q' : 42, 'r' : 43, 's' : 44, 't' : 45, 'u' : 46,
+            'v' : 47, 'w' : 48, 'x' : 49, 'y' : 50, 'z' : 51,
+            '_' : 99, '-' : 98
+    };
+    var out is string = "";
+    for (var char in splitIntoCharacters(input))
+    {
+        var res = match(char, REGEX_NUMBER);
+        if (res.hasMatch)
+        {
+            out = out ~ toString(res.captures[0]);
+        }
+        else
+        {
+            out = out ~ toString(chrMap[char]);
+        }
+    }
+    return stringToNumber(out) % 100000;
+}
+
+function lcprng(seed is number) returns function
+{
+    const a = 1103515245;
+    const c = 12345;
+    const m = 2^31;
+    var state = new box(seed);
+    return function()
+    {
+        state[] = (a * state[] + c) % m;
+        return state[];
+    };
+}
