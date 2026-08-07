@@ -34,6 +34,16 @@ export const fuzzycadNeedsInputExtrude = defineFeature(function(context is Conte
         annotation { "Name" : "Depth" }
         isLength(definition.depth, LENGTH_BOUNDS);
 
+        // Per-parameter "still open" flag -- unlike Proposed* (the value
+        // is already decided, reviewer just accepts/rejects), a Needs
+        // Input instance may already have a known depth by the time
+        // someone inserts it. Defaults to true (open) and is visible (NOT
+        // ALWAYS_HIDDEN) so the inserter can mark it known instead. Purely
+        // metadata for the right panel's candidate-value UI; does not
+        // affect geometry, which always uses whatever "depth" holds.
+        annotation { "Name" : "Depth needs input", "Default" : true }
+        definition.depthNeedsInput is boolean;
+
         annotation { "Name" : "Opposite direction", "Default" : false }
         definition.oppositeDirection is boolean;
 

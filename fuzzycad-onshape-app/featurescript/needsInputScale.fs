@@ -31,6 +31,17 @@ export const fuzzycadNeedsInputScale = defineFeature(function(context is Context
         annotation { "Name" : "Scale factor" }
         isReal(definition.scaleFactor, POSITIVE_REAL_BOUNDS);
 
+        // Per-parameter "still open" flag -- unlike Proposed* (the value
+        // is already decided, reviewer just accepts/rejects), a Needs
+        // Input instance may already have a known scale factor by the
+        // time someone inserts it. Defaults to true (open) and is visible
+        // (NOT ALWAYS_HIDDEN) so the inserter can mark it known instead.
+        // Purely metadata for the right panel's candidate-value UI; does
+        // not affect geometry, which always uses whatever "scaleFactor"
+        // holds.
+        annotation { "Name" : "Scale factor needs input", "Default" : true }
+        definition.scaleFactorNeedsInput is boolean;
+
         // Controlled internally by the FuzzyCAD right panel.
         // The normal Feature dialog will not show this parameter.
         annotation {

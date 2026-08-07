@@ -40,11 +40,30 @@ export const fuzzycadNeedsInputMove = defineFeature(function(context is Context,
         annotation { "Name" : "Move X" }
         isLength(definition.moveX, LENGTH_BOUNDS);
 
+        // Per-parameter "still open" flags -- unlike Proposed* (every
+        // value is already decided, reviewer just accepts/rejects), a
+        // Needs Input instance can be a MIX of known and unknown values:
+        // whoever inserts it may already know Move X but not Y/Z, for
+        // example. Each flag defaults to true (open) and is visible (NOT
+        // ALWAYS_HIDDEN) so the inserter -- or anyone editing later --
+        // consciously marks which fields are still real open questions.
+        // Purely metadata for the right panel to key its candidate-value
+        // UI off of; does not affect geometry, which always uses
+        // whatever moveX/Y/Z currently holds regardless of these flags.
+        annotation { "Name" : "Move X needs input", "Default" : true }
+        definition.moveXNeedsInput is boolean;
+
         annotation { "Name" : "Move Y" }
         isLength(definition.moveY, LENGTH_BOUNDS);
 
+        annotation { "Name" : "Move Y needs input", "Default" : true }
+        definition.moveYNeedsInput is boolean;
+
         annotation { "Name" : "Move Z" }
         isLength(definition.moveZ, LENGTH_BOUNDS);
+
+        annotation { "Name" : "Move Z needs input", "Default" : true }
+        definition.moveZNeedsInput is boolean;
 
         // Controlled internally by the FuzzyCAD right panel.
         // The normal Feature dialog will not show this parameter.
