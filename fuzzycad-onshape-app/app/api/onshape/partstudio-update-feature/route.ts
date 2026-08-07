@@ -6,10 +6,11 @@ export const runtime = "nodejs";
 type ParameterUpdate = {
   parameterId: string;
   // BTMParameterQuantity uses "expression"; BTMParameterBoolean uses
-  // "value" (true/false), not an expression string -- exactly one should
-  // be set per update, matched to the target parameter's real type.
+  // "value" (true/false); BTMParameterString also uses "value" (a plain
+  // string) -- exactly one field should be set per update, matched to
+  // the target parameter's real type.
   expression?: string;
-  value?: boolean;
+  value?: boolean | string;
 };
 
 type RequestBody = {

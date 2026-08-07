@@ -74,7 +74,20 @@ const COSMO_FEATURE_TYPES = new Set([
   "fuzzycadProposedRotate",
   "fuzzycadProposedScale",
   "fuzzycadProposedHole",
+  "fuzzycadNeedsInput",
 ]);
+
+/**
+ * Cosmo Feature types that represent an open QUESTION rather than a
+ * proposed geometry change -- no duplicate body, nothing to Accept as
+ * "final geometry". Changes the card's tags/labels (Needs Input /
+ * Answered instead of Proposed / Resolved) and which parameter renders
+ * as a read-only prompt vs. an editable answer field. Accept/Reject
+ * still reuse the same generic resolve/delete flow underneath -- Accept
+ * just means "this has been answered", Reject means "never mind, remove
+ * the question".
+ */
+const NEEDS_INPUT_COSMO_FEATURE_TYPES = new Set(["fuzzycadNeedsInput"]);
 
 /**
  * Cosmo Feature types whose own FeatureScript already fades/colors the
@@ -95,6 +108,7 @@ const SELF_STYLING_COSMO_FEATURE_TYPES = new Set([
   "fuzzycadProposedRotate",
   "fuzzycadProposedScale",
   "fuzzycadProposedHole",
+  "fuzzycadNeedsInput",
 ]);
 
 function isValidUncertaintyDocument(value: unknown): value is FuzzyCADUncertaintyDocument {
@@ -313,7 +327,9 @@ function ParameterMarkPanelInner() {
       ? (paramsData.valueParameters as ValueParameterEntry[]).filter(
           (entry) =>
             COSMO_FEATURE_TYPES.has(entry.featureType) &&
-            (entry.typeName === "BTMParameterQuantity" || entry.typeName === "BTMParameterBoolean"),
+            (entry.typeName === "BTMParameterQuantity" ||
+              entry.typeName === "BTMParameterBoolean" ||
+              entry.typeName === "BTMParameterString"),
         )
       : [];
     setParameters(cosmoOnly);
@@ -548,6 +564,23 @@ function ParameterMarkPanelInner() {
     void loadEverything();
   }
 
+  /** Debounced live-patch for a "needs input" question's free-text answer -- same rhythm as ParamValueRow's numeric debounce, just a plain string. */
+  async function updateAnswer(entry: ValueParameterEntry, text: string) {
+    if (!context) return;
+    await updatePartStudioFeatureSuppressed(
+      {
+        documentId: context.documentId,
+        workspaceId: context.workspaceId,
+        partStudioElementId: context.elementId,
+        server: context.server,
+      },
+      {
+        featureId: entry.featureId,
+        parameterUpdates: [{ parameterId: entry.parameterId, value: text }],
+      },
+    );
+  }
+
   /**
    * Accept: confirms the proposal is final and restores its output
    * parts' normal appearance. Does not write into any other feature --
@@ -557,9 +590,10 @@ function ParameterMarkPanelInner() {
    */
   async function resolveMark(group: FeatureGroup) {
     if (!context) return;
-    const confirmed = window.confirm(
-      `Accept "${group.featureName}"? Its geometry stays in the model as final -- this can't be edited again without reopening.`,
-    );
+    const confirmMessage = NEEDS_INPUT_COSMO_FEATURE_TYPES.has(group.featureType)
+      ? `Mark "${group.featureName}" as answered?`
+      : `Accept "${group.featureName}"? Its geometry stays in the model as final -- this can't be edited again without reopening.`;
+    const confirmed = window.confirm(confirmMessage);
     if (!confirmed) return;
 
     if (!SELF_STYLING_COSMO_FEATURE_TYPES.has(group.featureType)) {
@@ -571,9 +605,10 @@ function ParameterMarkPanelInner() {
   /** Reject: deletes the Cosmo Feature outright, discarding its proposed geometry entirely. */
   async function rejectMark(group: FeatureGroup) {
     if (!context) return;
-    const confirmed = window.confirm(
-      `Delete "${group.featureName}"? Its proposed geometry and comments will be lost.`,
-    );
+    const confirmMessage = NEEDS_INPUT_COSMO_FEATURE_TYPES.has(group.featureType)
+      ? `Remove the question "${group.featureName}"? Its comments will be lost.`
+      : `Delete "${group.featureName}"? Its proposed geometry and comments will be lost.`;
+    const confirmed = window.confirm(confirmMessage);
     if (!confirmed) return;
 
     setSaving(true);
@@ -706,6 +741,17 @@ function ParameterMarkPanelInner() {
                       disabled={resolved}
                       onToggle={(next) => void toggleDirection(entry, next)}
                     />
+                  ) : entry.typeName === "BTMParameterString" ? (
+                    entry.parameterId === "question" ? (
+                      <QuestionPromptRow key={entry.parameterId} entry={entry} />
+                    ) : (
+                      <TextAnswerRow
+                        key={entry.parameterId}
+                        entry={entry}
+                        disabled={resolved}
+                        onLivePreview={(text) => void updateAnswer(entry, text)}
+                      />
+                    )
                   ) : (
                     <ParamValueRow
                       key={entry.parameterId}
@@ -716,41 +762,46 @@ function ParameterMarkPanelInner() {
                   ),
                 )}
 
-                <div className={styles.rowActions}>
-                  {resolved ? (
-                    <>
-                      <span className={styles.tagAnswered}>Resolved</span>
-                      <button
-                        type="button"
-                        className={styles.secondaryButton}
-                        disabled={saving}
-                        onClick={() => reopenMark(group)}
-                      >
-                        Reopen
-                      </button>
-                    </>
-                  ) : (
-                    <>
-                      <span className={styles.tagProposed}>Proposed</span>
-                      <button
-                        type="button"
-                        className={styles.acceptButton}
-                        disabled={saving}
-                        onClick={() => void resolveMark(group)}
-                      >
-                        Accept
-                      </button>
-                      <button
-                        type="button"
-                        className={styles.rejectButton}
-                        disabled={saving}
-                        onClick={() => void rejectMark(group)}
-                      >
-                        Reject
-                      </button>
-                    </>
-                  )}
-                </div>
+                {(() => {
+                  const isQuestion = NEEDS_INPUT_COSMO_FEATURE_TYPES.has(group.featureType);
+                  return (
+                    <div className={styles.rowActions}>
+                      {resolved ? (
+                        <>
+                          <span className={styles.tagAnswered}>{isQuestion ? "Answered" : "Resolved"}</span>
+                          <button
+                            type="button"
+                            className={styles.secondaryButton}
+                            disabled={saving}
+                            onClick={() => reopenMark(group)}
+                          >
+                            Reopen
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          <span className={styles.tagProposed}>{isQuestion ? "Needs Input" : "Proposed"}</span>
+                          <button
+                            type="button"
+                            className={styles.acceptButton}
+                            disabled={saving}
+                            onClick={() => void resolveMark(group)}
+                          >
+                            {isQuestion ? "Mark Answered" : "Accept"}
+                          </button>
+                          <button
+                            type="button"
+                            className={styles.rejectButton}
+                            disabled={saving}
+                            onClick={() => void rejectMark(group)}
+                          >
+                            Reject
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  );
+                })()}
 
                 <div className={styles.discussionDivider} />
 
@@ -894,6 +945,57 @@ function DirectionToggleRow({
       >
         {current ? "↓ reversed" : "↑ normal"}
       </button>
+    </div>
+  );
+}
+
+/** Read-only display of a "needs input" feature's question -- set once by whoever inserted the feature in Onshape, never editable from this panel. */
+function QuestionPromptRow({ entry }: { entry: ValueParameterEntry }) {
+  const question = String(entry.message.value ?? "");
+  return (
+    <div className={styles.paramEditRow}>
+      <span className={styles.paramEditLabel}>question</span>
+      <span className={styles.questionText}>{question || "(no question text set)"}</span>
+    </div>
+  );
+}
+
+/** Debounced free-text input for a "needs input" feature's answer -- same rhythm as ParamValueRow, just no numeric parsing. */
+function TextAnswerRow({
+  entry,
+  disabled,
+  onLivePreview,
+}: {
+  entry: ValueParameterEntry;
+  disabled: boolean;
+  onLivePreview: (text: string) => void;
+}) {
+  const [draft, setDraft] = useState(String(entry.message.value ?? ""));
+  const lastPreviewedRef = useRef(draft);
+
+  useEffect(() => {
+    if (disabled || draft === lastPreviewedRef.current) return;
+
+    const timer = setTimeout(() => {
+      lastPreviewedRef.current = draft;
+      onLivePreview(draft);
+    }, 400);
+
+    return () => clearTimeout(timer);
+  }, [draft, disabled, onLivePreview]);
+
+  return (
+    <div className={styles.paramEditRow}>
+      <span className={styles.paramEditLabel}>answer</span>
+      <input
+        type="text"
+        className={styles.valueInput}
+        placeholder="Type your answer..."
+        value={draft}
+        disabled={disabled}
+        onChange={(event) => setDraft(event.target.value)}
+        onClick={(event) => event.stopPropagation()}
+      />
     </div>
   );
 }
