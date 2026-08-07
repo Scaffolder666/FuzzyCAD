@@ -141,6 +141,22 @@ const NEEDS_INPUT_COSMO_FEATURE_TYPES = new Set([
   "fuzzycadNeedsInputHole",
 ]);
 
+/**
+ * Cosmo Feature types whose FeatureScript carries a hidden "accepted"
+ * boolean parameter (UIHint.ALWAYS_HIDDEN -- invisible in Onshape's own
+ * feature dialog, but still a real, patchable parameter over the API,
+ * same as any other). For these, the pending-state body shown in the
+ * viewport (fuzzycadProposedMove: faded original + hand-drawn sketchy
+ * preview + arrows) is NOT the final geometry -- the feature only
+ * performs the real opTransform once accepted flips to true, replacing
+ * its own preview output. Accept/Reopen for these types must patch this
+ * parameter via the API; there's no separate "final geometry" to reveal
+ * the way SELF_STYLING_COSMO_FEATURE_TYPES normally implies (accepting
+ * one of those just leaves its already-final geometry as is). Every
+ * type in this set is necessarily also in SELF_STYLING_COSMO_FEATURE_TYPES.
+ */
+const ACCEPT_VIA_HIDDEN_PARAMETER_COSMO_FEATURE_TYPES = new Set(["fuzzycadProposedMove"]);
+
 function isValidUncertaintyDocument(value: unknown): value is FuzzyCADUncertaintyDocument {
   return (
     !!value &&
@@ -394,7 +410,11 @@ function ParameterMarkPanelInner() {
       ? (paramsData.valueParameters as ValueParameterEntry[]).filter(
           (entry) =>
             COSMO_FEATURE_TYPES.has(entry.featureType) &&
-            (entry.typeName === "BTMParameterQuantity" || entry.typeName === "BTMParameterBoolean"),
+            (entry.typeName === "BTMParameterQuantity" || entry.typeName === "BTMParameterBoolean") &&
+            // "accepted" (see ACCEPT_VIA_HIDDEN_PARAMETER_COSMO_FEATURE_TYPES)
+            // is an internal control flag driven by Accept/Reopen below, not
+            // something to show as an editable checkbox alongside moveX/Y/Z.
+            !(ACCEPT_VIA_HIDDEN_PARAMETER_COSMO_FEATURE_TYPES.has(entry.featureType) && entry.parameterId === "accepted"),
         )
       : [];
     setParameters(cosmoOnly);
@@ -646,6 +666,15 @@ function ParameterMarkPanelInner() {
    * reconciling the tree (e.g. suppressing whatever this is meant to
    * replace) is a manual CAD step for whoever has that judgment, out of
    * scope here.
+   *
+   * For ACCEPT_VIA_HIDDEN_PARAMETER_COSMO_FEATURE_TYPES (fuzzycadProposedMove),
+   * the geometry shown while pending is a preview (faded original +
+   * sketchy strokes + arrows), not the real move -- accepting patches
+   * the feature's own hidden "accepted" boolean to true, which makes
+   * that SAME feature instance regenerate as a real opTransform on the
+   * original body instead. If that patch fails, bail out before marking
+   * resolved locally -- otherwise the panel would show "Resolved" while
+   * the body never actually moved.
    */
   async function resolveMark(group: FeatureGroup) {
     if (!context) return;
@@ -655,10 +684,28 @@ function ParameterMarkPanelInner() {
     const confirmed = window.confirm(confirmMessage);
     if (!confirmed) return;
 
-    if (!SELF_STYLING_COSMO_FEATURE_TYPES.has(group.featureType)) {
+    if (ACCEPT_VIA_HIDDEN_PARAMETER_COSMO_FEATURE_TYPES.has(group.featureType)) {
+      const updateRes = await updatePartStudioFeatureSuppressed(
+        {
+          documentId: context.documentId,
+          workspaceId: context.workspaceId,
+          partStudioElementId: context.elementId,
+          server: context.server,
+        },
+        {
+          featureId: group.featureId,
+          parameterUpdates: [{ parameterId: "accepted", value: true }],
+        },
+      );
+      if (!updateRes.ok) {
+        setStatus(`failed to accept "${group.featureName}" in Onshape (HTTP ${updateRes.status})`);
+        return;
+      }
+    } else if (!SELF_STYLING_COSMO_FEATURE_TYPES.has(group.featureType)) {
       await setCosmoFeatureOutputOpacity(group.featureId, 255);
     }
     await withSavedDocument((doc) => resolveUncertaintyAnnotation(doc, annotationIdFor(group.featureId)));
+    void loadEverything();
   }
 
   /** Reject: deletes the Cosmo Feature outright, discarding its proposed geometry entirely. */
@@ -690,9 +737,31 @@ function ParameterMarkPanelInner() {
     await withSavedDocument((doc) => removeUncertaintyAnnotationById(doc, annotationIdFor(group.featureId)));
   }
 
-  /** Reopens a resolved proposal for further editing -- re-applies the transparent "proposed" appearance. */
+  /**
+   * Reopens a resolved proposal for further editing -- re-applies the
+   * transparent "proposed" appearance. For
+   * ACCEPT_VIA_HIDDEN_PARAMETER_COSMO_FEATURE_TYPES, Accept already
+   * replaced the real body's position via opTransform, so reopening
+   * patches "accepted" back to false, which reverts that same feature
+   * instance to its pending-preview regeneration (faded original +
+   * sketchy strokes + arrows) instead of the moved real body.
+   */
   function reopenMark(group: FeatureGroup) {
-    if (!SELF_STYLING_COSMO_FEATURE_TYPES.has(group.featureType)) {
+    if (!context) return;
+    if (ACCEPT_VIA_HIDDEN_PARAMETER_COSMO_FEATURE_TYPES.has(group.featureType)) {
+      void updatePartStudioFeatureSuppressed(
+        {
+          documentId: context.documentId,
+          workspaceId: context.workspaceId,
+          partStudioElementId: context.elementId,
+          server: context.server,
+        },
+        {
+          featureId: group.featureId,
+          parameterUpdates: [{ parameterId: "accepted", value: false }],
+        },
+      );
+    } else if (!SELF_STYLING_COSMO_FEATURE_TYPES.has(group.featureType)) {
       void setCosmoFeatureOutputOpacity(group.featureId, 0);
     }
     void withSavedDocument((doc) => reopenUncertaintyAnnotation(doc, annotationIdFor(group.featureId)));
