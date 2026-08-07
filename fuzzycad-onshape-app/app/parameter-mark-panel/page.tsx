@@ -1,6 +1,7 @@
 "use client";
 
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import {
   addCustomFeatureProposalComment,
   createEmptyUncertaintyDocument,
@@ -235,6 +236,41 @@ function ParameterMarkPanelInner() {
   // Hammering it further during a known cooldown can't help and risks
   // extending the block, so this is a hard stop, not a suggestion.
   const rateLimitedUntilRef = useRef<number | null>(null);
+  // Onshape-supplied context read straight from the iframe's own URL query
+  // string (Action URL configured with {$documentId}/{$workspaceOrVersionId}/
+  // {$elementId} replacement parameters in the Developer Portal -- confirmed
+  // live: once that's set, this extension type DOES get real per-open
+  // context and DOES start streaming SELECTION messages after a valid
+  // applicationInit, contradicting the earlier localStorage-only
+  // conclusion). Falls back to the existing localStorage mechanism only
+  // when these are genuinely absent (e.g. Action URL not yet updated).
+  const searchParams = useSearchParams();
+  const urlDocumentId = searchParams.get("documentId");
+  const urlWorkspaceId = searchParams.get("workspaceId");
+  const urlElementId = searchParams.get("elementId");
+  const urlServer = searchParams.get("server") || "https://cad.onshape.com";
+  const hasUrlContext = Boolean(urlDocumentId && urlWorkspaceId && urlElementId);
+  // Cosmo Feature IDs currently matching the last SELECTION postMessage --
+  // drives the highlighted-card styling below (the "click geometry in the
+  // viewport, highlight the matching card" half of the Overleaf-style
+  // linking; the other half, card->viewport via openFeatureDialog, already
+  // existed).
+  const [selectedFeatureIds, setSelectedFeatureIds] = useState<Set<string>>(new Set());
+  // entityId (Onshape's short transient selectionId, e.g. "KHNB") ->
+  // featureId, built from partstudio-feature-created-parts's entities
+  // field across every open Cosmo Feature. A ref, not state: it's read
+  // inside the message-event handler, never rendered directly, and
+  // shouldn't itself trigger re-renders when rebuilt.
+  const entityToFeatureRef = useRef<Map<string, string>>(new Map());
+  // Skips rebuilding entityToFeatureRef when the open feature set hasn't
+  // actually changed (e.g. an unrelated 30s poll) -- each rebuild costs 4
+  // FeatureScript evaluations per open feature, and this app has already
+  // hit real Onshape API usage limits once this session from excessive
+  // polling.
+  const lastEntityMapKeyRef = useRef<string>("");
+  // DOM nodes for each proposal card, keyed by featureId, so a SELECTION
+  // match can scrollIntoView the right one.
+  const cardNodesRef = useRef<Map<string, HTMLDivElement>>(new Map());
 
   function extractAppearance(
     data: unknown,
@@ -313,6 +349,49 @@ function ParameterMarkPanelInner() {
   }
 
   useEffect(() => {
+    function applyUrlContext() {
+      const override = readRightPanelElementOverride(urlDocumentId!, urlWorkspaceId!);
+      const urlContext: SharedOnshapeContext = {
+        documentId: urlDocumentId!,
+        workspaceId: urlWorkspaceId!,
+        elementId: override ?? urlElementId!,
+        server: urlServer,
+        updatedAt: Date.now(),
+      };
+      setContext(urlContext);
+    }
+
+    if (hasUrlContext) {
+      applyUrlContext();
+
+      // Registers this panel instance with Onshape's client -- per the
+      // official element-right-panel messaging docs, Onshape only starts
+      // streaming SELECTION postMessages "once a valid applicationInit
+      // message is received", where "valid" requires real documentId/
+      // workspaceId/elementId (confirmed live: sending this with the
+      // Action-URL-supplied values started a real SELECTION stream on the
+      // very next viewport click). Sent once per mount with the URL's own
+      // elementId (not the override) -- Onshape's own selection stream is
+      // tied to whatever Part Studio is actually open in the main tab, not
+      // to which one this panel's dropdown happens to be pointed at.
+      window.parent.postMessage(
+        {
+          documentId: urlDocumentId,
+          workspaceId: urlWorkspaceId,
+          elementId: urlElementId,
+          messageName: "applicationInit",
+        },
+        urlServer,
+      );
+      return;
+    }
+
+    // Fallback for when the Action URL hasn't been updated with the
+    // {$documentId}/{$workspaceOrVersionId}/{$elementId} replacement
+    // parameters yet -- see onshapeRightPanelContext.ts. No SELECTION
+    // stream is possible on this path (no applicationInit was sent), so
+    // click-to-highlight silently does nothing until the Action URL is
+    // fixed; everything else still works off localStorage as before.
     function applyStoredContext() {
       const stored = readSharedOnshapeContext();
       if (stored) {
@@ -331,7 +410,40 @@ function ParameterMarkPanelInner() {
 
     window.addEventListener("storage", handleStorage);
     return () => window.removeEventListener("storage", handleStorage);
-  }, []);
+  }, [hasUrlContext, urlDocumentId, urlWorkspaceId, urlElementId, urlServer]);
+
+  /**
+   * Listens for Onshape's SELECTION postMessage (confirmed live shape:
+   * {"messageName":"SELECTION","selections":[{"selectionType":"ENTITY",
+   * "selectionId":"KHNB","entityType":"EDGE","workspaceMicroversionId":...}
+   * ,...]}) and maps each selectionId to whichever Cosmo Feature created
+   * it, via entityToFeatureRef (built below). Multiple simultaneous
+   * matches (multi-select) all get highlighted, not just the first.
+   */
+  useEffect(() => {
+    if (!hasUrlContext) return;
+
+    function handleMessage(event: MessageEvent) {
+      if (urlServer && event.origin !== urlServer) return;
+      if (event.data?.messageName !== "SELECTION") return;
+
+      const selections = event.data?.selections;
+      if (!Array.isArray(selections)) return;
+
+      const matched = new Set<string>();
+      for (const selection of selections) {
+        const selectionId = selection?.selectionId;
+        if (typeof selectionId !== "string") continue;
+        const featureId = entityToFeatureRef.current.get(selectionId);
+        if (featureId) matched.add(featureId);
+      }
+
+      setSelectedFeatureIds(matched);
+    }
+
+    window.addEventListener("message", handleMessage);
+    return () => window.removeEventListener("message", handleMessage);
+  }, [hasUrlContext, urlServer]);
 
   useEffect(() => {
     if (!context) {
@@ -570,6 +682,77 @@ function ParameterMarkPanelInner() {
     }
     return Array.from(byFeature.values());
   }, [parameters]);
+
+  /**
+   * Builds/refreshes entityToFeatureRef whenever the set of open Cosmo
+   * Feature IDs changes (not on every poll -- lastEntityMapKeyRef skips
+   * redundant rebuilds when nothing actually changed, since each rebuild
+   * costs 4 FeatureScript evaluations per open feature and this app has
+   * already hit real Onshape API usage limits once this session).
+   */
+  useEffect(() => {
+    if (!context || featureGroups.length === 0) {
+      entityToFeatureRef.current = new Map();
+      lastEntityMapKeyRef.current = "";
+      return;
+    }
+
+    const key = featureGroups
+      .map((group) => group.featureId)
+      .sort()
+      .join(",");
+    if (key === lastEntityMapKeyRef.current) return;
+    lastEntityMapKeyRef.current = key;
+
+    let cancelled = false;
+
+    async function buildEntityMap() {
+      const next = new Map<string, string>();
+
+      await Promise.all(
+        featureGroups.map(async (group) => {
+          const res = await fetchFeatureCreatedPartIds({
+            documentId: context!.documentId,
+            workspaceId: context!.workspaceId,
+            partStudioElementId: context!.elementId,
+            server: context!.server,
+            featureId: group.featureId,
+          });
+          if (!res.ok) return;
+
+          const entities = (res as Record<string, unknown>).entities;
+          if (!entities || typeof entities !== "object") return;
+
+          for (const ids of Object.values(entities as Record<string, unknown>)) {
+            if (!Array.isArray(ids)) continue;
+            for (const id of ids) {
+              if (typeof id === "string") {
+                next.set(id, group.featureId);
+              }
+            }
+          }
+        }),
+      );
+
+      if (!cancelled) {
+        entityToFeatureRef.current = next;
+      }
+    }
+
+    void buildEntityMap();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [context, featureGroups]);
+
+  /** Scrolls the first SELECTION-matched card into view. */
+  useEffect(() => {
+    if (selectedFeatureIds.size === 0) return;
+    const firstId = selectedFeatureIds.values().next().value;
+    const node = firstId ? cardNodesRef.current.get(firstId) : undefined;
+    node?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [selectedFeatureIds]);
 
   /**
    * Asks Onshape's own UI to open its native feature edit dialog -- the
@@ -867,9 +1050,20 @@ function ParameterMarkPanelInner() {
           {featureGroups.map((group) => {
             const annotation = findAnnotation(group.featureId);
             const resolved = annotation?.status === "resolved";
+            const isSelected = selectedFeatureIds.has(group.featureId);
 
             return (
-              <div key={group.featureId} className={styles.proposalCard}>
+              <div
+                key={group.featureId}
+                ref={(node) => {
+                  if (node) {
+                    cardNodesRef.current.set(group.featureId, node);
+                  } else {
+                    cardNodesRef.current.delete(group.featureId);
+                  }
+                }}
+                className={isSelected ? `${styles.proposalCard} ${styles.proposalCardSelected}` : styles.proposalCard}
+              >
                 <div
                   className={styles.proposalHeader}
                   onClick={() => openFeatureDialog(group.featureId)}
