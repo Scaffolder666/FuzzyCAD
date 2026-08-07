@@ -56,6 +56,19 @@ export const fuzzycadProposedFillet = defineFeature(function(context is Context,
         isLength(definition.radius, LENGTH_BOUNDS);
     }
     {
+        // setProperty moved to BEFORE opPattern/opFillet run: the first
+        // attempt (after both ops) compiled and ran with no error, but had
+        // no visible effect -- likely because definition.body's Query had
+        // gone stale/empty by that point (the ops that follow re-derive
+        // geometry off it, may invalidate the original resolution).
+        // Applying it first, while definition.body still resolves against
+        // the untouched original, should avoid that.
+        setProperty(context, {
+                "entities" : definition.body,
+                "propertyType" : PropertyType.APPEARANCE,
+                "value" : color(1, 1, 1, 0.15)
+        });
+
         opPattern(context, id + "duplicate", {
                 "entities" : definition.body,
                 "transforms" : [transform(vector(0, 0, 0) * meter)],
@@ -73,11 +86,5 @@ export const fuzzycadProposedFillet = defineFeature(function(context is Context,
         opFillet(context, id + "fillet", {
                 "entities" : matchedEdge,
                 "radius" : definition.radius
-        });
-
-        setProperty(context, {
-                "entities" : definition.body,
-                "propertyType" : PropertyType.APPEARANCE,
-                "value" : color(1, 1, 1, 0.15)
         });
     });
