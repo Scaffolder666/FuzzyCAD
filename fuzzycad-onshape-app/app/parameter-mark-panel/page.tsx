@@ -57,10 +57,12 @@ type FeatureGroup = {
 /**
  * Cosmo Feature types this panel knows how to review -- FeatureScript
  * custom features published for FuzzyCAD's tracked-changes workflow.
- * "fuzzycadProposedExtrude" is the only one built so far; Fillet/Boolean/
- * Move/Rotate/Scale land here once their own custom features exist.
+ * Boolean/Move/Rotate/Scale land here once their own custom features
+ * exist; the panel needs no other feature-type-specific code since it
+ * just reads whatever Quantity/Boolean parameters each type happens to
+ * expose.
  */
-const COSMO_FEATURE_TYPES = new Set(["fuzzycadProposedExtrude"]);
+const COSMO_FEATURE_TYPES = new Set(["fuzzycadProposedExtrude", "fuzzycadProposedFillet"]);
 
 function isValidUncertaintyDocument(value: unknown): value is FuzzyCADUncertaintyDocument {
   return (
