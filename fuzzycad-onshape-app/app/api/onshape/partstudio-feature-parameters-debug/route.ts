@@ -119,6 +119,10 @@ export async function GET(req: NextRequest) {
       endpoint: featuresEndpoint,
       status: featuresRes.status,
       ok: featuresRes.ok,
+      // Onshape's own 429 response tells us exactly how long to back off
+      // (confirmed live) -- surfaced so the panel can show a real
+      // countdown instead of a vague "try again shortly".
+      retryAfter: featuresRes.headers.get("Retry-After"),
       featureCount: features.length,
       valueParameterCount: valueParameters.length,
       valueParameters,

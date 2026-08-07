@@ -414,7 +414,9 @@ function ParameterMarkPanelInner() {
       upstreamOk
         ? "ready"
         : upstreamStatus === 429
-          ? "Onshape is rate-limiting this document (HTTP 429) -- results below may be incomplete until it clears, try Refresh again shortly"
+          ? `Onshape is rate-limiting this document (HTTP 429)${
+              paramsData.retryAfter ? ` -- retry after ~${paramsData.retryAfter}s` : ""
+            } -- results below may be incomplete until it clears`
           : `error loading parameters from Onshape (HTTP ${upstreamStatus})`,
     );
 
