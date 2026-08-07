@@ -64,6 +64,18 @@
 // render" problem proposedMove.fs hit. handDrawEdgeSketchy/
 // RandomNumberFunction/idToNum/lcprng below are copied verbatim from
 // proposedMove.fs's own confirmed-working versions of the same helpers.
+//
+// Radius dimension arrow: drawDimensionArrow() is proposedMove.fs's
+// drawAxisArrow() generalized to take a prebuilt label string. Its
+// direction is NOT the true fillet-cut bisector (that would need the
+// two adjacent faces' normals, via a qAdjacent(edge, ..., EntityType.
+// FACE) call whose exact argument shape isn't confirmed anywhere in
+// this codebase yet) -- instead it points along an arbitrary-but-
+// deterministic direction perpendicular to the edge's own tangent
+// (edge tangent × world Z, or × world Y if the edge is nearly vertical,
+// same "avoid a degenerate cross product" trick used elsewhere). Close
+// enough to "point away from the edge" to read as a radius callout
+// without a new unconfirmed API guess.
 
 FeatureScript 3029;
 import(path : "onshape/std/common.fs", version : "3029.0");
@@ -115,10 +127,11 @@ export const fuzzycadProposedFillet = defineFeature(function(context is Context,
 
         const proposedBody = qCreatedBy(id + "duplicate", EntityType.BODY);
 
-        const midpoint = evEdgeTangentLine(context, {
+        const edgeMidLine = evEdgeTangentLine(context, {
                 "edge" : definition.edge,
                 "parameter" : 0.5
-        }).origin;
+        });
+        const midpoint = edgeMidLine.origin;
 
         const copiedEdges = qCreatedBy(id + "duplicate", EntityType.EDGE);
         const matchedEdge = qClosestTo(copiedEdges, midpoint);
@@ -172,6 +185,20 @@ export const fuzzycadProposedFillet = defineFeature(function(context is Context,
             });
         }
 
+        const tangentDir = edgeMidLine.direction;
+        const perpReference = (abs(tangentDir[2]) < 0.9) ? vector(0, 0, 1) : vector(0, 1, 0);
+        const radiusDir = normalize(cross(tangentDir, perpReference));
+        const dimensionColor = color(0.25, 0.55, 0.95, 1.0);
+
+        drawDimensionArrow(
+                context,
+                id + "radiusArrow",
+                midpoint,
+                radiusDir * definition.radius,
+                "R: " ~ toString(round(definition.radius / millimeter, 1)) ~ " mm",
+                dimensionColor
+        );
+
         // Remove the temporary filleted duplicate now that its edges have
         // been sampled into the sketchy strokes -- this is what removes
         // the solid black CAD edges that setProperty alone can never hide
@@ -181,6 +208,106 @@ export const fuzzycadProposedFillet = defineFeature(function(context is Context,
                 "entities" : proposedBody
         });
     });
+
+//////////////////////////////////////////////////////////////////////
+//
+// FILLED DIMENSION ARROW (proposedMove.fs's drawAxisArrow, generalized
+// to take a prebuilt label string instead of an axis name + auto-built
+// "X: N mm" text -- everything else, including the STILL-UNCONFIRMED-
+// LIVE filled-2D-arrow-via-opExtractSurface construction, is unchanged)
+//
+//////////////////////////////////////////////////////////////////////
+
+function drawDimensionArrow(
+    context is Context,
+    id is Id,
+    start is Vector,
+    axisOffset is Vector,
+    labelText is string,
+    arrowColor is map)
+{
+    const distance = norm(axisOffset);
+    const distanceMm = distance / millimeter;
+
+    if (distanceMm < 0.001)
+    {
+        return;
+    }
+
+    const direction = normalize(axisOffset);
+
+    const reference = (abs(direction[2]) < 0.9) ? vector(0, 0, 1) : vector(0, 1, 0);
+    const planeNormal = normalize(cross(direction, reference));
+    const arrowPlane = plane(start, planeNormal, direction);
+
+    const shaftWidth = min(max(distanceMm * 0.09, 1.0), 3.5) * millimeter;
+    const headLength = min(distanceMm * 0.45, 12) * millimeter;
+    const headWidth = shaftWidth * 4;
+
+    const arrowSketch = newSketchOnPlane(context, id + "arrowSketch", { "sketchPlane" : arrowPlane });
+
+    skLineSegment(arrowSketch, "headUpper", {
+            "start" : vector(distance, 0 * meter),
+            "end" : vector(distance - headLength, headWidth / 2)
+    });
+    skLineSegment(arrowSketch, "headLower", {
+            "start" : vector(distance, 0 * meter),
+            "end" : vector(distance - headLength, -headWidth / 2)
+    });
+    skLineSegment(arrowSketch, "headUpperTransition", {
+            "start" : vector(distance - headLength, headWidth / 2),
+            "end" : vector(distance - headLength, shaftWidth / 2)
+    });
+    skLineSegment(arrowSketch, "headLowerTransition", {
+            "start" : vector(distance - headLength, -headWidth / 2),
+            "end" : vector(distance - headLength, -shaftWidth / 2)
+    });
+    skLineSegment(arrowSketch, "shaftUpper", {
+            "start" : vector(distance - headLength, shaftWidth / 2),
+            "end" : vector(0 * meter, shaftWidth / 2)
+    });
+    skLineSegment(arrowSketch, "shaftLower", {
+            "start" : vector(distance - headLength, -shaftWidth / 2),
+            "end" : vector(0 * meter, -shaftWidth / 2)
+    });
+    skLineSegment(arrowSketch, "shaftBack", {
+            "start" : vector(0 * meter, shaftWidth / 2),
+            "end" : vector(0 * meter, -shaftWidth / 2)
+    });
+
+    skSolve(arrowSketch);
+
+    opExtractSurface(context, id + "arrowSurface", {
+            "faces" : qSketchRegion(id + "arrowSketch"),
+            "offset" : 0 * meter,
+            "useFacesAroundToTrimOffset" : false
+    });
+
+    opDeleteBodies(context, id + "deleteArrowSketch", {
+            "entities" : qCreatedBy(id + "arrowSketch")
+    });
+
+    setProperty(context, {
+            "entities" : qCreatedBy(id + "arrowSurface", EntityType.BODY),
+            "propertyType" : PropertyType.APPEARANCE,
+            "value" : arrowColor
+    });
+
+    const midPoint = start + axisOffset / 2;
+    const labelSketch = newSketchOnPlane(context, id + "labelSketch", { "sketchPlane" : arrowPlane });
+    const labelUv = worldToPlane(arrowPlane, midPoint);
+    const labelOffset = headWidth / 2 + 1.5 * millimeter;
+    const textHeight = 2.5 * millimeter;
+
+    skText(labelSketch, "labelText", {
+            "text" : labelText,
+            "fontName" : "OpenSans-Regular.ttf",
+            "firstCorner" : vector(labelUv[0] - textHeight * 1.5, labelUv[1] + labelOffset),
+            "secondCorner" : vector(labelUv[0] + textHeight * 1.5, labelUv[1] + labelOffset + textHeight)
+    });
+
+    skSolve(labelSketch);
+}
 
 //////////////////////////////////////////////////////////////////////
 //
