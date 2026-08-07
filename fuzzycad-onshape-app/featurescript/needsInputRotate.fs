@@ -27,7 +27,7 @@ export const fuzzycadNeedsInputRotate = defineFeature(function(context is Contex
         definition.axis is Query;
 
         annotation { "Name" : "Angle" }
-        isAngle(definition.angle, ANGLE_BOUNDS);
+        isAngle(definition.angle, ANGLE_360_BOUNDS);
     }
     {
         const originalBody = definition.body;

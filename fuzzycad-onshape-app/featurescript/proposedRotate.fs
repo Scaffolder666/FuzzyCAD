@@ -16,11 +16,11 @@
 //      rotation Transform. Not confirmed. This is the single biggest
 //      risk in this file; if it doesn't compile, paste the exact error
 //      and I'll adjust from there rather than guessing again blind.
-//   4. isAngle(definition.angle, ANGLE_BOUNDS) -- guessed by analogy
-//      with isLength(..., LENGTH_BOUNDS), which IS confirmed working for
-//      Extrude's depth and Fillet's radius. The bound constant name
-//      (ANGLE_BOUNDS) is the guessed part; LENGTH_BOUNDS's real name
-//      being confirmed doesn't guarantee this one's spelling.
+//   4. isAngle(definition.angle, ANGLE_360_BOUNDS) -- ANGLE_BOUNDS
+//      (v1's guess) was confirmed dead live ("Variable ANGLE_BOUNDS not
+//      found"). Web research (Onshape forum examples, e.g. a simple
+//      rotation feature using "isAngle(definition.angle,
+//      ANGLE_360_BOUNDS);") turned up the real constant name.
 //
 // Same appearance-styling approach and same known REST-override
 // limitation as proposedFillet.fs/proposedMove.fs.
@@ -39,7 +39,7 @@ export const fuzzycadProposedRotate = defineFeature(function(context is Context,
         definition.axis is Query;
 
         annotation { "Name" : "Angle" }
-        isAngle(definition.angle, ANGLE_BOUNDS);
+        isAngle(definition.angle, ANGLE_360_BOUNDS);
     }
     {
         const originalBody = definition.body;
