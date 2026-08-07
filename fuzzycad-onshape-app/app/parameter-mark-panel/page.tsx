@@ -64,6 +64,19 @@ type FeatureGroup = {
  */
 const COSMO_FEATURE_TYPES = new Set(["fuzzycadProposedExtrude", "fuzzycadProposedFillet"]);
 
+/**
+ * Cosmo Feature types whose own FeatureScript already fades/colors the
+ * relevant bodies via setProperty (confirmed live for
+ * fuzzycadProposedFillet: fades the original body it duplicated, colors
+ * the proposal). The right panel must NOT also apply its REST-based
+ * part-appearance opacity toggling to these -- confirmed live that a
+ * manual REST appearance override on a part blocks FeatureScript's own
+ * setProperty from visibly taking effect on it, so double-styling a
+ * self-styling type would just leave it stuck at whatever opacity the
+ * REST call last set, silently overriding the feature's own styling.
+ */
+const SELF_STYLING_COSMO_FEATURE_TYPES = new Set(["fuzzycadProposedFillet"]);
+
 function isValidUncertaintyDocument(value: unknown): value is FuzzyCADUncertaintyDocument {
   return (
     !!value &&
@@ -330,7 +343,7 @@ function ParameterMarkPanelInner() {
           annotation.id === makeCustomFeatureProposalAnnotationId(found.featureId) &&
           annotation.type === "customFeatureProposal",
       );
-      if (annotation && annotation.status === "open") {
+      if (annotation && annotation.status === "open" && !SELF_STYLING_COSMO_FEATURE_TYPES.has(found.featureType)) {
         void setCosmoFeatureOutputOpacity(found.featureId, 0);
       }
     }
@@ -529,7 +542,9 @@ function ParameterMarkPanelInner() {
     );
     if (!confirmed) return;
 
-    await setCosmoFeatureOutputOpacity(group.featureId, 255);
+    if (!SELF_STYLING_COSMO_FEATURE_TYPES.has(group.featureType)) {
+      await setCosmoFeatureOutputOpacity(group.featureId, 255);
+    }
     await withSavedDocument((doc) => resolveUncertaintyAnnotation(doc, annotationIdFor(group.featureId)));
   }
 
@@ -563,7 +578,9 @@ function ParameterMarkPanelInner() {
 
   /** Reopens a resolved proposal for further editing -- re-applies the transparent "proposed" appearance. */
   function reopenMark(group: FeatureGroup) {
-    void setCosmoFeatureOutputOpacity(group.featureId, 0);
+    if (!SELF_STYLING_COSMO_FEATURE_TYPES.has(group.featureType)) {
+      void setCosmoFeatureOutputOpacity(group.featureId, 0);
+    }
     void withSavedDocument((doc) => reopenUncertaintyAnnotation(doc, annotationIdFor(group.featureId)));
   }
 
