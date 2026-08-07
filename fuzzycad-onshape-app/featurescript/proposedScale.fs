@@ -1,37 +1,36 @@
-// FuzzyCAD "Proposed Scale" custom feature -- DRAFT, not yet compiled.
-// The riskiest of the three requested (Move/Rotate/Scale): scaling is
-// NOT a rigid transform (it doesn't preserve distances), so it almost
-// certainly can't reuse the opPattern-with-a-Transform trick that Move
-// and Rotate both lean on (Transform values throughout this codebase's
-// confirmed usage -- opPattern, opTransform -- have only ever carried
-// translation/rotation). Scale most likely needs its own dedicated op,
-// applied to a duplicate made the same way Fillet does it (zero-offset
-// opPattern first, then operate on the copy).
+// FuzzyCAD "Proposed Scale" custom feature -- DRAFT v2, not yet
+// compiled. v1 guessed a dedicated opScale(context, id, definition) op,
+// which the compiler rejected outright ("Function opScale with 3
+// argument(s) not found") -- confirmed dead end.
 //
-// UNCONFIRMED pieces, most likely to need fixing, roughly in order of
-// how likely each is to be wrong:
-//   1. opScale(context, id, definition) -- guessed function name/shape,
-//      by analogy with opFillet/opBoolean/opExtrude all taking
-//      (context, id, {"entities": ..., ...op-specific keys}). Onshape's
-//      native Scale feature must call SOMETHING like this, but the exact
-//      name is not confirmed.
-//   2. "scalePoint" / "scale" -- guessed key names for opScale's
-//      definition map (the pivot point to scale about, and the scale
-//      factor itself).
-//   3. evVertexPoint(context, {"vertex": ...}) -- guessed function for
-//      turning a picked VERTEX into a Point, by analogy with
-//      evEdgeTangentLine's confirmed {"edge": ...} shape. Not confirmed
-//      whether this is the real name, or whether it returns a Point
-//      directly vs. a record with a nested field.
-//   4. isReal(definition.scaleFactor, REAL_BOUNDS) -- guessed by analogy
-//      with isLength(..., LENGTH_BOUNDS) (confirmed working elsewhere),
-//      but a unitless scale factor may need a different function/bound
-//      constant entirely -- this is a real risk, not just a naming
-//      detail.
+// Web research (Onshape's own FsDoc + forum posts) turned up two
+// corrections:
+//   1. opPattern's "transforms" do NOT have to be rigid (quoting
+//      Onshape's own docs) -- scaling can go through the SAME
+//      opPattern-with-a-Transform trick Move/Rotate already use,
+//      confirmed live for both. No separate scale op needed at all.
+//   2. A scaling Transform is built as transform(matrix, point) --
+//      found a real example: "transform(identityMatrix(3) * scale,
+//      fixedPoint)" (uniform scale about a point). identityMatrix(3)
+//      presumably returns a 3x3 identity Matrix; multiplying by a plain
+//      number scales it uniformly.
+//   3. REAL_BOUNDS isn't real either (confirmed live: "Variable
+//      REAL_BOUNDS not found"). Found real examples of
+//      POSITIVE_REAL_BOUNDS used for isReal(...) elsewhere (e.g. color
+//      channel values) -- a natural fit for a scale factor too, since
+//      scale should never be zero or negative.
 //
-// Given how much here is unconfirmed, expect this one to need the most
-// rounds of "paste the exact compiler error, get a fix" -- same loop as
-// every other genuinely new FeatureScript call this session.
+// Still UNCONFIRMED, none of this web research is a substitute for the
+// compiler actually accepting it:
+//   1. identityMatrix(3) -- guessed function name for a 3x3 identity
+//      matrix constructor, found referenced but not the exact call
+//      shape confirmed.
+//   2. transform(matrix, point) -- guessed 2-arg overload shape (matrix
+//      first, point second) by analogy with the "transform(identityMatrix(3)
+//      * scale, fixedPoint)" example found online, not from this
+//      codebase's own confirmed usage.
+//   3. evVertexPoint(context, {"vertex": ...}) -- same guess as v1,
+//      unconfirmed.
 //
 // Same appearance-styling approach and same known REST-override
 // limitation as proposedFillet.fs/proposedMove.fs/proposedRotate.fs.
@@ -50,26 +49,20 @@ export const fuzzycadProposedScale = defineFeature(function(context is Context, 
         definition.originPoint is Query;
 
         annotation { "Name" : "Scale factor" }
-        isReal(definition.scaleFactor, REAL_BOUNDS);
+        isReal(definition.scaleFactor, POSITIVE_REAL_BOUNDS);
     }
     {
         const originalBody = definition.body;
 
+        const pivot = evVertexPoint(context, { "vertex" : definition.originPoint });
+
         opPattern(context, id + "duplicate", {
                 "entities" : originalBody,
-                "transforms" : [transform(vector(0, 0, 0) * meter)],
+                "transforms" : [transform(identityMatrix(3) * definition.scaleFactor, pivot)],
                 "instanceNames" : ["proposed"]
         });
 
         const proposedBody = qCreatedBy(id + "duplicate", EntityType.BODY);
-
-        const pivot = evVertexPoint(context, { "vertex" : definition.originPoint });
-
-        opScale(context, id + "scale", {
-                "entities" : proposedBody,
-                "scalePoint" : pivot,
-                "scale" : definition.scaleFactor
-        });
 
         setProperty(context, {
                 "entities" : originalBody,

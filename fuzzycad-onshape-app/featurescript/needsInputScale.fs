@@ -2,12 +2,14 @@
 // proposedScale.fs, a separate Cosmo Feature type -- see
 // needsInputExtrude.fs's header comment for the full rationale.
 //
-// Geometry logic copied verbatim from proposedScale.fs, which is the
-// highest-risk/still-UNCONFIRMED file in this whole set (opScale,
-// evVertexPoint, isReal/REAL_BOUNDS are all guesses) -- test
-// proposedScale.fs first; once that compiles, this sibling should too
-// since the only difference is the final appearance styling
-// (edges-only-outline instead of a filled duplicate).
+// Geometry logic copied verbatim from proposedScale.fs v2, which
+// dropped the dead-end opScale guess in favor of opPattern with a
+// scaling Transform (transform(identityMatrix(3) * scale, point)) --
+// see proposedScale.fs's header for the full research trail and what's
+// still unconfirmed there. Test proposedScale.fs first; once that
+// compiles, this sibling should too since the only difference is the
+// final appearance styling (edges-only-outline instead of a filled
+// duplicate).
 //
 // "Scale factor" starts at whatever placeholder value (e.g. 1, meaning
 // no change yet) whoever inserts this leaves it at -- someone else
@@ -28,25 +30,17 @@ export const fuzzycadNeedsInputScale = defineFeature(function(context is Context
         definition.originPoint is Query;
 
         annotation { "Name" : "Scale factor" }
-        isReal(definition.scaleFactor, REAL_BOUNDS);
+        isReal(definition.scaleFactor, POSITIVE_REAL_BOUNDS);
     }
     {
         const originalBody = definition.body;
 
-        opPattern(context, id + "duplicate", {
-                "entities" : originalBody,
-                "transforms" : [transform(vector(0, 0, 0) * meter)],
-                "instanceNames" : ["proposed"]
-        });
-
-        const proposedBody = qCreatedBy(id + "duplicate", EntityType.BODY);
-
         const pivot = evVertexPoint(context, { "vertex" : definition.originPoint });
 
-        opScale(context, id + "scale", {
-                "entities" : proposedBody,
-                "scalePoint" : pivot,
-                "scale" : definition.scaleFactor
+        opPattern(context, id + "duplicate", {
+                "entities" : originalBody,
+                "transforms" : [transform(identityMatrix(3) * definition.scaleFactor, pivot)],
+                "instanceNames" : ["proposed"]
         });
 
         setProperty(context, {
