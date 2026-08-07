@@ -244,108 +244,120 @@ function ParameterMarkPanelInner() {
     };
   }, [context]);
 
+  /**
+   * Scans the Part Studio for Cosmo Feature proposals and syncs our
+   * tracking document -- called on mount/Part Studio switch, on an
+   * interval so newly-inserted proposals show up without a manual
+   * reopen, and from the header's Refresh button for an immediate check.
+   */
+  async function loadEverything() {
+    if (!context) return;
+    setStatus("scanning feature tree for Cosmo Feature proposals...");
+
+    const params = new URLSearchParams({
+      documentId: context.documentId,
+      workspaceId: context.workspaceId,
+      partStudioElementId: context.elementId,
+      server: context.server,
+    });
+
+    const [paramsRes, stateRes] = await Promise.all([
+      fetch(`/api/onshape/partstudio-feature-parameters-debug?${params.toString()}`),
+      loadFuzzycadProjectState({
+        documentId: context.documentId,
+        workspaceId: context.workspaceId,
+        server: context.server,
+      }),
+    ]);
+
+    const paramsData = await paramsRes.json();
+
+    setNotConnected(paramsRes.status === 401);
+
+    const cosmoOnly = Array.isArray(paramsData.valueParameters)
+      ? (paramsData.valueParameters as ValueParameterEntry[]).filter(
+          (entry) => COSMO_FEATURE_TYPES.has(entry.featureType) && entry.typeName === "BTMParameterQuantity",
+        )
+      : [];
+    setParameters(cosmoOnly);
+
+    const source = {
+      documentId: context.documentId,
+      workspaceId: context.workspaceId,
+      elementId: context.elementId,
+      assemblyElementId: null,
+      server: context.server,
+    };
+
+    let currentDoc =
+      stateRes.ok && isValidUncertaintyDocument(stateRes.state)
+        ? stateRes.state
+        : createEmptyUncertaintyDocument(source);
+
+    // Auto-register any Cosmo Feature instance not already tracked --
+    // marking IS inserting the feature in Onshape, there's no separate
+    // "click Mark" step in this model.
+    const detected = extractCosmoFeatures(paramsData.rawData?.features);
+    let changed = false;
+    for (const found of detected) {
+      const id = makeCustomFeatureProposalAnnotationId(found.featureId);
+      if (!currentDoc.annotations.some((annotation) => annotation.id === id)) {
+        currentDoc = upsertCustomFeatureProposal(currentDoc, found);
+        changed = true;
+      }
+    }
+
+    if (changed) {
+      const saveRes = await saveFuzzycadProjectState(
+        { documentId: context.documentId, workspaceId: context.workspaceId, server: context.server },
+        currentDoc,
+      );
+      if (!saveRes.ok) {
+        setStatus(`failed to register newly detected proposals (HTTP ${saveRes.status})`);
+      }
+    }
+
+    setUncertaintyDoc(currentDoc);
+    setStatus(paramsRes.ok ? "ready" : `error loading parameters (HTTP ${paramsRes.status})`);
+
+    for (const found of detected) {
+      const annotation = currentDoc.annotations.find(
+        (annotation): annotation is CustomFeatureProposalUncertaintyAnnotation =>
+          annotation.id === makeCustomFeatureProposalAnnotationId(found.featureId) &&
+          annotation.type === "customFeatureProposal",
+      );
+      if (annotation && annotation.status === "open") {
+        void setCosmoFeatureOutputOpacity(found.featureId, 0);
+      }
+    }
+  }
+
   useEffect(() => {
     if (!context) {
       return;
     }
 
-    let cancelled = false;
-
-    async function loadEverything() {
-      setStatus("scanning feature tree for Cosmo Feature proposals...");
-
-      const params = new URLSearchParams({
-        documentId: context!.documentId,
-        workspaceId: context!.workspaceId,
-        partStudioElementId: context!.elementId,
-        server: context!.server,
-      });
-
-      const [paramsRes, stateRes] = await Promise.all([
-        fetch(`/api/onshape/partstudio-feature-parameters-debug?${params.toString()}`),
-        loadFuzzycadProjectState({
-          documentId: context!.documentId,
-          workspaceId: context!.workspaceId,
-          server: context!.server,
-        }),
-      ]);
-
-      if (cancelled) return;
-
-      const paramsData = await paramsRes.json();
-
-      setNotConnected(paramsRes.status === 401);
-
-      const cosmoOnly = Array.isArray(paramsData.valueParameters)
-        ? (paramsData.valueParameters as ValueParameterEntry[]).filter(
-            (entry) => COSMO_FEATURE_TYPES.has(entry.featureType) && entry.typeName === "BTMParameterQuantity",
-          )
-        : [];
-      setParameters(cosmoOnly);
-
-      const source = {
-        documentId: context!.documentId,
-        workspaceId: context!.workspaceId,
-        elementId: context!.elementId,
-        assemblyElementId: null,
-        server: context!.server,
-      };
-
-      let currentDoc =
-        stateRes.ok && isValidUncertaintyDocument(stateRes.state)
-          ? stateRes.state
-          : createEmptyUncertaintyDocument(source);
-
-      // Auto-register any Cosmo Feature instance not already tracked --
-      // marking IS inserting the feature in Onshape, there's no separate
-      // "click Mark" step in this model.
-      const detected = extractCosmoFeatures(paramsData.rawData?.features);
-      let changed = false;
-      for (const found of detected) {
-        const id = makeCustomFeatureProposalAnnotationId(found.featureId);
-        if (!currentDoc.annotations.some((annotation) => annotation.id === id)) {
-          currentDoc = upsertCustomFeatureProposal(currentDoc, found);
-          changed = true;
-        }
-      }
-
-      if (changed) {
-        const saveRes = await saveFuzzycadProjectState(
-          { documentId: context!.documentId, workspaceId: context!.workspaceId, server: context!.server },
-          currentDoc,
-        );
-        if (!saveRes.ok) {
-          setStatus(`failed to register newly detected proposals (HTTP ${saveRes.status})`);
-        }
-      }
-
-      if (cancelled) return;
-
-      setUncertaintyDoc(currentDoc);
-      setStatus(paramsRes.ok ? "ready" : `error loading parameters (HTTP ${paramsRes.status})`);
-
-      for (const found of detected) {
-        const annotation = currentDoc.annotations.find(
-          (annotation): annotation is CustomFeatureProposalUncertaintyAnnotation =>
-            annotation.id === makeCustomFeatureProposalAnnotationId(found.featureId) &&
-            annotation.type === "customFeatureProposal",
-        );
-        if (annotation && annotation.status === "open") {
-          void setCosmoFeatureOutputOpacity(found.featureId, 0);
-        }
-      }
+    // Wrapped in a locally-declared function (rather than calling
+    // loadEverything directly) to match this file's existing "fetch on
+    // mount" effect pattern -- see resolveElementName above.
+    function runLoad() {
+      void loadEverything();
     }
 
-    void loadEverything();
+    runLoad();
+    // 15s so newly-inserted proposals (or edits made directly in
+    // Onshape's own feature dialog) show up without a manual reopen,
+    // without hammering the feature-tree-walk endpoint too hard.
+    const interval = setInterval(runLoad, 15000);
 
     return () => {
-      cancelled = true;
+      clearInterval(interval);
     };
-    // setCosmoFeatureOutputOpacity/extractCosmoFeatures are intentionally
-    // omitted -- they're stable, re-created-per-render component
-    // functions (not memoized), so adding them here would refire this
-    // effect (and re-hit Onshape) on every unrelated re-render instead of
-    // only when the Part Studio changes.
+    // loadEverything is intentionally omitted -- it's a stable,
+    // re-created-per-render component function (not memoized), so adding
+    // it here would refire this effect (tearing down and restarting the
+    // interval) on every unrelated re-render instead of only when the
+    // Part Studio changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [context]);
 
@@ -596,8 +608,13 @@ function ParameterMarkPanelInner() {
       ) : null}
 
       <div className={styles.header}>
-        <h1 className={styles.title}>Overall</h1>
-        <p className={styles.status}>status: {status}</p>
+        <div className={styles.titleRow}>
+          <h1 className={styles.title}>Overall</h1>
+          <button type="button" className={styles.refreshButton} onClick={() => void loadEverything()}>
+            &#8635; Refresh
+          </button>
+        </div>
+        <p className={styles.status}>{status}</p>
       </div>
 
       {parameters === null ? null : featureGroups.length === 0 ? (

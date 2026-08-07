@@ -1,9 +1,13 @@
 .page {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   font-size: 13px;
-  color: #1a1a1a;
+  line-height: 1.45;
+  color: #24262b;
+  background: #f7f8fa;
   padding: 16px;
   max-width: 100%;
+  min-height: 100vh;
+  box-sizing: border-box;
 }
 
 /*
@@ -15,53 +19,65 @@
 .overallGrid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  column-gap: 20px;
-  row-gap: 10px;
+  column-gap: 16px;
+  row-gap: 14px;
   align-items: start;
 }
 
 .proposalRow {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 10px 12px;
-  border: 1px solid #e3e3e6;
-  border-radius: 10px;
+  gap: 10px;
+  padding: 14px 16px;
+  border: 1px solid #e6e7eb;
+  border-radius: 12px;
   background: #fff;
+  box-shadow: 0 1px 2px rgba(20, 22, 30, 0.04);
+  transition: box-shadow 0.15s ease, border-color 0.15s ease;
+}
+
+.proposalRow:hover {
+  border-color: #d7d9e0;
+  box-shadow: 0 2px 8px rgba(20, 22, 30, 0.07);
 }
 
 .proposalHeader {
   cursor: pointer;
+  padding-bottom: 8px;
+  border-bottom: 1px solid #f0f1f4;
 }
 
 .discussionCard {
   background: #fff;
-  border: 1px solid #e3e3e6;
-  border-radius: 10px;
-  padding: 10px 12px;
+  border: 1px solid #e6e7eb;
+  border-radius: 12px;
+  padding: 14px 16px;
+  box-shadow: 0 1px 2px rgba(20, 22, 30, 0.04);
 }
 
 .elementSwitcher {
   display: flex;
   align-items: center;
   gap: 6px;
-  margin-bottom: 12px;
+  margin-bottom: 14px;
 }
 
 .elementBadge {
-  color: #8a8a8a;
+  color: #8a8d99;
   font-size: 11.5px;
   font-weight: 600;
   margin: 0;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
 }
 
 .elementSelect {
-  font-size: 11.5px;
+  font-size: 12px;
   font-weight: 600;
-  color: #1a1a1a;
-  border: 1px solid #d5d5db;
+  color: #24262b;
+  border: 1px solid #d9dbe1;
   border-radius: 6px;
-  padding: 2px 6px;
+  padding: 3px 7px;
   background: #fff;
   max-width: 180px;
 }
@@ -77,35 +93,67 @@
 }
 
 .header {
-  margin-bottom: 12px;
+  margin-bottom: 16px;
+}
+
+.titleRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
 }
 
 .title {
-  font-size: 15px;
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  margin: 0;
+}
+
+.refreshButton {
+  border: 1px solid #d9dbe1;
+  background: #fff;
+  color: #55586a;
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 11.5px;
   font-weight: 600;
-  margin: 0 0 2px;
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+.refreshButton:hover {
+  background: #f4f5f8;
+  border-color: #c7cad3;
 }
 
 .status {
-  color: #8a8a8a;
-  margin: 0;
-  font-size: 12px;
+  color: #9a9dab;
+  margin: 4px 0 0;
+  font-size: 11.5px;
 }
 
 .emptyState {
-  color: #666;
-  padding: 24px 8px;
+  color: #7a7d8a;
+  padding: 36px 16px;
   text-align: center;
+  background: #fff;
+  border: 1px dashed #dcdee5;
+  border-radius: 12px;
+  font-size: 12.5px;
+  line-height: 1.6;
 }
 
 .cardTitle {
-  font-weight: 600;
+  font-weight: 700;
+  font-size: 13.5px;
 }
 
 .cardTypeTag {
-  font-weight: 400;
-  color: #8a8a8a;
-  margin-left: 4px;
+  font-weight: 500;
+  color: #9a9dab;
+  margin-left: 6px;
+  font-size: 11.5px;
 }
 
 .paramEditRow {
@@ -115,32 +163,37 @@
 }
 
 .paramEditLabel {
-  color: #8a8a8a;
-  font-size: 12px;
-  min-width: 70px;
+  color: #8a8d99;
+  font-size: 11.5px;
+  font-weight: 600;
+  min-width: 64px;
   flex-shrink: 0;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
 }
 
 .tagAnswered {
-  color: #1a8a4a;
-  background: #e4f6ea;
-  border-radius: 12px;
-  padding: 2px 9px;
-  font-size: 11.5px;
-  font-weight: 600;
+  color: #16824f;
+  background: #e2f6ea;
+  border-radius: 20px;
+  padding: 3px 10px;
+  font-size: 11px;
+  font-weight: 700;
   white-space: nowrap;
   flex-shrink: 0;
+  letter-spacing: 0.01em;
 }
 
 .tagProposed {
-  color: #1d4fd1;
-  background: #e6ecff;
-  border-radius: 12px;
-  padding: 2px 9px;
-  font-size: 11.5px;
-  font-weight: 600;
+  color: #2d54e0;
+  background: #e8edff;
+  border-radius: 20px;
+  padding: 3px 10px;
+  font-size: 11px;
+  font-weight: 700;
   white-space: nowrap;
   flex-shrink: 0;
+  letter-spacing: 0.01em;
 }
 
 .rowActions {
@@ -148,71 +201,97 @@
   align-items: center;
   gap: 6px;
   flex-shrink: 0;
+  padding-top: 4px;
 }
 
 .acceptButton {
-  border: 1px solid #1a8a4a;
-  background: #1a8a4a;
+  border: 1px solid #17915a;
+  background: #17915a;
   color: #fff;
-  border-radius: 6px;
-  padding: 5px 10px;
+  border-radius: 7px;
+  padding: 6px 12px;
   font-size: 12px;
   font-weight: 600;
   cursor: pointer;
   white-space: nowrap;
+  transition: background 0.12s ease;
+}
+
+.acceptButton:hover:not(:disabled) {
+  background: #147a4b;
 }
 
 .acceptButton:disabled {
-  opacity: 0.6;
+  opacity: 0.55;
   cursor: default;
 }
 
 .rejectButton {
-  border: 1px solid #d5d5db;
+  border: 1px solid #e3e4e9;
   background: #fff;
-  color: #b3261e;
-  border-radius: 6px;
-  padding: 5px 10px;
+  color: #c8372e;
+  border-radius: 7px;
+  padding: 6px 12px;
   font-size: 12px;
   font-weight: 600;
   cursor: pointer;
   white-space: nowrap;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+.rejectButton:hover:not(:disabled) {
+  background: #fdf1f0;
+  border-color: #f2c9c6;
 }
 
 .rejectButton:disabled {
-  opacity: 0.6;
+  opacity: 0.55;
   cursor: default;
 }
 
 .secondaryButton {
-  border: 1px solid #d5d5db;
+  border: 1px solid #e3e4e9;
   background: #fff;
-  color: #333;
-  border-radius: 6px;
-  padding: 5px 10px;
+  color: #45485a;
+  border-radius: 7px;
+  padding: 6px 12px;
   font-size: 12px;
   font-weight: 600;
   cursor: pointer;
   white-space: nowrap;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+.secondaryButton:hover:not(:disabled) {
+  background: #f4f5f8;
+  border-color: #c7cad3;
 }
 
 .secondaryButton:disabled {
-  opacity: 0.6;
+  opacity: 0.55;
   cursor: default;
 }
 
 .valueInput {
   flex: 1;
   width: auto;
-  padding: 5px 8px;
-  border: 1px solid #d5d5db;
-  border-radius: 6px;
+  padding: 6px 9px;
+  border: 1px solid #d9dbe1;
+  border-radius: 7px;
   font-size: 13px;
+  font-variant-numeric: tabular-nums;
   box-sizing: border-box;
+  transition: border-color 0.12s ease;
+}
+
+.valueInput:focus {
+  outline: none;
+  border-color: #3d5afe;
 }
 
 .valueInput:disabled {
   opacity: 0.6;
+  background: #f7f8fa;
 }
 
 .commentThread {
@@ -223,20 +302,22 @@
 }
 
 .commentEmpty {
-  color: #999;
-  font-size: 12.5px;
+  color: #a5a8b4;
+  font-size: 12px;
+  font-style: italic;
 }
 
 .comment {
-  background: #f6f7fb;
-  border-radius: 8px;
-  padding: 8px 10px;
+  background: #f4f5f8;
+  border-radius: 9px;
+  padding: 8px 11px;
 }
 
 .commentMeta {
-  color: #8a8a8a;
-  font-size: 11.5px;
-  margin-bottom: 2px;
+  color: #9a9dab;
+  font-size: 11px;
+  font-weight: 600;
+  margin-bottom: 3px;
 }
 
 .commentText {
@@ -245,10 +326,18 @@
 
 .commentInput {
   width: 100%;
-  padding: 6px 8px;
-  border: 1px solid #d5d5db;
-  border-radius: 6px;
+  padding: 7px 9px;
+  border: 1px solid #d9dbe1;
+  border-radius: 7px;
   font-size: 13px;
   resize: vertical;
   box-sizing: border-box;
+  font-family: inherit;
+  transition: border-color 0.12s ease;
+  margin-bottom: 8px;
+}
+
+.commentInput:focus {
+  outline: none;
+  border-color: #3d5afe;
 }
