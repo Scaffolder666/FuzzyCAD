@@ -145,7 +145,7 @@ function drawAxisArrow(
     start is Vector,
     axisOffset is Vector,
     axisName is string,
-    arrowColor is ValueWithUnits
+    arrowColor is map
 )
 {
     const distanceMm = norm(axisOffset) / millimeter;
