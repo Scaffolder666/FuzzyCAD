@@ -8,10 +8,13 @@
 //      arrow's tip, built from a perpendicular direction via cross().
 //      This part is MY OWN construction, not from the reference source
 //      -- higher risk than the rest of this file.
-//   3. Hand-drawn jitter on the dashed outline's segment endpoints,
-//      using the exact same technique as the reference source's
-//      handDrawEdgeSketchy: RandomNumberFunction(id) + a modulo-based
-//      pseudo-random offset.
+//   3. Hand-drawn jitter on the dashed outline's segment endpoints.
+//      RandomNumberFunction(id), used for this in the reference source,
+//      turned out to come from a separate library document that source
+//      imported -- confirmed live ("Function RandomNumberFunction with
+//      1 argument(s) not found"), not part of the standard library, not
+//      available here. Uses a deterministic pseudo-random substitute
+//      instead (loop indices times arbitrary primes, modulo 100).
 //
 // Everything else (opCreateCompositePart merging many wire bodies into
 // one before a single setProperty call, skText/newSketchOnPlane/
@@ -71,12 +74,17 @@ export const fuzzycadProposedMove = defineFeature(function(context is Context, i
 
         const dashColor = color(0.25, 0.55, 0.95, 1.0);
         const jitter = 0.15 * millimeter;
-        var rnd = RandomNumberFunction(id);
 
         // Hand-drawn-style dashed outline: each dash's endpoints get a
-        // small random jitter, same technique as the reference
-        // source's handDrawEdgeSketchy, so it reads as sketchy/proposed
-        // rather than mechanically precise.
+        // small jitter. RandomNumberFunction (used for this in the
+        // reference source) turned out to live in a separate library
+        // document that source imported -- confirmed live, not part of
+        // the standard library, not available to us. Using a
+        // deterministic pseudo-random substitute instead: multiply the
+        // loop indices by arbitrary primes and take a modulo, same
+        // "looks varied, isn't a real RNG" trick the reference source's
+        // own inner jitter math already leaned on around its rnd()
+        // calls.
         const proposedEdges = evaluateQuery(context, qCreatedBy(id + "duplicate", EntityType.EDGE));
         const dashSteps = 10;
         var allDashes = qNothing();
@@ -89,8 +97,8 @@ export const fuzzycadProposedMove = defineFeature(function(context is Context, i
                 var p0 = evEdgeTangentLine(context, { "edge" : proposedEdges[e], "parameter" : t0 }).origin;
                 var p1 = evEdgeTangentLine(context, { "edge" : proposedEdges[e], "parameter" : t1 }).origin;
 
-                const s1 = rnd() % 100;
-                const s2 = rnd() % 100;
+                const s1 = (e * 37 + i * 17) % 100;
+                const s2 = (e * 23 + i * 41 + 7) % 100;
                 const j0 = (s1 / 100.0 - 0.5) * 2 * jitter;
                 const j1 = (s2 / 100.0 - 0.5) * 2 * jitter;
                 p0 = p0 + vector(j0, j0, j0);
