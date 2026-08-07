@@ -65,6 +65,15 @@ type FeatureGroup = {
  * unconfirmed FeatureScript calls -- registered here so the panel picks
  * them up the moment they compile and get inserted, no app change
  * needed once that happens.
+ *
+ * Each Proposed* tool also has a "Needs Input" sibling -- a genuinely
+ * separate Cosmo Feature type (featurescript/needsInput*.fs), not a
+ * mode flag on the Proposed* one. Proposed* is for someone who already
+ * knows the exact value and wants confirmation; Needs Input* is for
+ * someone who knows an operation is needed but not the value, so
+ * someone else fills it in. Same underlying geometry op per tool, kept
+ * as separate types so they show up as distinct entries in Onshape's
+ * own Insert toolbar.
  */
 const COSMO_FEATURE_TYPES = new Set([
   "fuzzycadProposedExtrude",
@@ -74,19 +83,28 @@ const COSMO_FEATURE_TYPES = new Set([
   "fuzzycadProposedRotate",
   "fuzzycadProposedScale",
   "fuzzycadProposedHole",
+  "fuzzycadNeedsInputExtrude",
+  "fuzzycadNeedsInputFillet",
+  "fuzzycadNeedsInputChamfer",
+  "fuzzycadNeedsInputMove",
+  "fuzzycadNeedsInputRotate",
+  "fuzzycadNeedsInputScale",
+  "fuzzycadNeedsInputHole",
 ]);
 
 /**
  * Cosmo Feature types whose own FeatureScript already fades/colors the
  * relevant bodies via setProperty (confirmed live for
  * fuzzycadProposedFillet: fades the original body it duplicated, colors
- * the proposal; Move/Rotate/Scale follow the identical pattern). The
- * right panel must NOT also apply its REST-based part-appearance
- * opacity toggling to these -- confirmed live that a manual REST
- * appearance override on a part blocks FeatureScript's own setProperty
- * from visibly taking effect on it, so double-styling a self-styling
- * type would just leave it stuck at whatever opacity the REST call last
- * set, silently overriding the feature's own styling.
+ * the proposal; the rest of Proposed* and all of Needs Input* follow the
+ * identical pattern -- Needs Input* colors just the duplicate's EDGES
+ * instead of the whole body, see needsInputFillet.fs). The right panel
+ * must NOT also apply its REST-based part-appearance opacity toggling to
+ * these -- confirmed live that a manual REST appearance override on a
+ * part blocks FeatureScript's own setProperty from visibly taking effect
+ * on it, so double-styling a self-styling type would just leave it stuck
+ * at whatever opacity the REST call last set, silently overriding the
+ * feature's own styling.
  */
 const SELF_STYLING_COSMO_FEATURE_TYPES = new Set([
   "fuzzycadProposedFillet",
@@ -95,6 +113,32 @@ const SELF_STYLING_COSMO_FEATURE_TYPES = new Set([
   "fuzzycadProposedRotate",
   "fuzzycadProposedScale",
   "fuzzycadProposedHole",
+  "fuzzycadNeedsInputExtrude",
+  "fuzzycadNeedsInputFillet",
+  "fuzzycadNeedsInputChamfer",
+  "fuzzycadNeedsInputMove",
+  "fuzzycadNeedsInputRotate",
+  "fuzzycadNeedsInputScale",
+  "fuzzycadNeedsInputHole",
+]);
+
+/**
+ * Cosmo Feature types that represent an open question (operation known,
+ * value not yet decided) rather than a ready-to-review proposal. Swaps
+ * the card's tags/button labels (Needs Input / Answered / Mark Answered
+ * instead of Proposed / Resolved / Accept) -- Accept/Reject/Reopen still
+ * reuse the exact same generic resolve/delete flow underneath, "Mark
+ * Answered" just means "the value has been supplied", not "this is now
+ * final, unchangeable geometry" the way Accept does for Proposed*.
+ */
+const NEEDS_INPUT_COSMO_FEATURE_TYPES = new Set([
+  "fuzzycadNeedsInputExtrude",
+  "fuzzycadNeedsInputFillet",
+  "fuzzycadNeedsInputChamfer",
+  "fuzzycadNeedsInputMove",
+  "fuzzycadNeedsInputRotate",
+  "fuzzycadNeedsInputScale",
+  "fuzzycadNeedsInputHole",
 ]);
 
 function isValidUncertaintyDocument(value: unknown): value is FuzzyCADUncertaintyDocument {
@@ -557,9 +601,10 @@ function ParameterMarkPanelInner() {
    */
   async function resolveMark(group: FeatureGroup) {
     if (!context) return;
-    const confirmed = window.confirm(
-      `Accept "${group.featureName}"? Its geometry stays in the model as final -- this can't be edited again without reopening.`,
-    );
+    const confirmMessage = NEEDS_INPUT_COSMO_FEATURE_TYPES.has(group.featureType)
+      ? `Mark "${group.featureName}" as answered?`
+      : `Accept "${group.featureName}"? Its geometry stays in the model as final -- this can't be edited again without reopening.`;
+    const confirmed = window.confirm(confirmMessage);
     if (!confirmed) return;
 
     if (!SELF_STYLING_COSMO_FEATURE_TYPES.has(group.featureType)) {
@@ -571,9 +616,10 @@ function ParameterMarkPanelInner() {
   /** Reject: deletes the Cosmo Feature outright, discarding its proposed geometry entirely. */
   async function rejectMark(group: FeatureGroup) {
     if (!context) return;
-    const confirmed = window.confirm(
-      `Delete "${group.featureName}"? Its proposed geometry and comments will be lost.`,
-    );
+    const confirmMessage = NEEDS_INPUT_COSMO_FEATURE_TYPES.has(group.featureType)
+      ? `Remove the question "${group.featureName}"? Its comments will be lost.`
+      : `Delete "${group.featureName}"? Its proposed geometry and comments will be lost.`;
+    const confirmed = window.confirm(confirmMessage);
     if (!confirmed) return;
 
     setSaving(true);
@@ -716,41 +762,46 @@ function ParameterMarkPanelInner() {
                   ),
                 )}
 
-                <div className={styles.rowActions}>
-                  {resolved ? (
-                    <>
-                      <span className={styles.tagAnswered}>Resolved</span>
-                      <button
-                        type="button"
-                        className={styles.secondaryButton}
-                        disabled={saving}
-                        onClick={() => reopenMark(group)}
-                      >
-                        Reopen
-                      </button>
-                    </>
-                  ) : (
-                    <>
-                      <span className={styles.tagProposed}>Proposed</span>
-                      <button
-                        type="button"
-                        className={styles.acceptButton}
-                        disabled={saving}
-                        onClick={() => void resolveMark(group)}
-                      >
-                        Accept
-                      </button>
-                      <button
-                        type="button"
-                        className={styles.rejectButton}
-                        disabled={saving}
-                        onClick={() => void rejectMark(group)}
-                      >
-                        Reject
-                      </button>
-                    </>
-                  )}
-                </div>
+                {(() => {
+                  const isQuestion = NEEDS_INPUT_COSMO_FEATURE_TYPES.has(group.featureType);
+                  return (
+                    <div className={styles.rowActions}>
+                      {resolved ? (
+                        <>
+                          <span className={styles.tagAnswered}>{isQuestion ? "Answered" : "Resolved"}</span>
+                          <button
+                            type="button"
+                            className={styles.secondaryButton}
+                            disabled={saving}
+                            onClick={() => reopenMark(group)}
+                          >
+                            Reopen
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          <span className={styles.tagProposed}>{isQuestion ? "Needs Input" : "Proposed"}</span>
+                          <button
+                            type="button"
+                            className={styles.acceptButton}
+                            disabled={saving}
+                            onClick={() => void resolveMark(group)}
+                          >
+                            {isQuestion ? "Mark Answered" : "Accept"}
+                          </button>
+                          <button
+                            type="button"
+                            className={styles.rejectButton}
+                            disabled={saving}
+                            onClick={() => void rejectMark(group)}
+                          >
+                            Reject
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  );
+                })()}
 
                 <div className={styles.discussionDivider} />
 
