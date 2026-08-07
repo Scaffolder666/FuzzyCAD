@@ -38,6 +38,20 @@
 // the duplicate is deleted -- only the sketchy strokes remain.
 // handDrawEdgeSketchy/RandomNumberFunction/idToNum/lcprng below are
 // copied verbatim from proposedMove.fs's confirmed-working helpers.
+//
+// Angle dimension: a dashed arc + degree label, not a filled arrow --
+// matches the arc/dash technique the reference source itself used for
+// its own X/Y/Z rotation callouts (rather than reusing Move's straight
+// arrow, which wouldn't make sense for a rotation). Adapted to our
+// arbitrary user-picked axis (the reference always used world X/Y/Z):
+// the arc's radius/plane are built from the body's own bounding-box
+// farthest corner, projected perpendicular to the axis, so there's
+// always SOME meaningful in-plane direction to sweep through even
+// though our axis isn't fixed to a world direction. dot() is used here
+// for the first time in this codebase -- a standard vector op, but not
+// independently confirmed live like cross()/normalize() have been.
+// Skips drawing entirely if that corner sits too close to the axis line
+// to give a sane radius (e.g. axis through the body's center).
 
 FeatureScript 3029;
 import(path : "onshape/std/common.fs", version : "3029.0");
@@ -143,10 +157,118 @@ export const fuzzycadProposedRotate = defineFeature(function(context is Context,
             });
         }
 
+        const bbox = evBox3d(context, { "topology" : originalBody, "tight" : true });
+        const farCorner = bbox.maxCorner;
+        const cornerOffset = farCorner - axisStart;
+        const alongAxis = dot(cornerOffset, axisDirection) * axisDirection;
+        const perpOffset = cornerOffset - alongAxis;
+        const arcRadius = norm(perpOffset);
+
+        if (arcRadius / millimeter > 0.001)
+        {
+            const perpVec = normalize(perpOffset);
+            const perpVec2 = cross(axisDirection, perpVec);
+            const arcCenter = axisStart + alongAxis;
+            const dimensionColor = color(0.25, 0.55, 0.95, 1.0);
+
+            drawAngleArc(
+                    context,
+                    id + "angleArc",
+                    arcCenter,
+                    axisDirection,
+                    perpVec,
+                    perpVec2,
+                    arcRadius,
+                    definition.angle,
+                    toString(round(definition.angle / degree, 1)) ~ "°",
+                    dimensionColor
+            );
+        }
+
         opDeleteBodies(context, id + "deleteTemporaryProposal", {
                 "entities" : proposedBody
         });
     });
+
+//////////////////////////////////////////////////////////////////////
+//
+// DASHED ANGLE ARC + LABEL
+//
+// Sweeps from `startDir` toward `otherDir` (both unit vectors
+// perpendicular to `axisDirection` and to each other) by `angle`,
+// drawn as short dashed segments (same dash/gap ratio as the
+// reference source's own rotation-arc callouts) rather than a solid
+// arc, then a text label at the arc's midpoint angle.
+//
+//////////////////////////////////////////////////////////////////////
+
+function drawAngleArc(
+    context is Context,
+    id is Id,
+    center is Vector,
+    axisDirection is Vector,
+    startDir is Vector,
+    otherDir is Vector,
+    radius is ValueWithUnits,
+    angle is ValueWithUnits,
+    labelText is string,
+    arcColor is map)
+{
+    const dashCount = 24;
+    const dashRatio = 0.6;
+    var allDashes = qNothing();
+
+    for (var d = 0; d < dashCount; d += 1)
+    {
+        const t0 = d / dashCount;
+        const t1 = t0 + dashRatio / dashCount;
+        var pts = makeArray(4, undefined);
+
+        for (var j = 0; j < 4; j += 1)
+        {
+            const tt = t0 + (t1 - t0) * (j / 3);
+            const ang = angle * tt;
+            const dir = startDir * cos(ang) + otherDir * sin(ang);
+            pts[j] = center + dir * radius;
+        }
+
+        const dashId = id + "dash" + toString(d);
+        opFitSpline(context, dashId, { "points" : pts });
+        allDashes = qUnion(allDashes, qCreatedBy(dashId, EntityType.BODY));
+    }
+
+    if (!isQueryEmpty(context, allDashes))
+    {
+        opCreateCompositePart(context, id + "composite", {
+                "bodies" : allDashes,
+                "closed" : false
+        });
+
+        setProperty(context, {
+                "entities" : qCreatedBy(id + "composite", EntityType.BODY),
+                "propertyType" : PropertyType.APPEARANCE,
+                "value" : arcColor
+        });
+    }
+
+    const midAng = angle * 0.5;
+    const midDir = startDir * cos(midAng) + otherDir * sin(midAng);
+    const midPt = center + midDir * radius;
+    const eps = 0.01 * millimeter;
+    const labelPlane = plane(midPt + axisDirection * eps, axisDirection);
+    const labelSketch = newSketchOnPlane(context, id + "labelSketch", { "sketchPlane" : labelPlane });
+    const labelUv = worldToPlane(labelPlane, midPt);
+    const textSize = 3 * millimeter;
+
+    skText(labelSketch, "labelText", {
+            "text" : labelText,
+            "fontName" : "OpenSans-Regular.ttf",
+            "firstCorner" : vector(labelUv[0] - textSize, labelUv[1] - textSize),
+            "secondCorner" : vector(labelUv[0] + textSize, labelUv[1] + textSize)
+    });
+
+    skSolve(labelSketch);
+}
 
 //////////////////////////////////////////////////////////////////////
 //
