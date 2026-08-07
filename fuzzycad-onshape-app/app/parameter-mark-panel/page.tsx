@@ -194,6 +194,13 @@ function ParameterMarkPanelInner() {
   // switch among the few Part Studios already inside the document you're
   // looking at).
   const [partStudioOptions, setPartStudioOptions] = useState<OnshapeElement[]>([]);
+  // Set whenever Onshape answers with a 429 and a Retry-After value --
+  // both the polling interval and manual Refresh skip calling out to
+  // Onshape entirely while now() is before this, rather than continuing
+  // to hit an endpoint that's already told us it's blocking calls.
+  // Hammering it further during a known cooldown can't help and risks
+  // extending the block, so this is a hard stop, not a suggestion.
+  const rateLimitedUntilRef = useRef<number | null>(null);
 
   function extractAppearance(
     data: unknown,
@@ -331,6 +338,18 @@ function ParameterMarkPanelInner() {
    */
   async function loadEverything() {
     if (!context) return;
+
+    if (rateLimitedUntilRef.current !== null) {
+      const remainingMs = rateLimitedUntilRef.current - Date.now();
+      if (remainingMs > 0) {
+        setStatus(
+          `Onshape is rate-limiting this document (HTTP 429) -- waiting ~${Math.ceil(remainingMs / 1000)}s before trying again, not calling out in the meantime`,
+        );
+        return;
+      }
+      rateLimitedUntilRef.current = null;
+    }
+
     setStatus("scanning feature tree for Cosmo Feature proposals...");
 
     const params = new URLSearchParams({
@@ -361,6 +380,13 @@ function ParameterMarkPanelInner() {
     // instead of surfacing the real rate-limit error).
     const upstreamOk = paramsData.ok !== false;
     const upstreamStatus = typeof paramsData.status === "number" ? paramsData.status : paramsRes.status;
+
+    if (upstreamStatus === 429) {
+      const retryAfterSeconds = Number(paramsData.retryAfter);
+      if (Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0) {
+        rateLimitedUntilRef.current = Date.now() + retryAfterSeconds * 1000;
+      }
+    }
 
     setNotConnected(upstreamStatus === 401);
 
