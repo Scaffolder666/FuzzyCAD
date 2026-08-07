@@ -1,4 +1,4 @@
-// FuzzyCAD "Proposed Move" custom feature -- v4.
+// FuzzyCAD "Proposed Move" custom feature -- v5.
 //
 // v4 adds three things requested after seeing v3 render correctly:
 //   1. Per-axis arrows (X/Y/Z each get their own arrow + label) instead
@@ -15,6 +15,15 @@
 //      1 argument(s) not found"), not part of the standard library, not
 //      available here. Uses a deterministic pseudo-random substitute
 //      instead (loop indices times arbitrary primes, modulo 100).
+//
+// v5 (per explicit request: "我要一摸一样" -- match the reference exactly):
+// replaced v4's jitter, which applied ONE shared scalar offset to all
+// three axes (vector(j0, j0, j0)), with jitterOffset() -- three
+// SEPARATE offsets (x/y/z), each keyed off its own pair of primes
+// (17/23/31 against the edge index, 29/37/41 against the stroke index),
+// plus a jitterFactor multiplier -- mirroring the reference source's
+// handDrawEdgeSketchy structure directly. The rnd()/RandomNumberFunction
+// substitution itself is unchanged (still unavailable, see below).
 //
 // Everything else (opCreateCompositePart merging many wire bodies into
 // one before a single setProperty call, skText/newSketchOnPlane/
@@ -74,17 +83,23 @@ export const fuzzycadProposedMove = defineFeature(function(context is Context, i
 
         const dashColor = color(0.25, 0.55, 0.95, 1.0);
         const jitter = 0.15 * millimeter;
+        const jitterFactor = 1.0;
 
-        // Hand-drawn-style dashed outline: each dash's endpoints get a
-        // small jitter. RandomNumberFunction (used for this in the
-        // reference source) turned out to live in a separate library
-        // document that source imported -- confirmed live, not part of
-        // the standard library, not available to us. Using a
-        // deterministic pseudo-random substitute instead: multiply the
-        // loop indices by arbitrary primes and take a modulo, same
-        // "looks varied, isn't a real RNG" trick the reference source's
-        // own inner jitter math already leaned on around its rnd()
-        // calls.
+        // Hand-drawn-style dashed outline: each dash endpoint gets its
+        // OWN x/y/z jitter, matching the reference source's
+        // handDrawEdgeSketchy structure exactly -- three separate offset
+        // formulas (offsetX/offsetY/offsetZ), each keyed off a distinct
+        // pair of prime multipliers: 17/23/31 against the edge index,
+        // 29/37/41 against the stroke (point-within-edge) index, scaled
+        // by jitterFactor. The one deviation from the reference is
+        // unavoidable: RandomNumberFunction (used there for this) turned
+        // out to live in a separate library document that source
+        // imported -- confirmed live ("Function RandomNumberFunction
+        // with 1 argument(s) not found"), not part of the standard
+        // library, not available here. jitterOffset() below substitutes
+        // a deterministic pseudo-random value (modulo arithmetic on the
+        // same indices) everywhere the reference called rnd(), keeping
+        // the surrounding per-axis structure identical.
         const proposedEdges = evaluateQuery(context, qCreatedBy(id + "duplicate", EntityType.EDGE));
         const dashSteps = 10;
         var allDashes = qNothing();
@@ -97,12 +112,8 @@ export const fuzzycadProposedMove = defineFeature(function(context is Context, i
                 var p0 = evEdgeTangentLine(context, { "edge" : proposedEdges[e], "parameter" : t0 }).origin;
                 var p1 = evEdgeTangentLine(context, { "edge" : proposedEdges[e], "parameter" : t1 }).origin;
 
-                const s1 = (e * 37 + i * 17) % 100;
-                const s2 = (e * 23 + i * 41 + 7) % 100;
-                const j0 = (s1 / 100.0 - 0.5) * 2 * jitter;
-                const j1 = (s2 / 100.0 - 0.5) * 2 * jitter;
-                p0 = p0 + vector(j0, j0, j0);
-                p1 = p1 + vector(j1, j1, j1);
+                p0 = p0 + jitterOffset(e, i, jitter, jitterFactor);
+                p1 = p1 + jitterOffset(e, i + 1, jitter, jitterFactor);
 
                 const dashId = id + "dash" + toString(e) + "_" + toString(i);
                 opFitSpline(context, dashId, { "points" : [p0, p1] });
@@ -134,6 +145,35 @@ export const fuzzycadProposedMove = defineFeature(function(context is Context, i
         drawAxisArrow(context, id + "arrowY", bboxCenter, vector(0 * meter, definition.moveY, 0 * meter), "Y", dashColor);
         drawAxisArrow(context, id + "arrowZ", bboxCenter, vector(0 * meter, 0 * meter, definition.moveZ), "Z", dashColor);
     });
+
+// Deterministic pseudo-random per-axis jitter offset for one dash
+// endpoint, mirroring the reference source's handDrawEdgeSketchy offset
+// formula structure: THREE separate offsets (x/y/z), each seeded off a
+// distinct pair of primes -- 17/23/31 against `edgeIndex`, 29/37/41
+// against `strokeIndex` -- instead of one shared scalar applied to all
+// three axes. jitterFactor is kept as its own multiplier (as in the
+// reference) so the effect can be dialed up/down without touching the
+// prime constants. Substitutes modulo-100 arithmetic on the two indices
+// for the reference's rnd()/RandomNumberFunction calls, which are not
+// available here (confirmed live -- see header comment).
+function jitterOffset(
+    edgeIndex is number,
+    strokeIndex is number,
+    jitter is ValueWithUnits,
+    jitterFactor is number
+)
+returns Vector
+{
+    const seedX = (edgeIndex * 17 + strokeIndex * 29) % 100;
+    const seedY = (edgeIndex * 23 + strokeIndex * 37) % 100;
+    const seedZ = (edgeIndex * 31 + strokeIndex * 41) % 100;
+
+    const offsetX = (seedX / 100.0 - 0.5) * 2 * jitter * jitterFactor;
+    const offsetY = (seedY / 100.0 - 0.5) * 2 * jitter * jitterFactor;
+    const offsetZ = (seedZ / 100.0 - 0.5) * 2 * jitter * jitterFactor;
+
+    return vector(offsetX, offsetY, offsetZ);
+}
 
 // Draws one straight arrow (shaft + two-wing arrowhead) from `start`
 // along `axisOffset`, plus a text label ("X: 12.5 mm") at its midpoint.
