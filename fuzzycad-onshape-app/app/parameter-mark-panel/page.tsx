@@ -73,6 +73,7 @@ const COSMO_FEATURE_TYPES = new Set([
   "fuzzycadProposedMove",
   "fuzzycadProposedRotate",
   "fuzzycadProposedScale",
+  "fuzzycadProposedHole",
 ]);
 
 /**
@@ -93,6 +94,7 @@ const SELF_STYLING_COSMO_FEATURE_TYPES = new Set([
   "fuzzycadProposedMove",
   "fuzzycadProposedRotate",
   "fuzzycadProposedScale",
+  "fuzzycadProposedHole",
 ]);
 
 function isValidUncertaintyDocument(value: unknown): value is FuzzyCADUncertaintyDocument {
