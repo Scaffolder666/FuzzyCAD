@@ -324,7 +324,7 @@ export async function updatePartStudioFeatureSuppressed(
   body: {
     featureId: string;
     suppressed?: boolean;
-    parameterUpdates?: { parameterId: string; expression?: string; value?: boolean | string }[];
+    parameterUpdates?: { parameterId: string; expression?: string; value?: boolean }[];
   },
 ): Promise<ApiResult> {
   const res = await fetch(`/api/onshape/partstudio-update-feature`, {

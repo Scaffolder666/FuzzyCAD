@@ -162,13 +162,6 @@
   letter-spacing: 0.02em;
 }
 
-.questionText {
-  flex: 1;
-  font-size: 13px;
-  font-style: italic;
-  color: #45485a;
-}
-
 .tagAnswered {
   color: #16824f;
   background: #e2f6ea;
