@@ -98,8 +98,9 @@ const COSMO_FEATURE_TYPES = new Set([
  * relevant bodies via setProperty (confirmed live for
  * fuzzycadProposedFillet: fades the original body it duplicated, colors
  * the proposal; the rest of Proposed* and all of Needs Input* follow the
- * identical pattern -- Needs Input* colors just the duplicate's EDGES
- * instead of the whole body, see needsInputFillet.fs). The right panel
+ * identical pattern -- Needs Input* now draws a black hand-drawn face
+ * scribble fill instead of Proposed*'s blue, see needsInputMove.fs). The
+ * right panel
  * must NOT also apply its REST-based part-appearance opacity toggling to
  * these -- confirmed live that a manual REST appearance override on a
  * part blocks FeatureScript's own setProperty from visibly taking effect
@@ -161,10 +162,14 @@ const NEEDS_INPUT_COSMO_FEATURE_TYPES = new Set([
  * Reopen for these types must patch this parameter via the API; there's
  * no separate "final geometry" to reveal the way
  * SELF_STYLING_COSMO_FEATURE_TYPES normally implies (accepting one of
- * those just leaves its already-final geometry as is -- true today only
- * for fuzzycadNeedsInput*, which have no "accepted" parameter and never
- * touch the original body at all). Every type in this set is necessarily
- * also in SELF_STYLING_COSMO_FEATURE_TYPES.
+ * those just leaves its already-final geometry as is). Every type in
+ * this set is necessarily also in SELF_STYLING_COSMO_FEATURE_TYPES.
+ *
+ * fuzzycadNeedsInput* now carries the exact same hidden "accepted"
+ * parameter and hand-drawn face-scribble-fill preview architecture as
+ * Proposed* (needsInput*.fs rewritten to match) -- "Mark Answered" on
+ * one of these patches accepted=true the same way Accept does for
+ * Proposed*, committing the real geometry to the original body.
  */
 const ACCEPT_VIA_HIDDEN_PARAMETER_COSMO_FEATURE_TYPES = new Set([
   "fuzzycadProposedExtrude",
@@ -174,6 +179,13 @@ const ACCEPT_VIA_HIDDEN_PARAMETER_COSMO_FEATURE_TYPES = new Set([
   "fuzzycadProposedRotate",
   "fuzzycadProposedScale",
   "fuzzycadProposedHole",
+  "fuzzycadNeedsInputExtrude",
+  "fuzzycadNeedsInputFillet",
+  "fuzzycadNeedsInputChamfer",
+  "fuzzycadNeedsInputMove",
+  "fuzzycadNeedsInputRotate",
+  "fuzzycadNeedsInputScale",
+  "fuzzycadNeedsInputHole",
 ]);
 
 function isValidUncertaintyDocument(value: unknown): value is FuzzyCADUncertaintyDocument {
