@@ -80,6 +80,16 @@ export const fuzzycadProposedMove = defineFeature(function(context is Context, i
                 "value" : color(0.25, 0.55, 0.95, 0.0)
         });
 
+        // Onshape draws every body's edges as plain black/dark lines by
+        // default REGARDLESS of face opacity -- confirmed live: the
+        // original body's own outline stayed fully visible even at
+        // alpha 0.08, and the dash segments below (with no appearance
+        // set of their own) rendered in that same default look, so the
+        // two were visually indistinguishable. Coloring each dash/arrow
+        // segment the same blue used for "proposed" elsewhere fixes
+        // that: black solid = current, blue dashed = proposed.
+        const dashColor = color(0.25, 0.55, 0.95, 1.0);
+
         const proposedEdges = evaluateQuery(context, qCreatedBy(id + "duplicate", EntityType.EDGE));
         const dashSteps = 10;
         for (var e = 0; e < size(proposedEdges); e += 1)
@@ -90,7 +100,13 @@ export const fuzzycadProposedMove = defineFeature(function(context is Context, i
                 const t1 = (i + 1) / dashSteps;
                 const p0 = evEdgeTangentLine(context, { "edge" : proposedEdges[e], "parameter" : t0 }).origin;
                 const p1 = evEdgeTangentLine(context, { "edge" : proposedEdges[e], "parameter" : t1 }).origin;
-                opFitSpline(context, id + "dash" + toString(e) + "_" + toString(i), { "points" : [p0, p1] });
+                const dashId = id + "dash" + toString(e) + "_" + toString(i);
+                opFitSpline(context, dashId, { "points" : [p0, p1] });
+                setProperty(context, {
+                        "entities" : qCreatedBy(dashId, EntityType.EDGE),
+                        "propertyType" : PropertyType.APPEARANCE,
+                        "value" : dashColor
+                });
             }
         }
 
@@ -101,4 +117,9 @@ export const fuzzycadProposedMove = defineFeature(function(context is Context, i
                 (bbox.minCorner[2] + bbox.maxCorner[2]) / 2
         );
         opFitSpline(context, id + "arrow", { "points" : [originCenter, originCenter + offset] });
+        setProperty(context, {
+                "entities" : qCreatedBy(id + "arrow", EntityType.EDGE),
+                "propertyType" : PropertyType.APPEARANCE,
+                "value" : dashColor
+        });
     });
