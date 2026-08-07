@@ -30,7 +30,21 @@
 FeatureScript 3029;
 import(path : "onshape/std/common.fs", version : "3029.0");
 
-annotation { "Feature Type Name" : "FuzzyCAD Needs Input Move" }
+// "Manipulator Change Function" -- lets someone drag a handle directly
+// on the geometry, in Onshape's OWN native feature-edit UI, instead of
+// typing into the X/Y/Z number fields. This is UNCONFIRMED: the exact
+// call shape below (linearManipulator(origin, direction, offset),
+// addManipulators(context, id, {...}), and the change function's own
+// signature) is copied from a real forum-posted working example
+// (https://forum.onshape.com/discussion/3610/simple-manipulator-tutorial),
+// not independently verified live by us -- flagging per this session's
+// practice for any borrowed-but-unverified call. Only works while this
+// feature's own native Onshape edit dialog is open; our right panel
+// cannot trigger or render it.
+annotation {
+    "Feature Type Name" : "FuzzyCAD Needs Input Move",
+    "Manipulator Change Function" : "fuzzycadNeedsInputMoveManipulatorChange"
+}
 export const fuzzycadNeedsInputMove = defineFeature(function(context is Context, id is Id, definition is map)
     precondition
     {
@@ -171,7 +185,34 @@ export const fuzzycadNeedsInputMove = defineFeature(function(context is Context,
         // scribble strokes and arrows (independent wire/surface bodies)
         // remain.
         opDeleteBodies(context, id + "deleteTemporaryProposal", { "entities" : proposedBody });
+
+        // 6. Drag handles, one per axis, anchored at the same bbox
+        // center the arrows/gestures use. Onshape calls
+        // fuzzycadNeedsInputMoveManipulatorChange (below) whenever one
+        // is dragged, regardless of whether that axis is currently
+        // flagged needs-input or not -- dragging is itself a way of
+        // supplying/confirming a value, same as typing a number.
+        addManipulators(context, id, {
+                "moveXManipulator" : linearManipulator(bboxCenter, vector(1, 0, 0), definition.moveX),
+                "moveYManipulator" : linearManipulator(bboxCenter, vector(0, 1, 0), definition.moveY),
+                "moveZManipulator" : linearManipulator(bboxCenter, vector(0, 0, 1), definition.moveZ)
+        });
     });
+
+// Manipulator Change Function referenced by the annotation above --
+// reads the dragged axis's new offset back into the matching moveX/Y/Z
+// parameter. Does NOT touch the <axis>NeedsInput flags -- dragging
+// confirms a NUMBER, it doesn't automatically uncheck "still open"
+// (someone could still be dragging around to explore/gesture rather
+// than commit); the flag stays a separate, deliberate action in the
+// right panel.
+export function fuzzycadNeedsInputMoveManipulatorChange(context is Context, definition is map, newManipulators is map) returns map
+{
+    definition.moveX = newManipulators["moveXManipulator"].offset;
+    definition.moveY = newManipulators["moveYManipulator"].offset;
+    definition.moveZ = newManipulators["moveZManipulator"].offset;
+    return definition;
+}
 
 
 
