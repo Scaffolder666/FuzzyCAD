@@ -32,7 +32,12 @@ export const fuzzycadNeedsInputFillet = defineFeature(function(context is Contex
         annotation { "Name" : "Body to fillet", "Filter" : EntityType.BODY }
         definition.body is Query;
 
-        annotation { "Name" : "Edge to round", "Filter" : EntityType.EDGE }
+        // Accepts individual edges OR a whole face -- selecting a face
+        // fillets its entire edge loop in one pass (matches native
+        // Onshape Fillet's own face-selection behavior). "||" combining
+        // entity types in a Filter is confirmed via an Onshape-employee-
+        // answered forum thread, not independently compiled by us yet.
+        annotation { "Name" : "Edges or face to round", "Filter" : EntityType.EDGE || EntityType.FACE }
         definition.edge is Query;
 
         annotation { "Name" : "Radius" }
@@ -60,12 +65,31 @@ export const fuzzycadNeedsInputFillet = defineFeature(function(context is Contex
     {
         const originalBody = definition.body;
 
-        // ACCEPTED STATE: fillet the real edge on the real body directly,
-        // no duplicate/preview machinery at all, then stop.
+        // Expand any selected FACEs into their own boundary edges
+        // (qAdjacent with AdjacencyType.EDGE, confirmed via an Onshape-
+        // employee-answered forum thread), union with any
+        // directly-selected EDGEs, so everything below only ever deals
+        // with a flat, possibly-multi-entity edge query.
+        // qEntityFilter(query, EntityType) is confirmed via forum usage
+        // examples -- neither of these two calls has been independently
+        // compiled by us yet.
+        const selectedFaces = qEntityFilter(definition.edge, EntityType.FACE);
+        const selectedEdges = qEntityFilter(definition.edge, EntityType.EDGE);
+        const edgesFromFaces = qAdjacent(selectedFaces, AdjacencyType.EDGE, EntityType.EDGE);
+        const targetEdges = qUnion(selectedEdges, edgesFromFaces);
+
+        // ACCEPTED STATE: fillet the real edges on the real body
+        // directly, no duplicate/preview machinery at all, then stop.
+        // Passing the WHOLE multi-edge query into ONE opFillet call
+        // (instead of filleting edges one at a time) lets Onshape's own
+        // solver blend smoothly across a tangent-connected loop -- per
+        // live feedback, filleting a curved boundary edge-segment-by-
+        // edge-segment is what produced a "chopped into many facets"
+        // look instead of one smooth fillet surface.
         if (definition.accepted)
         {
             opFillet(context, id + "acceptedFillet", {
-                    "entities" : definition.edge,
+                    "entities" : targetEdges,
                     "radius" : definition.radius
             });
 
@@ -81,18 +105,48 @@ export const fuzzycadNeedsInputFillet = defineFeature(function(context is Contex
         });
 
         const proposedBody = qCreatedBy(id + "duplicate", EntityType.BODY);
-
-        const edgeMidLine = evEdgeTangentLine(context, {
-                "edge" : definition.edge,
-                "parameter" : 0.5
-        });
-        const midpoint = edgeMidLine.origin;
-
         const copiedEdges = qCreatedBy(id + "duplicate", EntityType.EDGE);
-        const matchedEdge = qClosestTo(copiedEdges, midpoint);
+
+        // Match each ORIGINAL target edge to its corresponding
+        // duplicate edge by nearest point (opPattern's zero-offset copy
+        // sits exactly on top of the original, so "closest" is
+        // unambiguous per edge), and average all their midpoints into
+        // ONE anchor point for the dimension label/manipulator -- there
+        // is still only a single shared "radius" parameter, so one
+        // representative anchor is used rather than attempting a
+        // dimension label per edge. The anchor's direction (for the
+        // arrow/gesture/manipulator) comes from whichever edge happens
+        // to be evaluated first -- qAdjacent's own docs say result order
+        // is arbitrary when edges come from a face selection, so this is
+        // a deterministic-per-regen but not a meaningful "first edge",
+        // purely a representative direction to point the label in.
+        var matchedEdges = qNothing();
+        var anchorSum = vector(0, 0, 0) * meter;
+        var anchorTangent = vector(1, 0, 0);
+        var edgeCount = 0;
+
+        for (var originalEdge in evaluateQuery(context, targetEdges))
+        {
+            const tangentLine = evEdgeTangentLine(context, {
+                    "edge" : originalEdge,
+                    "parameter" : 0.5
+            });
+            const edgeMidpoint = tangentLine.origin;
+
+            matchedEdges = qUnion(matchedEdges, qClosestTo(copiedEdges, edgeMidpoint));
+
+            anchorSum = anchorSum + edgeMidpoint;
+            if (edgeCount == 0)
+            {
+                anchorTangent = tangentLine.direction;
+            }
+            edgeCount += 1;
+        }
+
+        const midpoint = anchorSum / max(edgeCount, 1);
 
         opFillet(context, id + "fillet", {
-                "entities" : matchedEdge,
+                "entities" : matchedEdges,
                 "radius" : definition.radius
         });
 
@@ -104,7 +158,7 @@ export const fuzzycadNeedsInputFillet = defineFeature(function(context is Contex
 
         drawSketchyFaceFill(context, id + "faceFill", proposedBody);
 
-        const tangentDir = edgeMidLine.direction;
+        const tangentDir = anchorTangent;
         const perpReference = (abs(tangentDir[2]) < 0.9) ? vector(0, 0, 1) : vector(0, 1, 0);
         const radiusDir = normalize(cross(tangentDir, perpReference));
         const dimensionColor = color(0, 0, 0, 0.85);
