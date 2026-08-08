@@ -201,10 +201,30 @@ export const fuzzycadNeedsInputMove = defineFeature(function(context is Context,
         // is dragged, regardless of whether that axis is currently
         // flagged needs-input or not -- dragging is itself a way of
         // supplying/confirming a value, same as typing a number.
+        //
+        // Map-argument form with "primaryParameterId" (confirmed via a
+        // real forum-posted linearManipulator({...}) call, not the
+        // positional form the first version of this file used) -- lets
+        // Onshape focus the matching Feature dialog field while dragging.
         addManipulators(context, id, {
-                "moveXManipulator" : linearManipulator(bboxCenter, vector(1, 0, 0), definition.moveX),
-                "moveYManipulator" : linearManipulator(bboxCenter, vector(0, 1, 0), definition.moveY),
-                "moveZManipulator" : linearManipulator(bboxCenter, vector(0, 0, 1), definition.moveZ)
+                "moveXManipulator" : linearManipulator({
+                        "base" : bboxCenter,
+                        "direction" : vector(1, 0, 0),
+                        "offset" : definition.moveX,
+                        "primaryParameterId" : "moveX"
+                }),
+                "moveYManipulator" : linearManipulator({
+                        "base" : bboxCenter,
+                        "direction" : vector(0, 1, 0),
+                        "offset" : definition.moveY,
+                        "primaryParameterId" : "moveY"
+                }),
+                "moveZManipulator" : linearManipulator({
+                        "base" : bboxCenter,
+                        "direction" : vector(0, 0, 1),
+                        "offset" : definition.moveZ,
+                        "primaryParameterId" : "moveZ"
+                })
         });
     });
 
@@ -215,11 +235,31 @@ export const fuzzycadNeedsInputMove = defineFeature(function(context is Context,
 // (someone could still be dragging around to explore/gesture rather
 // than commit); the flag stays a separate, deliberate action in the
 // right panel.
+//
+// BUG FIX (this was the actual cause of "drag one axis, it snaps back"):
+// Onshape's own docs confirm newManipulators has EXACTLY ONE entry per
+// call -- the one that was just dragged, not all three we registered.
+// Unconditionally reading all three keys meant the two NOT being dragged
+// resolved to undefined, and assigning definition.moveY/moveZ to
+// undefined corrupted the definition on every drag. Each axis now only
+// updates if its own key is actually present in this call.
 export function fuzzycadNeedsInputMoveManipulatorChange(context is Context, definition is map, newManipulators is map) returns map
 {
-    definition.moveX = newManipulators["moveXManipulator"].offset;
-    definition.moveY = newManipulators["moveYManipulator"].offset;
-    definition.moveZ = newManipulators["moveZManipulator"].offset;
+    if (newManipulators["moveXManipulator"] != undefined)
+    {
+        definition.moveX = newManipulators["moveXManipulator"].offset;
+    }
+
+    if (newManipulators["moveYManipulator"] != undefined)
+    {
+        definition.moveY = newManipulators["moveYManipulator"].offset;
+    }
+
+    if (newManipulators["moveZManipulator"] != undefined)
+    {
+        definition.moveZ = newManipulators["moveZManipulator"].offset;
+    }
+
     return definition;
 }
 

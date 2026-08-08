@@ -988,13 +988,42 @@ function ParameterMarkPanelInner() {
    * whatever else is in the tree), so there's no "proposed vs real"
    * indirection to route through like the old mutate-the-real-feature
    * approach needed.
+   *
+   * Two things that used to be missing (why the right panel's own number
+   * could look "stuck" after an edit):
+   *
+   * 1. openFeatureDialog (card header click) can leave Onshape's native
+   *    Feature dialog open for this exact feature. That dialog holds its
+   *    OWN uncommitted draft of this same parameter -- editing here and
+   *    writing straight to the REST endpoint underneath it risks the
+   *    native dialog's stale draft clobbering this write on its next
+   *    regen/close. Closing it first (best-effort, fire-and-forget, same
+   *    one-way messageName this file already uses elsewhere) avoids that
+   *    race. Harmless to send even if nothing is open.
+   * 2. Nothing updated this panel's own copy of the value after a
+   *    successful write, so ParamValueRow kept showing the pre-edit
+   *    number until the next full reload. Patched into local state
+   *    immediately instead of spending another GET to re-discover the
+   *    value this call just wrote.
    */
   async function livePreviewValue(entry: ValueParameterEntry, value: string) {
     if (!context) return;
+
+    window.parent.postMessage(
+      {
+        documentId: context.documentId,
+        workspaceId: context.workspaceId,
+        elementId: context.elementId,
+        messageName: "closeFeatureDialog",
+        accept: false,
+      },
+      context.server,
+    );
+
     const baseExpression = formatFeatureParameterValue(entry.typeName, entry.message);
     const expression = substituteNumericMagnitude(baseExpression, value);
 
-    await updatePartStudioFeatureSuppressed(
+    const updateRes = await updatePartStudioFeatureSuppressed(
       {
         documentId: context.documentId,
         workspaceId: context.workspaceId,
@@ -1005,6 +1034,21 @@ function ParameterMarkPanelInner() {
         featureId: entry.featureId,
         parameterUpdates: [{ parameterId: entry.parameterId, expression }],
       },
+    );
+
+    if (!updateRes.ok) {
+      setStatus(`failed to update ${entry.parameterId} (HTTP ${updateRes.status})`);
+      return;
+    }
+
+    setParameters((current) =>
+      current === null
+        ? current
+        : current.map((parameter) =>
+            parameter.featureId === entry.featureId && parameter.parameterId === entry.parameterId
+              ? { ...parameter, message: { ...parameter.message, expression } }
+              : parameter,
+          ),
     );
   }
 
@@ -1471,8 +1515,26 @@ function ParamValueRow({
 }) {
   const currentValueLabel = formatFeatureParameterValue(entry.typeName, entry.message);
   const currentMagnitude = parseNumericMagnitude(currentValueLabel);
-  const [draft, setDraft] = useState(currentMagnitude !== null ? String(currentMagnitude) : "");
-  const lastCommittedRef = useRef(draft);
+  const serverValue = currentMagnitude !== null ? String(currentMagnitude) : "";
+
+  const [draft, setDraft] = useState(serverValue);
+  const lastCommittedRef = useRef(serverValue);
+  const isFocusedRef = useRef(false);
+
+  // Re-sync this field when the SERVER's value changes out from under
+  // it -- a manipulator drag, an edit made directly in Onshape's own
+  // native feature dialog, or just a refreshed fetch. Without this,
+  // draft only ever reflects whatever was on screen the moment this row
+  // first mounted (useState's initial value doesn't re-run on prop
+  // changes), so this field could sit showing a stale number forever
+  // even after the real value moved. Skipped while the field is
+  // actively focused so an incoming refresh mid-keystroke can't stomp
+  // what someone is currently typing.
+  useEffect(() => {
+    if (isFocusedRef.current) return;
+    setDraft(serverValue);
+    lastCommittedRef.current = serverValue;
+  }, [serverValue, entry.featureId, entry.parameterId]);
 
   function commit() {
     const trimmed = draft.trim();
@@ -1490,7 +1552,13 @@ function ParamValueRow({
         value={draft}
         disabled={disabled}
         onChange={(event) => setDraft(event.target.value)}
-        onBlur={commit}
+        onFocus={() => {
+          isFocusedRef.current = true;
+        }}
+        onBlur={() => {
+          isFocusedRef.current = false;
+          commit();
+        }}
         onKeyDown={(event) => {
           if (event.key === "Enter") {
             event.currentTarget.blur();
