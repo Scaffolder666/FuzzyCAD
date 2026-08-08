@@ -110,32 +110,23 @@ export const fuzzycadProposedFillet = defineFeature(function(context is Context,
     {
         const originalBody = definition.body;
 
-        // Expand any selected FACEs into their own boundary edges
-        // (qAdjacent with AdjacencyType.EDGE, confirmed via an Onshape-
-        // employee-answered forum thread), union with any
-        // directly-selected EDGEs, so everything below only ever deals
-        // with a flat, possibly-multi-entity edge query.
-        // qEntityFilter(query, EntityType) is confirmed via forum usage
-        // examples -- neither of these two calls has been independently
-        // compiled by us yet.
-        const selectedFaces = qEntityFilter(definition.edge, EntityType.FACE);
-        const selectedEdges = qEntityFilter(definition.edge, EntityType.EDGE);
-        const edgesFromFaces = qAdjacent(selectedFaces, AdjacencyType.EDGE, EntityType.EDGE);
-        const targetEdges = qUnion(selectedEdges, edgesFromFaces);
-
-        // ACCEPTED STATE: fillet the real edges on the real body
+        // ACCEPTED STATE: fillet the real edges/face on the real body
         // directly, no duplicate/preview machinery at all, then stop.
-        // Passing the WHOLE multi-edge query into ONE opFillet call
-        // (instead of filleting edges one at a time) lets Onshape's own
-        // solver blend smoothly across a tangent-connected loop -- per
-        // live feedback, filleting a curved boundary edge-segment-by-
-        // edge-segment is what produced a "chopped into many facets"
-        // look instead of one smooth fillet surface.
+        // opFillet's own "entities" parameter documents accepting BOTH
+        // edges and faces directly (FsDoc's opFillet parameter table) --
+        // no need to pre-expand a face into its boundary edges
+        // ourselves. "tangentPropagation": true matches native Fillet's
+        // own dialog, which shows "Tangent propagation" checked by
+        // default -- LIVE-CONFIRMED this matters: the same face +
+        // radius that filleted fine natively failed through us with
+        // FILLET_FAILED before this was added, because opFillet's own
+        // documented default for tangentPropagation is false, not true.
         if (definition.accepted)
         {
             opFillet(context, id + "acceptedFillet", {
-                    "entities" : targetEdges,
-                    "radius" : definition.radius
+                    "entities" : definition.edge,
+                    "radius" : definition.radius,
+                    "tangentPropagation" : true
             });
 
             return;
@@ -151,41 +142,71 @@ export const fuzzycadProposedFillet = defineFeature(function(context is Context,
 
         const proposedBody = qCreatedBy(id + "duplicate", EntityType.BODY);
         const copiedEdges = qCreatedBy(id + "duplicate", EntityType.EDGE);
+        const copiedFaces = qCreatedBy(id + "duplicate", EntityType.FACE);
 
-        // Match each ORIGINAL target edge to its corresponding
-        // duplicate edge by nearest point, and average all their
-        // midpoints into ONE anchor point for the dimension label --
-        // see needsInputFillet.fs's identical comment for the full
-        // rationale (single shared "radius" parameter, so one
-        // representative anchor/direction is used).
-        var matchedEdges = qNothing();
+        const selectedEdges = qEntityFilter(definition.edge, EntityType.EDGE);
+        const selectedFaces = qEntityFilter(definition.edge, EntityType.FACE);
+
+        // Match each ORIGINAL selected edge/face to its corresponding
+        // duplicate entity by nearest point (opPattern's zero-offset
+        // copy sits exactly on top of the original, so "closest" is
+        // unambiguous per entity), and average all their representative
+        // points into ONE anchor for the dimension label/manipulator --
+        // there's still only one shared "radius" parameter, so a single
+        // representative anchor/direction is used rather than a
+        // dimension per entity.
+        var matchedEntities = qNothing();
         var anchorSum = vector(0, 0, 0) * meter;
         var anchorTangent = vector(1, 0, 0);
-        var edgeCount = 0;
+        var entityCount = 0;
 
-        for (var originalEdge in evaluateQuery(context, targetEdges))
+        for (var originalEdge in evaluateQuery(context, selectedEdges))
         {
             const tangentLine = evEdgeTangentLine(context, {
                     "edge" : originalEdge,
                     "parameter" : 0.5
             });
-            const edgeMidpoint = tangentLine.origin;
+            const point = tangentLine.origin;
 
-            matchedEdges = qUnion(matchedEdges, qClosestTo(copiedEdges, edgeMidpoint));
+            matchedEntities = qUnion(matchedEntities, qClosestTo(copiedEdges, point));
 
-            anchorSum = anchorSum + edgeMidpoint;
-            if (edgeCount == 0)
+            anchorSum = anchorSum + point;
+            if (entityCount == 0)
             {
                 anchorTangent = tangentLine.direction;
             }
-            edgeCount += 1;
+            entityCount += 1;
         }
 
-        const midpoint = anchorSum / max(edgeCount, 1);
+        for (var originalFace in evaluateQuery(context, selectedFaces))
+        {
+            const tangentPlane = evFaceTangentPlane(context, {
+                    "face" : originalFace,
+                    "parameter" : vector(0.5, 0.5)
+            });
+            const point = tangentPlane.origin;
+
+            matchedEntities = qUnion(matchedEntities, qClosestTo(copiedFaces, point));
+
+            anchorSum = anchorSum + point;
+            if (entityCount == 0)
+            {
+                // A face has no single "tangent direction" the way an
+                // edge does -- fall back to an arbitrary in-plane
+                // direction so the dimension arrow/manipulator still has
+                // SOME direction to point along.
+                const reference = (abs(tangentPlane.normal[2]) < 0.9) ? vector(0, 0, 1) : vector(0, 1, 0);
+                anchorTangent = normalize(cross(tangentPlane.normal, reference));
+            }
+            entityCount += 1;
+        }
+
+        const midpoint = anchorSum / max(entityCount, 1);
 
         opFillet(context, id + "fillet", {
-                "entities" : matchedEdges,
-                "radius" : definition.radius
+                "entities" : matchedEntities,
+                "radius" : definition.radius,
+                "tangentPropagation" : true
         });
 
         // Fade the original -- no-ops silently if "originalBody" already
