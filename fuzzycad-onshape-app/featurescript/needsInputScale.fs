@@ -18,7 +18,19 @@
 FeatureScript 3029;
 import(path : "onshape/std/common.fs", version : "3029.0");
 
-annotation { "Feature Type Name" : "FuzzyCAD Needs Input Scale" }
+// "Manipulator Change Function" -- lets someone drag a handle directly
+// on the geometry to set the scale factor, same mechanism as
+// needsInputMove.fs (see that file's header for the confirmed-live
+// linearManipulator map syntax + the "newManipulators has exactly one
+// entry" gotcha). Unlike Move/Fillet/Chamfer/Hole/Extrude, scaleFactor
+// is dimensionless -- the manipulator's own "offset" is a length, so it
+// stands in for the CURRENT SCALED distance from pivot to the body's
+// far corner, and the change function divides that back by the
+// UNSCALED distance to recover a factor.
+annotation {
+    "Feature Type Name" : "FuzzyCAD Needs Input Scale",
+    "Manipulator Change Function" : "fuzzycadNeedsInputScaleManipulatorChange"
+}
 export const fuzzycadNeedsInputScale = defineFeature(function(context is Context, id is Id, definition is map)
     precondition
     {
@@ -132,7 +144,52 @@ export const fuzzycadNeedsInputScale = defineFeature(function(context is Context
         opDeleteBodies(context, id + "deleteTemporaryProposal", {
                 "entities" : proposedBody
         });
+
+        // Drag handle for scale factor. See the header comment above --
+        // "offset" here is the CURRENT SCALED distance out to the far
+        // corner, not the factor itself; the change function converts.
+        const unscaledDistance = norm(farCorner - pivot);
+        if (unscaledDistance > 0.001 * millimeter)
+        {
+            const manipulatorDir = normalize(farCorner - pivot);
+
+            addManipulators(context, id, {
+                    "scaleManipulator" : linearManipulator({
+                            "base" : pivot,
+                            "direction" : manipulatorDir,
+                            "offset" : unscaledDistance * definition.scaleFactor,
+                            "primaryParameterId" : "scaleFactor"
+                    })
+            });
+        }
     });
+
+// Manipulator Change Function referenced by the annotation above --
+// recomputes the same pivot/far-corner distance the main body used (a
+// Manipulator Change Function only gets context/definition/
+// newManipulators, not the main body's own locals) to convert the
+// dragged distance back into a dimensionless factor.
+export function fuzzycadNeedsInputScaleManipulatorChange(context is Context, definition is map, newManipulators is map) returns map
+{
+    if (newManipulators["scaleManipulator"] == undefined)
+    {
+        return definition;
+    }
+
+    const pivot = evVertexPoint(context, { "vertex" : definition.originPoint });
+    const bbox = evBox3d(context, { "topology" : definition.body, "tight" : true });
+    const unscaledDistance = norm(bbox.maxCorner - pivot);
+
+    if (unscaledDistance > 0.001 * millimeter)
+    {
+        const newFactor = newManipulators["scaleManipulator"].offset / unscaledDistance;
+        // scaleFactor's own precondition requires POSITIVE_REAL_BOUNDS --
+        // clamp so a drag past the pivot can't hand back zero/negative.
+        definition.scaleFactor = max(newFactor, 0.01);
+    }
+
+    return definition;
+}
 
 //////////////////////////////////////////////////////////////////////
 //

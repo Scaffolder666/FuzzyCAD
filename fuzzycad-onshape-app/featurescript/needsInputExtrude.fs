@@ -24,7 +24,14 @@
 FeatureScript 3029;
 import(path : "onshape/std/common.fs", version : "3029.0");
 
-annotation { "Feature Type Name" : "FuzzyCAD Needs Input Extrude" }
+// "Manipulator Change Function" -- lets someone drag a handle directly
+// on the geometry to set depth, same mechanism as needsInputMove.fs
+// (see that file's header for the confirmed-live linearManipulator map
+// syntax + the "newManipulators has exactly one entry" gotcha).
+annotation {
+    "Feature Type Name" : "FuzzyCAD Needs Input Extrude",
+    "Manipulator Change Function" : "fuzzycadNeedsInputExtrudeManipulatorChange"
+}
 export const fuzzycadNeedsInputExtrude = defineFeature(function(context is Context, id is Id, definition is map)
     precondition
     {
@@ -58,10 +65,11 @@ export const fuzzycadNeedsInputExtrude = defineFeature(function(context is Conte
     }
     {
         const facesToExtrude = evaluateQuery(context, definition.entities);
-        var direction = evFaceTangentPlane(context, {
+        const tangentPlane = evFaceTangentPlane(context, {
                 "face" : facesToExtrude[0],
                 "parameter" : vector(0.5, 0.5)
-            }).normal;
+            });
+        var direction = tangentPlane.normal;
         if (definition.oppositeDirection)
         {
             direction = -direction;
@@ -99,7 +107,29 @@ export const fuzzycadNeedsInputExtrude = defineFeature(function(context is Conte
         opDeleteBodies(context, id + "deleteTemporaryProposal", {
                 "entities" : proposedBody
         });
+
+        // Drag handle for depth, anchored at the extrude face's own
+        // center point along the extrude direction.
+        addManipulators(context, id, {
+                "depthManipulator" : linearManipulator({
+                        "base" : tangentPlane.origin,
+                        "direction" : direction,
+                        "offset" : definition.depth,
+                        "primaryParameterId" : "depth"
+                })
+        });
     });
+
+// Manipulator Change Function referenced by the annotation above.
+export function fuzzycadNeedsInputExtrudeManipulatorChange(context is Context, definition is map, newManipulators is map) returns map
+{
+    if (newManipulators["depthManipulator"] != undefined)
+    {
+        definition.depth = newManipulators["depthManipulator"].offset;
+    }
+
+    return definition;
+}
 
 //////////////////////////////////////////////////////////////////////
 //

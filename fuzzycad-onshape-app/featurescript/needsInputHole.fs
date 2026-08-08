@@ -22,7 +22,14 @@
 FeatureScript 3029;
 import(path : "onshape/std/common.fs", version : "3029.0");
 
-annotation { "Feature Type Name" : "FuzzyCAD Needs Input Hole" }
+// "Manipulator Change Function" -- lets someone drag a handle directly
+// on the geometry to set depth, same mechanism as needsInputMove.fs
+// (see that file's header for the confirmed-live linearManipulator map
+// syntax + the "newManipulators has exactly one entry" gotcha).
+annotation {
+    "Feature Type Name" : "FuzzyCAD Needs Input Hole",
+    "Manipulator Change Function" : "fuzzycadNeedsInputHoleManipulatorChange"
+}
 export const fuzzycadNeedsInputHole = defineFeature(function(context is Context, id is Id, definition is map)
     precondition
     {
@@ -147,7 +154,29 @@ export const fuzzycadNeedsInputHole = defineFeature(function(context is Context,
         opDeleteBodies(context, id + "deleteTemporaryProposal", {
                 "entities" : proposedBody
         });
+
+        // Drag handle for depth, anchored at the cut face's own point
+        // along the same cut direction the dimension arrow/gesture use.
+        addManipulators(context, id, {
+                "depthManipulator" : linearManipulator({
+                        "base" : cutPlane.origin,
+                        "direction" : direction,
+                        "offset" : definition.depth,
+                        "primaryParameterId" : "depth"
+                })
+        });
     });
+
+// Manipulator Change Function referenced by the annotation above.
+export function fuzzycadNeedsInputHoleManipulatorChange(context is Context, definition is map, newManipulators is map) returns map
+{
+    if (newManipulators["depthManipulator"] != undefined)
+    {
+        definition.depth = newManipulators["depthManipulator"].offset;
+    }
+
+    return definition;
+}
 
 //////////////////////////////////////////////////////////////////////
 //

@@ -18,7 +18,14 @@
 FeatureScript 3029;
 import(path : "onshape/std/common.fs", version : "3029.0");
 
-annotation { "Feature Type Name" : "FuzzyCAD Needs Input Fillet" }
+// "Manipulator Change Function" -- lets someone drag a handle directly
+// on the geometry to set radius, same mechanism as needsInputMove.fs
+// (see that file's header for the confirmed-live linearManipulator map
+// syntax + the "newManipulators has exactly one entry" gotcha).
+annotation {
+    "Feature Type Name" : "FuzzyCAD Needs Input Fillet",
+    "Manipulator Change Function" : "fuzzycadNeedsInputFilletManipulatorChange"
+}
 export const fuzzycadNeedsInputFillet = defineFeature(function(context is Context, id is Id, definition is map)
     precondition
     {
@@ -132,7 +139,29 @@ export const fuzzycadNeedsInputFillet = defineFeature(function(context is Contex
         opDeleteBodies(context, id + "deleteTemporaryProposal", {
                 "entities" : proposedBody
         });
+
+        // Drag handle for radius, anchored at the edge midpoint along
+        // the same direction the dimension arrow/gesture already uses.
+        addManipulators(context, id, {
+                "radiusManipulator" : linearManipulator({
+                        "base" : midpoint,
+                        "direction" : radiusDir,
+                        "offset" : definition.radius,
+                        "primaryParameterId" : "radius"
+                })
+        });
     });
+
+// Manipulator Change Function referenced by the annotation above.
+export function fuzzycadNeedsInputFilletManipulatorChange(context is Context, definition is map, newManipulators is map) returns map
+{
+    if (newManipulators["radiusManipulator"] != undefined)
+    {
+        definition.radius = newManipulators["radiusManipulator"].offset;
+    }
+
+    return definition;
+}
 
 //////////////////////////////////////////////////////////////////////
 //

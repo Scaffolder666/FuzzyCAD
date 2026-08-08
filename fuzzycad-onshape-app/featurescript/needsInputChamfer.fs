@@ -20,7 +20,14 @@
 FeatureScript 3029;
 import(path : "onshape/std/common.fs", version : "3029.0");
 
-annotation { "Feature Type Name" : "FuzzyCAD Needs Input Chamfer" }
+// "Manipulator Change Function" -- lets someone drag a handle directly
+// on the geometry to set width, same mechanism as needsInputMove.fs
+// (see that file's header for the confirmed-live linearManipulator map
+// syntax + the "newManipulators has exactly one entry" gotcha).
+annotation {
+    "Feature Type Name" : "FuzzyCAD Needs Input Chamfer",
+    "Manipulator Change Function" : "fuzzycadNeedsInputChamferManipulatorChange"
+}
 export const fuzzycadNeedsInputChamfer = defineFeature(function(context is Context, id is Id, definition is map)
     precondition
     {
@@ -134,7 +141,29 @@ export const fuzzycadNeedsInputChamfer = defineFeature(function(context is Conte
         opDeleteBodies(context, id + "deleteTemporaryProposal", {
                 "entities" : proposedBody
         });
+
+        // Drag handle for width, anchored at the edge midpoint along
+        // the same direction the dimension arrow/gesture already uses.
+        addManipulators(context, id, {
+                "widthManipulator" : linearManipulator({
+                        "base" : midpoint,
+                        "direction" : widthDir,
+                        "offset" : definition.width,
+                        "primaryParameterId" : "width"
+                })
+        });
     });
+
+// Manipulator Change Function referenced by the annotation above.
+export function fuzzycadNeedsInputChamferManipulatorChange(context is Context, definition is map, newManipulators is map) returns map
+{
+    if (newManipulators["widthManipulator"] != undefined)
+    {
+        definition.width = newManipulators["widthManipulator"].offset;
+    }
+
+    return definition;
+}
 
 //////////////////////////////////////////////////////////////////////
 //

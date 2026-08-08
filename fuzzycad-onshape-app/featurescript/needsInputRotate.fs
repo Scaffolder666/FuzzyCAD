@@ -23,7 +23,10 @@
 FeatureScript 3029;
 import(path : "onshape/std/common.fs", version : "3029.0");
 
-annotation { "Feature Type Name" : "FuzzyCAD Needs Input Rotate" }
+annotation {
+    "Feature Type Name" : "FuzzyCAD Needs Input Rotate",
+    "Manipulator Change Function" : "fuzzycadNeedsInputRotateManipulatorChange"
+}
 export const fuzzycadNeedsInputRotate = defineFeature(function(context is Context, id is Id, definition is map)
     precondition
     {
@@ -143,6 +146,22 @@ export const fuzzycadNeedsInputRotate = defineFeature(function(context is Contex
             const arcCenter = axisStart + bestAlongAxis;
             const dimensionColor = color(0, 0, 0, 0.85);
 
+            // angularManipulator's constructor fields (axisOrigin,
+            // axisDirection, rotationOrigin) are forum-confirmed; the
+            // readback field name on newManipulators (used below in
+            // fuzzycadNeedsInputRotateManipulatorChange) is "angle" per
+            // Onshape's own uispec.html doc ("angle for the ANGULAR
+            // manipulator"), the same source that confirmed "offset" for
+            // the LINEAR manipulators used in the other Needs Input
+            // tools -- NOT yet independently live-verified like those.
+            addManipulators(context, id, {
+                    "angleManipulator" : angularManipulator({
+                            "axisOrigin" : arcCenter,
+                            "axisDirection" : axisDirection,
+                            "rotationOrigin" : arcCenter
+                    })
+            });
+
             // A precise dashed arc swept through the exact placeholder
             // angle would be fake precision -- see needsInputMove.fs's
             // drawFuzzyDirectionGesture for the rationale. Here that
@@ -184,6 +203,15 @@ export const fuzzycadNeedsInputRotate = defineFeature(function(context is Contex
                 "entities" : proposedBody
         });
     });
+
+export function fuzzycadNeedsInputRotateManipulatorChange(context is Context, definition is map, newManipulators is map) returns map
+{
+    if (newManipulators["angleManipulator"] != undefined)
+    {
+        definition.angle = newManipulators["angleManipulator"].angle;
+    }
+    return definition;
+}
 
 //////////////////////////////////////////////////////////////////////
 //
