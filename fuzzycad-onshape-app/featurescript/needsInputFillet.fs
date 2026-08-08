@@ -287,10 +287,18 @@ function drawSketchyFaceFill(context is Context, id is Id, body is Query)
                 const g = min(0.03 + ((rnd() % 29) / 100.0) * 0.25, 1);
                 const b = min(0.03 + ((rnd() % 25) / 100.0) * 0.25, 1);
 
+                // Boundary-adjacent guides (isEndpoint) sit almost
+                // exactly on the face's own real edge, so with normal
+                // jitter they read as one crisp, ruler-straight line
+                // framing the looser interior scribble -- extra
+                // variance softens that "hard edge" look, per live
+                // feedback on the first successful compile.
+                const strokeVariance = isEndpoint ? variance * 2.5 : variance;
+
                 const strokes = handDrawScribbleGuide(
                     context,
                     faceId + ("primaryStroke" ~ toString(primaryIndex)),
-                    chordLength, variance, rnd, guideEdge,
+                    chordLength, strokeVariance, rnd, guideEdge,
                     r, g, b, 0.55, false, 0.06);
 
                 allStrokes = qUnion(allStrokes, strokes);
