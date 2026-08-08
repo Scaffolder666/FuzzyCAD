@@ -1,239 +1,1315 @@
-// FuzzyCAD "Needs Input Fillet" custom feature -- sibling of
-// proposedFillet.fs, a separate Cosmo Feature type -- see
-// needsInputExtrude.fs's header comment for the full rationale on why
-// these are separate types and how the lifecycle differs from Proposed*.
-//
-// REWRITTEN to match proposedFillet.fs's hidden-"accepted"-param
-// architecture plus the hand-drawn FACE SCRIBBLE FILL technique instead
-// of the old whole-body amber color -- see needsInputMove.fs's header
-// comment for the full rationale on the face-fill switch and the
-// black-instead-of-blue color choice. The radius dimension arrow is
-// kept (drawDimensionArrow, copied from proposedFillet.fs) but now
-// drawn in black to match.
-//
-// "radius" starts at whatever placeholder value whoever inserts this
-// leaves it at -- someone else fills in the real number via the right
-// panel's existing live-edit path.
+FeatureScript 3044;
+import(path : "onshape/std/common.fs", version : "3044.0");
 
-FeatureScript 3029;
-import(path : "onshape/std/common.fs", version : "3029.0");
 
-// "Manipulator Change Function" -- lets someone drag a handle directly
-// on the geometry to set radius, same mechanism as needsInputMove.fs
-// (see that file's header for the confirmed-live linearManipulator map
-// syntax + the "newManipulators has exactly one entry" gotcha).
-annotation {
-    "Feature Type Name" : "FuzzyCAD Needs Input Fillet",
-    "Manipulator Change Function" : "fuzzycadNeedsInputFilletManipulatorChange"
+//////////////////////////////////////////////////////////////////////
+//
+// FUZZYCAD NEEDS INPUT FILLET
+//
+// UI:
+//   - Select EDGE(s) or FACE(s) directly.
+//   - No separate BODY selector.
+//   - Radius may remain unresolved.
+//
+// PENDING:
+//
+//   selected EDGE/FACE
+//          ↓
+//   automatically find owner body
+//          ↓
+//   track selected topology
+//          ↓
+//   zero-offset duplicate whole body
+//          ↓
+//   recover tracked EDGE/FACE on duplicate
+//          ↓
+//   fillet duplicate
+//          ↓
+//   draw fuzzy visualization over ENTIRE resulting body
+//          ↓
+//   delete exact duplicate
+//
+// ACCEPTED:
+//
+//   selected EDGE/FACE
+//          ↓
+//   opFillet directly on real body
+//
+// This restores the original FuzzyCAD visual language:
+// the entire proposed object becomes provisional / sketchy,
+// instead of visually emphasizing only the fillet patch.
+//
+//////////////////////////////////////////////////////////////////////
+
+
+annotation
+{
+    "Feature Type Name" :
+        "FuzzyCAD Needs Input Fillet",
+
+    "Manipulator Change Function" :
+        "fuzzycadNeedsInputFilletManipulatorChange"
 }
-export const fuzzycadNeedsInputFillet = defineFeature(function(context is Context, id is Id, definition is map)
+
+export const fuzzycadNeedsInputFillet =
+defineFeature(function(
+    context is Context,
+    id is Id,
+    definition is map)
     precondition
     {
-        annotation { "Name" : "Body to fillet", "Filter" : EntityType.BODY }
-        definition.body is Query;
+        //////////////////////////////////////////////////////////////////
+        // NATIVE-STYLE SELECTION
+        //
+        // Keep parameter id "edge" so existing right-panel code does not
+        // need to change unnecessarily.
+        //////////////////////////////////////////////////////////////////
 
-        // Accepts individual edges OR a whole face -- selecting a face
-        // fillets its entire edge loop in one pass (matches native
-        // Onshape Fillet's own face-selection behavior). "||" combining
-        // entity types in a Filter is confirmed via an Onshape-employee-
-        // answered forum thread, not independently compiled by us yet.
-        annotation { "Name" : "Edges or face to round", "Filter" : EntityType.EDGE || EntityType.FACE }
+        annotation
+        {
+            "Name" :
+                "Edges or faces to fillet",
+
+            "Filter" :
+                (EntityType.EDGE || EntityType.FACE)
+                &&
+                BodyType.SOLID
+        }
         definition.edge is Query;
 
-        annotation { "Name" : "Radius" }
-        isLength(definition.radius, LENGTH_BOUNDS);
 
-        // Per-parameter "still open" flag -- unlike Proposed* (the value
-        // is already decided, reviewer just accepts/rejects), a Needs
-        // Input instance may already have a known radius by the time
-        // someone inserts it. Defaults to true (open) and is visible (NOT
-        // ALWAYS_HIDDEN) so the inserter can mark it known instead. Purely
-        // metadata for the right panel's candidate-value UI; does not
-        // affect geometry, which always uses whatever "radius" holds.
-        annotation { "Name" : "Radius needs input", "Default" : true }
+        //////////////////////////////////////////////////////////////////
+        // FILLET RADIUS
+        //////////////////////////////////////////////////////////////////
+
+        annotation
+        {
+            "Name" :
+                "Radius"
+        }
+        isLength(
+            definition.radius,
+            BLEND_BOUNDS
+        );
+
+
+        //////////////////////////////////////////////////////////////////
+        // TRUE = the collaborator knows filleting is needed,
+        // but does not yet know the radius.
+        //////////////////////////////////////////////////////////////////
+
+        annotation
+        {
+            "Name" :
+                "Radius needs input",
+
+            "Default" :
+                true
+        }
         definition.radiusNeedsInput is boolean;
 
-        // Controlled internally by the FuzzyCAD right panel.
-        // The normal Feature dialog will not show this parameter.
-        annotation {
-            "Name" : "Accepted",
-            "Default" : false,
-            "UIHint" : UIHint.ALWAYS_HIDDEN
+
+        //////////////////////////////////////////////////////////////////
+        // Controlled by FuzzyCAD right panel.
+        //////////////////////////////////////////////////////////////////
+
+        annotation
+        {
+            "Name" :
+                "Accepted",
+
+            "Default" :
+                false,
+
+            "UIHint" :
+                UIHint.ALWAYS_HIDDEN
         }
         definition.accepted is boolean;
     }
     {
-        const originalBody = definition.body;
+        //////////////////////////////////////////////////////////////////
+        // No selection yet.
+        //////////////////////////////////////////////////////////////////
 
-        // ACCEPTED STATE: fillet the real edges/face on the real body
-        // directly, no duplicate/preview machinery at all, then stop.
-        // opFillet's own "entities" parameter documents accepting BOTH
-        // edges and faces directly (FsDoc's opFillet parameter table) --
-        // no need to pre-expand a face into its boundary edges
-        // ourselves. "tangentPropagation": true matches native Fillet's
-        // own dialog, which shows "Tangent propagation" checked by
-        // default -- LIVE-CONFIRMED this matters: the same face +
-        // radius that filleted fine natively failed through us with
-        // FILLET_FAILED before this was added, because opFillet's own
-        // documented default for tangentPropagation is false, not true.
-        if (definition.accepted)
+        if (
+            isQueryEmpty(
+                context,
+                definition.edge
+            )
+        )
         {
-            opFillet(context, id + "acceptedFillet", {
-                    "entities" : definition.edge,
-                    "radius" : definition.radius,
-                    "tangentPropagation" : true
-            });
+            return;
+        }
+
+
+        //////////////////////////////////////////////////////////////////
+        // Automatically derive owning body/bodies.
+        //
+        // The user no longer selects a body manually.
+        //////////////////////////////////////////////////////////////////
+
+        const originalBodies =
+            qOwnerBody(
+                definition.edge
+            );
+
+
+        //////////////////////////////////////////////////////////////////
+        //
+        // ACCEPTED STATE
+        //
+        // Send the original EDGE/FACE query directly to opFillet.
+        //
+        //////////////////////////////////////////////////////////////////
+
+        if (
+            definition.accepted
+        )
+        {
+            opFillet(
+                context,
+                id + "acceptedFillet",
+                {
+                    "entities" :
+                        definition.edge,
+
+                    "radius" :
+                        definition.radius,
+
+                    "tangentPropagation" :
+                        true,
+
+                    "crossSection" :
+                        FilletCrossSection.CIRCULAR
+                }
+            );
+
 
             return;
         }
 
-        // PENDING STATE below.
 
-        opPattern(context, id + "duplicate", {
-                "entities" : originalBody,
-                "transforms" : [transform(vector(0, 0, 0) * meter)],
-                "instanceNames" : ["proposed"]
-        });
+        //////////////////////////////////////////////////////////////////
+        //
+        // PENDING STATE
+        //
+        //////////////////////////////////////////////////////////////////
 
-        const proposedBody = qCreatedBy(id + "duplicate", EntityType.BODY);
-        const copiedEdges = qCreatedBy(id + "duplicate", EntityType.EDGE);
-        const copiedFaces = qCreatedBy(id + "duplicate", EntityType.FACE);
 
-        const selectedEdges = qEntityFilter(definition.edge, EntityType.EDGE);
-        const selectedFaces = qEntityFilter(definition.edge, EntityType.FACE);
+        //////////////////////////////////////////////////////////////////
+        // Start tracking the selected topology BEFORE duplication.
+        //
+        // We use this instead of the old:
+        //
+        //     midpoint
+        //        ↓
+        //     qClosestTo
+        //
+        // correspondence logic.
+        //////////////////////////////////////////////////////////////////
 
-        // Match each ORIGINAL selected edge/face to its corresponding
-        // duplicate entity by nearest point (opPattern's zero-offset
-        // copy sits exactly on top of the original, so "closest" is
-        // unambiguous per entity), and average all their representative
-        // points into ONE anchor for the dimension label/manipulator --
-        // there's still only one shared "radius" parameter, so a single
-        // representative anchor/direction is used rather than a
-        // dimension per entity.
-        var matchedEntities = qNothing();
-        var anchorSum = vector(0, 0, 0) * meter;
-        var anchorTangent = vector(1, 0, 0);
-        var entityCount = 0;
+        const trackedSelection =
+            startTracking(
+                context,
+                definition.edge
+            );
 
-        for (var originalEdge in evaluateQuery(context, selectedEdges))
-        {
-            const tangentLine = evEdgeTangentLine(context, {
-                    "edge" : originalEdge,
-                    "parameter" : 0.5
-            });
-            const point = tangentLine.origin;
 
-            matchedEntities = qUnion(matchedEntities, qClosestTo(copiedEdges, point));
+        //////////////////////////////////////////////////////////////////
+        // Duplicate the complete owning body.
+        //
+        // This exact body exists only temporarily so that we can build a
+        // COMPLETE fuzzy proposed object.
+        //////////////////////////////////////////////////////////////////
 
-            anchorSum = anchorSum + point;
-            if (entityCount == 0)
+        opPattern(
+            context,
+            id + "duplicate",
             {
-                anchorTangent = tangentLine.direction;
+                "entities" :
+                    originalBodies,
+
+                "transforms" :
+                    [
+                        transform(
+                            vector(
+                                0,
+                                0,
+                                0
+                            )
+                            *
+                            meter
+                        )
+                    ],
+
+                "instanceNames" :
+                    [
+                        "proposed"
+                    ]
             }
-            entityCount += 1;
+        );
+
+
+        //////////////////////////////////////////////////////////////////
+        // Query only the pattern copy.
+        //////////////////////////////////////////////////////////////////
+
+        const proposedBody =
+            qPatternInstances(
+                id + "duplicate",
+                "proposed",
+                EntityType.BODY
+            );
+
+
+        //////////////////////////////////////////////////////////////////
+        // Track the selected EDGE/FACE onto the duplicated body.
+        //
+        // qOwnedByBody(queryToFilter, body) keeps only tracked entities
+        // belonging to the duplicate.
+        //////////////////////////////////////////////////////////////////
+
+        const copiedSelection =
+            qOwnedByBody(
+                trackedSelection,
+                proposedBody
+            );
+
+
+        //////////////////////////////////////////////////////////////////
+        // Safety check.
+        //
+        // If topology tracking gives us nothing, report the actual
+        // problematic selection instead of letting opFillet fail later
+        // with an opaque FILLET_FAILED.
+        //////////////////////////////////////////////////////////////////
+
+        if (
+            isQueryEmpty(
+                context,
+                copiedSelection
+            )
+        )
+        {
+            throw regenError(
+                "Could not track the selected fillet geometry onto the proposal copy.",
+                definition.edge
+            );
         }
 
-        for (var originalFace in evaluateQuery(context, selectedFaces))
-        {
-            const tangentPlane = evFaceTangentPlane(context, {
-                    "face" : originalFace,
-                    "parameter" : vector(0.5, 0.5)
-            });
-            const point = tangentPlane.origin;
 
-            matchedEntities = qUnion(matchedEntities, qClosestTo(copiedFaces, point));
+        //////////////////////////////////////////////////////////////////
+        // Fillet the DUPLICATE.
+        //
+        // FACE remains FACE.
+        // EDGE remains EDGE.
+        //
+        // No manual face-to-edge expansion.
+        //////////////////////////////////////////////////////////////////
 
-            anchorSum = anchorSum + point;
-            if (entityCount == 0)
+        opFillet(
+            context,
+            id + "previewFillet",
             {
-                // A face has no single "tangent direction" the way an
-                // edge does -- fall back to an arbitrary in-plane
-                // direction so the dimension arrow/manipulator still has
-                // SOME direction to point along.
-                const reference = (abs(tangentPlane.normal[2]) < 0.9) ? vector(0, 0, 1) : vector(0, 1, 0);
-                anchorTangent = normalize(cross(tangentPlane.normal, reference));
+                "entities" :
+                    copiedSelection,
+
+                "radius" :
+                    definition.radius,
+
+                "tangentPropagation" :
+                    true,
+
+                "crossSection" :
+                    FilletCrossSection.CIRCULAR
             }
-            entityCount += 1;
+        );
+
+
+        //////////////////////////////////////////////////////////////////
+        // Fade the real object into the background.
+        //////////////////////////////////////////////////////////////////
+
+        setProperty(
+            context,
+            {
+                "entities" :
+                    originalBodies,
+
+                "propertyType" :
+                    PropertyType.APPEARANCE,
+
+                "value" :
+                    color(
+                        0.75,
+                        0.75,
+                        0.75,
+                        0.08
+                    )
+            }
+        );
+
+
+        //////////////////////////////////////////////////////////////////
+        //
+        // IMPORTANT VISUALIZATION
+        //
+        // Draw the scribble over the ENTIRE resulting proposed object.
+        //
+        // NOT:
+        //     only fillet surface
+        //
+        // YES:
+        //     entire filleted body
+        //
+        // This is what softens the hard CAD boundary and makes the whole
+        // object read as provisional.
+        //
+        //////////////////////////////////////////////////////////////////
+
+        drawSketchyFaceFill(
+            context,
+            id + "faceFill",
+            proposedBody
+        );
+
+
+        //////////////////////////////////////////////////////////////////
+        //
+        // FIND ONE REPRESENTATIVE ORIGINAL EDGE
+        //
+        // Only used to position:
+        //
+        //     R:? arrow
+        //     radius dimension
+        //     manipulator
+        //
+        // It has NOTHING to do with which geometry is filleted.
+        //
+        //////////////////////////////////////////////////////////////////
+
+        const selectedEdges =
+            qEntityFilter(
+                definition.edge,
+                EntityType.EDGE
+            );
+
+
+        const selectedFaces =
+            qEntityFilter(
+                definition.edge,
+                EntityType.FACE
+            );
+
+
+        var anchorEdge =
+            qNothing();
+
+
+        //////////////////////////////////////////////////////////////////
+        // If user explicitly selected an edge, use its first edge.
+        //////////////////////////////////////////////////////////////////
+
+        if (
+            !isQueryEmpty(
+                context,
+                selectedEdges
+            )
+        )
+        {
+            anchorEdge =
+                qNthElement(
+                    selectedEdges,
+                    0
+                );
         }
 
-        const midpoint = anchorSum / max(entityCount, 1);
 
-        opFillet(context, id + "fillet", {
-                "entities" : matchedEntities,
-                "radius" : definition.radius,
-                "tangentPropagation" : true
-        });
+        //////////////////////////////////////////////////////////////////
+        // If user selected only faces, use one outer boundary edge just
+        // for placing the annotation.
+        //////////////////////////////////////////////////////////////////
 
-        setProperty(context, {
-                "entities" : originalBody,
-                "propertyType" : PropertyType.APPEARANCE,
-                "value" : color(0.75, 0.75, 0.75, 0.08)
-        });
-
-        drawSketchyFaceFill(context, id + "faceFill", proposedBody);
-
-        const tangentDir = anchorTangent;
-        const perpReference = (abs(tangentDir[2]) < 0.9) ? vector(0, 0, 1) : vector(0, 1, 0);
-        const radiusDir = normalize(cross(tangentDir, perpReference));
-        const dimensionColor = color(0, 0, 0, 0.85);
-
-        // A precise filled arrow + exact mm label would be fake precision
-        // while "radius" is still just a placeholder -- see
-        // needsInputMove.fs's drawFuzzyDirectionGesture for the rationale.
-        if (definition.radiusNeedsInput)
+        else if (
+            !isQueryEmpty(
+                context,
+                selectedFaces
+            )
+        )
         {
-            drawFuzzyDirectionGesture(
+            const faceBoundaryEdges =
+                qLoopEdges(
+                    selectedFaces
+                );
+
+
+            if (
+                !isQueryEmpty(
                     context,
+                    faceBoundaryEdges
+                )
+            )
+            {
+                anchorEdge =
+                    qNthElement(
+                        faceBoundaryEdges,
+                        0
+                    );
+            }
+        }
+
+
+        //////////////////////////////////////////////////////////////////
+        //
+        // RADIUS UI
+        //
+        //////////////////////////////////////////////////////////////////
+
+        if (
+            !isQueryEmpty(
+                context,
+                anchorEdge
+            )
+        )
+        {
+            const tangentLine =
+                evEdgeTangentLine(
+                    context,
+                    {
+                        "edge" :
+                            anchorEdge,
+
+                        "parameter" :
+                            0.5
+                    }
+                );
+
+
+            const midpoint =
+                tangentLine.origin;
+
+
+            const tangentDir =
+                tangentLine.direction;
+
+
+            const perpReference =
+                (
+                    abs(
+                        tangentDir[2]
+                    )
+                    <
+                    0.9
+                )
+                ?
+                vector(
+                    0,
+                    0,
+                    1
+                )
+                :
+                vector(
+                    0,
+                    1,
+                    0
+                );
+
+
+            const radiusDir =
+                normalize(
+                    cross(
+                        tangentDir,
+                        perpReference
+                    )
+                );
+
+
+            const dimensionColor =
+                color(
+                    0,
+                    0,
+                    0,
+                    0.92
+                );
+
+
+            //////////////////////////////////////////////////////////////////
+            // UNKNOWN RADIUS
+            //
+            // Large fuzzy arrow.
+            //////////////////////////////////////////////////////////////////
+
+            if (
+                definition.radiusNeedsInput
+            )
+            {
+                drawBigFuzzyRadiusArrow(
+                    context,
+
                     id + "radiusGesture",
+
                     midpoint,
+
                     radiusDir,
-                    8 * millimeter,
+
+                    30 * millimeter,
+
                     "R: ?",
+
                     dimensionColor
-            );
-        }
-        else
-        {
-            drawDimensionArrow(
+                );
+            }
+
+
+            //////////////////////////////////////////////////////////////////
+            // KNOWN RADIUS
+            //
+            // Once someone provides the value, switch back to a precise
+            // dimension arrow.
+            //////////////////////////////////////////////////////////////////
+
+            else
+            {
+                drawDimensionArrow(
                     context,
+
                     id + "radiusArrow",
+
                     midpoint,
-                    radiusDir * definition.radius,
-                    "R: " ~ toString(round(definition.radius / millimeter, 1)) ~ " mm",
+
+                    radiusDir
+                    *
+                    definition.radius,
+
+                    "R: "
+                    ~
+                    toString(
+                        round(
+                            definition.radius
+                            /
+                            millimeter,
+
+                            1
+                        )
+                    )
+                    ~
+                    " mm",
+
                     dimensionColor
+                );
+            }
+
+
+            //////////////////////////////////////////////////////////////////
+            // Interactive radius handle.
+            //////////////////////////////////////////////////////////////////
+
+            addManipulators(
+                context,
+                id,
+                {
+                    "radiusManipulator" :
+                        linearManipulator(
+                            {
+                                "base" :
+                                    midpoint,
+
+                                "direction" :
+                                    radiusDir,
+
+                                "offset" :
+                                    definition.radius,
+
+                                "primaryParameterId" :
+                                    "radius"
+                            }
+                        )
+                }
             );
         }
 
-        opDeleteBodies(context, id + "deleteTemporaryProposal", {
-                "entities" : proposedBody
-        });
 
-        // Drag handle for radius, anchored at the edge midpoint along
-        // the same direction the dimension arrow/gesture already uses.
-        addManipulators(context, id, {
-                "radiusManipulator" : linearManipulator({
-                        "base" : midpoint,
-                        "direction" : radiusDir,
-                        "offset" : definition.radius,
-                        "primaryParameterId" : "radius"
-                })
-        });
+        //////////////////////////////////////////////////////////////////
+        // Delete the exact temporary CAD proposal.
+        //
+        // The whole-body hand-drawn representation stays behind.
+        //////////////////////////////////////////////////////////////////
+
+        opDeleteBodies(
+            context,
+            id + "deleteTemporaryProposal",
+            {
+                "entities" :
+                    proposedBody
+            }
+        );
     });
 
-// Manipulator Change Function referenced by the annotation above.
-export function fuzzycadNeedsInputFilletManipulatorChange(context is Context, definition is map, newManipulators is map) returns map
+
+//////////////////////////////////////////////////////////////////////
+//
+// MANIPULATOR CHANGE
+//
+//////////////////////////////////////////////////////////////////////
+
+export function fuzzycadNeedsInputFilletManipulatorChange(
+    context is Context,
+    definition is map,
+    newManipulators is map)
+returns map
 {
-    if (newManipulators["radiusManipulator"] != undefined)
+    if (
+        newManipulators[
+            "radiusManipulator"
+        ]
+        !=
+        undefined
+    )
     {
-        definition.radius = newManipulators["radiusManipulator"].offset;
+        definition.radius =
+            newManipulators[
+                "radiusManipulator"
+            ].offset;
     }
+
 
     return definition;
 }
 
+
 //////////////////////////////////////////////////////////////////////
 //
-// FILLED DIMENSION ARROW (copied verbatim from proposedFillet.fs)
+// LARGE FUZZY RADIUS ARROW
+//
+// Used while radiusNeedsInput == true.
+//
+// This is deliberately much larger than the old 8 mm gesture.
+//
+// Visual meaning:
+//
+//     whole-body scribble
+//         = geometry remains provisional
+//
+//     R:? arrow
+//         = specifically the fillet radius remains unresolved
+//
+//////////////////////////////////////////////////////////////////////
+
+function drawBigFuzzyRadiusArrow(
+    context is Context,
+    id is Id,
+    start is Vector,
+    direction is Vector,
+    nominalLength is ValueWithUnits,
+    labelText is string,
+    gestureColor is map)
+{
+    if (
+        norm(
+            direction
+        )
+        <
+        0.0001
+    )
+    {
+        return;
+    }
+
+
+    const dir =
+        normalize(
+            direction
+        );
+
+
+    const reference =
+        (
+            abs(
+                dir[2]
+            )
+            <
+            0.9
+        )
+        ?
+        vector(
+            0,
+            0,
+            1
+        )
+        :
+        vector(
+            0,
+            1,
+            0
+        );
+
+
+    const perp1 =
+        normalize(
+            cross(
+                dir,
+                reference
+            )
+        );
+
+
+    const perp2 =
+        normalize(
+            cross(
+                dir,
+                perp1
+            )
+        );
+
+
+    var rnd =
+        RandomNumberFunctionWithSalt(
+            id,
+            "BIG_RADIUS_ARROW"
+        );
+
+
+    var allStrokes =
+        qNothing();
+
+
+    //////////////////////////////////////////////////////////////////
+    // SHAFT
+    //
+    // Three slightly different passes give the line a hand-drawn feel
+    // while preserving an obvious direction.
+    //////////////////////////////////////////////////////////////////
+
+    const shaftStrokeCount =
+        3;
+
+
+    const shaftPointCount =
+        8;
+
+
+    for (
+        var s = 0;
+        s < shaftStrokeCount;
+        s += 1
+    )
+    {
+        var pts =
+            makeArray(
+                shaftPointCount,
+                undefined
+            );
+
+
+        for (
+            var i = 0;
+            i < shaftPointCount;
+            i += 1
+        )
+        {
+            const t =
+                i
+                /
+                (
+                    shaftPointCount
+                    -
+                    1
+                );
+
+
+            const basePt =
+                start
+                +
+                dir
+                *
+                (
+                    nominalLength
+                    *
+                    t
+                );
+
+
+            const spread =
+                nominalLength
+                *
+                (
+                    0.012
+                    +
+                    0.018
+                    *
+                    t
+                );
+
+
+            const r1 =
+                rnd();
+
+
+            const r2 =
+                rnd();
+
+
+            const j1 =
+                (
+                    (
+                        r1
+                        +
+                        i * 19
+                        +
+                        s * 53
+                    )
+                    %
+                    100
+                )
+                /
+                100.0
+                -
+                0.5;
+
+
+            const j2 =
+                (
+                    (
+                        r2
+                        +
+                        i * 41
+                        +
+                        s * 67
+                    )
+                    %
+                    100
+                )
+                /
+                100.0
+                -
+                0.5;
+
+
+            pts[i] =
+                basePt
+                +
+                perp1
+                *
+                (
+                    spread
+                    *
+                    j1
+                )
+                +
+                perp2
+                *
+                (
+                    spread
+                    *
+                    j2
+                    *
+                    0.55
+                );
+        }
+
+
+        const strokeId =
+            id
+            +
+            (
+                "_shaft"
+                ~
+                toString(
+                    s
+                )
+            );
+
+
+        opFitSpline(
+            context,
+            strokeId,
+            {
+                "points" :
+                    pts
+            }
+        );
+
+
+        allStrokes =
+            qUnion(
+                allStrokes,
+
+                qCreatedBy(
+                    strokeId,
+                    EntityType.BODY
+                )
+            );
+    }
+
+
+    //////////////////////////////////////////////////////////////////
+    // LARGE ARROW HEAD
+    //////////////////////////////////////////////////////////////////
+
+    const tipPt =
+        start
+        +
+        dir
+        *
+        nominalLength;
+
+
+    const headLength =
+        min(
+            nominalLength
+            *
+            0.34,
+
+            11 * millimeter
+        );
+
+
+    const headHalfWidth =
+        min(
+            nominalLength
+            *
+            0.20,
+
+            7 * millimeter
+        );
+
+
+    //////////////////////////////////////////////////////////////////
+    // Two sides of arrow head.
+    //
+    // Two passes each so it visually matches the scribbled shaft.
+    //////////////////////////////////////////////////////////////////
+
+    for (
+        var sideIndex = 0;
+        sideIndex < 2;
+        sideIndex += 1
+    )
+    {
+        const sideSign =
+            (
+                sideIndex
+                ==
+                0
+            )
+            ?
+            -1
+            :
+            1;
+
+
+        const headBase =
+            tipPt
+            -
+            dir
+            *
+            headLength
+            +
+            perp1
+            *
+            (
+                headHalfWidth
+                *
+                sideSign
+            );
+
+
+        for (
+            var pass = 0;
+            pass < 2;
+            pass += 1
+        )
+        {
+            const headPointCount =
+                5;
+
+
+            var headPts =
+                makeArray(
+                    headPointCount,
+                    undefined
+                );
+
+
+            for (
+                var h = 0;
+                h < headPointCount;
+                h += 1
+            )
+            {
+                const t =
+                    h
+                    /
+                    (
+                        headPointCount
+                        -
+                        1
+                    );
+
+
+                const basePt =
+                    headBase
+                    +
+                    (
+                        tipPt
+                        -
+                        headBase
+                    )
+                    *
+                    t;
+
+
+                const jitterSize =
+                    0.45
+                    *
+                    millimeter;
+
+
+                const r1 =
+                    rnd();
+
+
+                const r2 =
+                    rnd();
+
+
+                const j1 =
+                    (
+                        (
+                            r1
+                            +
+                            h * 23
+                            +
+                            pass * 37
+                            +
+                            sideIndex * 61
+                        )
+                        %
+                        100
+                    )
+                    /
+                    100.0
+                    -
+                    0.5;
+
+
+                const j2 =
+                    (
+                        (
+                            r2
+                            +
+                            h * 31
+                            +
+                            pass * 43
+                            +
+                            sideIndex * 71
+                        )
+                        %
+                        100
+                    )
+                    /
+                    100.0
+                    -
+                    0.5;
+
+
+                headPts[h] =
+                    basePt
+                    +
+                    perp1
+                    *
+                    (
+                        jitterSize
+                        *
+                        j1
+                    )
+                    +
+                    perp2
+                    *
+                    (
+                        jitterSize
+                        *
+                        j2
+                    );
+            }
+
+
+            const headStrokeId =
+                id
+                +
+                (
+                    "_head"
+                    ~
+                    toString(
+                        sideIndex
+                    )
+                    ~
+                    "_"
+                    ~
+                    toString(
+                        pass
+                    )
+                );
+
+
+            opFitSpline(
+                context,
+                headStrokeId,
+                {
+                    "points" :
+                        headPts
+                }
+            );
+
+
+            allStrokes =
+                qUnion(
+                    allStrokes,
+
+                    qCreatedBy(
+                        headStrokeId,
+                        EntityType.BODY
+                    )
+                );
+        }
+    }
+
+
+    //////////////////////////////////////////////////////////////////
+    // Combine and style arrow.
+    //////////////////////////////////////////////////////////////////
+
+    if (
+        !isQueryEmpty(
+            context,
+            allStrokes
+        )
+    )
+    {
+        opCreateCompositePart(
+            context,
+            id + "arrowComposite",
+            {
+                "bodies" :
+                    allStrokes,
+
+                "closed" :
+                    false
+            }
+        );
+
+
+        setProperty(
+            context,
+            {
+                "entities" :
+                    qCreatedBy(
+                        id + "arrowComposite",
+                        EntityType.BODY
+                    ),
+
+                "propertyType" :
+                    PropertyType.APPEARANCE,
+
+                "value" :
+                    gestureColor
+            }
+        );
+    }
+
+
+    //////////////////////////////////////////////////////////////////
+    // BIG R:? LABEL
+    //////////////////////////////////////////////////////////////////
+
+    const labelPlane =
+        plane(
+            tipPt,
+            perp1,
+            dir
+        );
+
+
+    const labelSketch =
+        newSketchOnPlane(
+            context,
+            id + "labelSketch",
+            {
+                "sketchPlane" :
+                    labelPlane
+            }
+        );
+
+
+    const labelUv =
+        worldToPlane(
+            labelPlane,
+            tipPt
+        );
+
+
+    const textHeight =
+        3.8
+        *
+        millimeter;
+
+
+    skText(
+        labelSketch,
+        "labelText",
+        {
+            "text" :
+                labelText,
+
+            "fontName" :
+                "OpenSans-Regular.ttf",
+
+            "firstCorner" :
+                vector(
+                    labelUv[0]
+                    -
+                    textHeight
+                    *
+                    1.6,
+
+                    labelUv[1]
+                    +
+                    3
+                    *
+                    millimeter
+                ),
+
+            "secondCorner" :
+                vector(
+                    labelUv[0]
+                    +
+                    textHeight
+                    *
+                    1.6,
+
+                    labelUv[1]
+                    +
+                    3
+                    *
+                    millimeter
+                    +
+                    textHeight
+                )
+        }
+    );
+
+
+    skSolve(
+        labelSketch
+    );
+}
+
+
+//////////////////////////////////////////////////////////////////////
+//
+// PRECISE DIMENSION ARROW
+//
+// Used after the radius is known.
 //
 //////////////////////////////////////////////////////////////////////
 
@@ -245,224 +1321,1009 @@ function drawDimensionArrow(
     labelText is string,
     arrowColor is map)
 {
-    const distance = norm(axisOffset);
-    const distanceMm = distance / millimeter;
+    const distance =
+        norm(
+            axisOffset
+        );
 
-    if (distanceMm < 0.001)
+
+    const distanceMm =
+        distance
+        /
+        millimeter;
+
+
+    if (
+        distanceMm
+        <
+        0.001
+    )
     {
         return;
     }
 
-    const direction = normalize(axisOffset);
 
-    const reference = (abs(direction[2]) < 0.9) ? vector(0, 0, 1) : vector(0, 1, 0);
-    const planeNormal = normalize(cross(direction, reference));
-    const arrowPlane = plane(start, planeNormal, direction);
+    const direction =
+        normalize(
+            axisOffset
+        );
 
-    const shaftWidth = min(max(distanceMm * 0.09, 1.0), 3.5) * millimeter;
-    const headLength = min(distanceMm * 0.45, 12) * millimeter;
-    const headWidth = shaftWidth * 4;
 
-    const arrowSketch = newSketchOnPlane(context, id + "arrowSketch", { "sketchPlane" : arrowPlane });
+    const reference =
+        (
+            abs(
+                direction[2]
+            )
+            <
+            0.9
+        )
+        ?
+        vector(
+            0,
+            0,
+            1
+        )
+        :
+        vector(
+            0,
+            1,
+            0
+        );
 
-    skLineSegment(arrowSketch, "headUpper", {
-            "start" : vector(distance, 0 * meter),
-            "end" : vector(distance - headLength, headWidth / 2)
-    });
-    skLineSegment(arrowSketch, "headLower", {
-            "start" : vector(distance, 0 * meter),
-            "end" : vector(distance - headLength, -headWidth / 2)
-    });
-    skLineSegment(arrowSketch, "headUpperTransition", {
-            "start" : vector(distance - headLength, headWidth / 2),
-            "end" : vector(distance - headLength, shaftWidth / 2)
-    });
-    skLineSegment(arrowSketch, "headLowerTransition", {
-            "start" : vector(distance - headLength, -headWidth / 2),
-            "end" : vector(distance - headLength, -shaftWidth / 2)
-    });
-    skLineSegment(arrowSketch, "shaftUpper", {
-            "start" : vector(distance - headLength, shaftWidth / 2),
-            "end" : vector(0 * meter, shaftWidth / 2)
-    });
-    skLineSegment(arrowSketch, "shaftLower", {
-            "start" : vector(distance - headLength, -shaftWidth / 2),
-            "end" : vector(0 * meter, -shaftWidth / 2)
-    });
-    skLineSegment(arrowSketch, "shaftBack", {
-            "start" : vector(0 * meter, shaftWidth / 2),
-            "end" : vector(0 * meter, -shaftWidth / 2)
-    });
 
-    skSolve(arrowSketch);
+    const planeNormal =
+        normalize(
+            cross(
+                direction,
+                reference
+            )
+        );
 
-    opExtractSurface(context, id + "arrowSurface", {
-            "faces" : qSketchRegion(id + "arrowSketch"),
-            "offset" : 0 * meter,
-            "useFacesAroundToTrimOffset" : false
-    });
 
-    opDeleteBodies(context, id + "deleteArrowSketch", {
-            "entities" : qCreatedBy(id + "arrowSketch")
-    });
+    const arrowPlane =
+        plane(
+            start,
+            planeNormal,
+            direction
+        );
 
-    setProperty(context, {
-            "entities" : qCreatedBy(id + "arrowSurface", EntityType.BODY),
-            "propertyType" : PropertyType.APPEARANCE,
-            "value" : arrowColor
-    });
 
-    const midPoint = start + axisOffset / 2;
-    const labelSketch = newSketchOnPlane(context, id + "labelSketch", { "sketchPlane" : arrowPlane });
-    const labelUv = worldToPlane(arrowPlane, midPoint);
-    const labelOffset = headWidth / 2 + 1.5 * millimeter;
-    const textHeight = 2.5 * millimeter;
+    const shaftWidth =
+        min(
+            max(
+                distanceMm
+                *
+                0.09,
 
-    skText(labelSketch, "labelText", {
-            "text" : labelText,
-            "fontName" : "OpenSans-Regular.ttf",
-            "firstCorner" : vector(labelUv[0] - textHeight * 1.5, labelUv[1] + labelOffset),
-            "secondCorner" : vector(labelUv[0] + textHeight * 1.5, labelUv[1] + labelOffset + textHeight)
-    });
+                1.0
+            ),
 
-    skSolve(labelSketch);
+            3.5
+        )
+        *
+        millimeter;
+
+
+    const headLength =
+        min(
+            distanceMm
+            *
+            0.45,
+
+            12
+        )
+        *
+        millimeter;
+
+
+    const headWidth =
+        shaftWidth
+        *
+        4;
+
+
+    const arrowSketch =
+        newSketchOnPlane(
+            context,
+            id + "arrowSketch",
+            {
+                "sketchPlane" :
+                    arrowPlane
+            }
+        );
+
+
+    skLineSegment(
+        arrowSketch,
+        "headUpper",
+        {
+            "start" :
+                vector(
+                    distance,
+                    0 * meter
+                ),
+
+            "end" :
+                vector(
+                    distance - headLength,
+                    headWidth / 2
+                )
+        }
+    );
+
+
+    skLineSegment(
+        arrowSketch,
+        "headLower",
+        {
+            "start" :
+                vector(
+                    distance,
+                    0 * meter
+                ),
+
+            "end" :
+                vector(
+                    distance - headLength,
+                    -headWidth / 2
+                )
+        }
+    );
+
+
+    skLineSegment(
+        arrowSketch,
+        "headUpperTransition",
+        {
+            "start" :
+                vector(
+                    distance - headLength,
+                    headWidth / 2
+                ),
+
+            "end" :
+                vector(
+                    distance - headLength,
+                    shaftWidth / 2
+                )
+        }
+    );
+
+
+    skLineSegment(
+        arrowSketch,
+        "headLowerTransition",
+        {
+            "start" :
+                vector(
+                    distance - headLength,
+                    -headWidth / 2
+                ),
+
+            "end" :
+                vector(
+                    distance - headLength,
+                    -shaftWidth / 2
+                )
+        }
+    );
+
+
+    skLineSegment(
+        arrowSketch,
+        "shaftUpper",
+        {
+            "start" :
+                vector(
+                    distance - headLength,
+                    shaftWidth / 2
+                ),
+
+            "end" :
+                vector(
+                    0 * meter,
+                    shaftWidth / 2
+                )
+        }
+    );
+
+
+    skLineSegment(
+        arrowSketch,
+        "shaftLower",
+        {
+            "start" :
+                vector(
+                    distance - headLength,
+                    -shaftWidth / 2
+                ),
+
+            "end" :
+                vector(
+                    0 * meter,
+                    -shaftWidth / 2
+                )
+        }
+    );
+
+
+    skLineSegment(
+        arrowSketch,
+        "shaftBack",
+        {
+            "start" :
+                vector(
+                    0 * meter,
+                    shaftWidth / 2
+                ),
+
+            "end" :
+                vector(
+                    0 * meter,
+                    -shaftWidth / 2
+                )
+        }
+    );
+
+
+    skSolve(
+        arrowSketch
+    );
+
+
+    opExtractSurface(
+        context,
+        id + "arrowSurface",
+        {
+            "faces" :
+                qSketchRegion(
+                    id + "arrowSketch"
+                ),
+
+            "offset" :
+                0 * meter,
+
+            "useFacesAroundToTrimOffset" :
+                false
+        }
+    );
+
+
+    opDeleteBodies(
+        context,
+        id + "deleteArrowSketch",
+        {
+            "entities" :
+                qCreatedBy(
+                    id + "arrowSketch"
+                )
+        }
+    );
+
+
+    setProperty(
+        context,
+        {
+            "entities" :
+                qCreatedBy(
+                    id + "arrowSurface",
+                    EntityType.BODY
+                ),
+
+            "propertyType" :
+                PropertyType.APPEARANCE,
+
+            "value" :
+                arrowColor
+        }
+    );
+
+
+    const midPoint =
+        start
+        +
+        axisOffset
+        /
+        2;
+
+
+    const labelSketch =
+        newSketchOnPlane(
+            context,
+            id + "labelSketch",
+            {
+                "sketchPlane" :
+                    arrowPlane
+            }
+        );
+
+
+    const labelUv =
+        worldToPlane(
+            arrowPlane,
+            midPoint
+        );
+
+
+    const labelOffset =
+        headWidth
+        /
+        2
+        +
+        1.5
+        *
+        millimeter;
+
+
+    const textHeight =
+        2.5
+        *
+        millimeter;
+
+
+    skText(
+        labelSketch,
+        "labelText",
+        {
+            "text" :
+                labelText,
+
+            "fontName" :
+                "OpenSans-Regular.ttf",
+
+            "firstCorner" :
+                vector(
+                    labelUv[0]
+                    -
+                    textHeight
+                    *
+                    1.5,
+
+                    labelUv[1]
+                    +
+                    labelOffset
+                ),
+
+            "secondCorner" :
+                vector(
+                    labelUv[0]
+                    +
+                    textHeight
+                    *
+                    1.5,
+
+                    labelUv[1]
+                    +
+                    labelOffset
+                    +
+                    textHeight
+                )
+        }
+    );
+
+
+    skSolve(
+        labelSketch
+    );
 }
 
+
 //////////////////////////////////////////////////////////////////////
 //
-// HAND-DRAWN FACE SCRIBBLE FILL (copied verbatim from needsInputMove.fs)
+// WHOLE-BODY HAND-DRAWN FACE FILL
+//
+// This intentionally covers EVERY face of the temporary proposed body.
+//
+// Important visual goal:
+//
+//   exact CAD body
+//       -> disappears
+//
+//   complete proposed geometry
+//       -> remains as loose scribble
+//
+// Boundary-adjacent strokes use extra variance so the visualization
+// does not read as a set of crisp hard B-rep edges.
+//
+// Line density reduced ~1/3 from the previous version (46-52 primary /
+// 7-10 secondary) per live feedback that the fill read as too dense --
+// now 31-35 primary / 5-7 secondary.
 //
 //////////////////////////////////////////////////////////////////////
 
-function drawSketchyFaceFill(context is Context, id is Id, body is Query)
+function drawSketchyFaceFill(
+    context is Context,
+    id is Id,
+    body is Query)
 {
-    const chordLength = 3 * millimeter;
-    const variance = 0.4 * millimeter;
+    const chordLength =
+        3 * millimeter;
 
-    var rnd = RandomNumberFunctionWithSalt(id, "faceFill");
 
-    var allStrokes = qNothing();
+    const variance =
+        0.4 * millimeter;
 
-    const faces = qOwnedByBody(qEverything(EntityType.FACE), body);
-    var faceIndex = 0;
 
-    for (var faceQuery in evaluateQuery(context, faces))
+    var rnd =
+        RandomNumberFunctionWithSalt(
+            id,
+            "faceFill"
+        );
+
+
+    var allStrokes =
+        qNothing();
+
+
+    const faces =
+        qOwnedByBody(
+            body,
+            EntityType.FACE
+        );
+
+
+    var faceIndex =
+        0;
+
+
+    for (
+        var faceQuery
+        in evaluateQuery(
+            context,
+            faces
+        )
+    )
     {
-        const faceId = id + ("face" ~ toString(faceIndex));
+        const faceId =
+            id
+            +
+            (
+                "face"
+                ~
+                toString(
+                    faceIndex
+                )
+            );
 
-        const primaryCount = 46 + (rnd() % 7); // 46-52
 
-        var primaryNames = makeArray(primaryCount, "");
-        for (var n = 0; n < primaryCount; n += 1)
+        //////////////////////////////////////////////////////////////////
+        // PRIMARY ISO CURVES
+        //////////////////////////////////////////////////////////////////
+
+        const primaryCount =
+            31
+            +
+            (
+                rnd()
+                %
+                5
+            );
+
+
+        var primaryNames =
+            makeArray(
+                primaryCount,
+                ""
+            );
+
+
+        for (
+            var n = 0;
+            n < primaryCount;
+            n += 1
+        )
         {
-            primaryNames[n] = "primary" ~ toString(n);
+            primaryNames[n] =
+                "primary"
+                ~
+                toString(
+                    n
+                );
         }
 
-        const primaryGuideId = faceId + "primaryGuides";
-        opCreateCurvesOnFace(context, primaryGuideId, {
-                "curveDefinition" : [
-                    curveOnFaceDefinition(faceQuery, FaceCurveCreationType.DIR1_AUTO_SPACED_ISO, primaryNames, primaryCount)
-                ],
-                "showCurves" : false,
-                "skipTrim" : false
-        });
 
-        const primaryGuides = qCreatedBy(primaryGuideId, EntityType.EDGE);
-        var primaryIndex = 0;
+        const primaryGuideId =
+            faceId
+            +
+            "primaryGuides";
 
-        for (var guideEdge in evaluateQuery(context, primaryGuides))
-        {
-            const isEndpoint = (primaryIndex == 0) || (primaryIndex == primaryCount - 1);
 
-            const distFromEdge = min(primaryIndex, primaryCount - 1 - primaryIndex);
-            const centerProximity = min(distFromEdge / (primaryCount / 2.0), 1.0);
-            const keepProbability = isEndpoint ? 1.0 : (0.18 + 0.82 * centerProximity);
-
-            if (isEndpoint || (((rnd() % 100) / 100.0) < keepProbability))
+        opCreateCurvesOnFace(
+            context,
+            primaryGuideId,
             {
-                const r = min(0.03 + ((rnd() % 24) / 100.0) * 0.25, 1);
-                const g = min(0.03 + ((rnd() % 29) / 100.0) * 0.25, 1);
-                const b = min(0.03 + ((rnd() % 25) / 100.0) * 0.25, 1);
+                "curveDefinition" :
+                    [
+                        curveOnFaceDefinition(
+                            faceQuery,
+                            FaceCurveCreationType.DIR1_AUTO_SPACED_ISO,
+                            primaryNames,
+                            primaryCount
+                        )
+                    ],
 
-                // Boundary-adjacent guides (isEndpoint) sit almost
-                // exactly on the face's own real edge, so with normal
-                // jitter they read as one crisp, ruler-straight line
-                // framing the looser interior scribble -- extra
-                // variance softens that "hard edge" look, per live
-                // feedback on the first successful compile.
-                const strokeVariance = isEndpoint ? variance * 2.5 : variance;
+                "showCurves" :
+                    false,
 
-                const strokes = handDrawScribbleGuide(
-                    context,
-                    faceId + ("primaryStroke" ~ toString(primaryIndex)),
-                    chordLength, strokeVariance, rnd, guideEdge,
-                    r, g, b, 0.55, false, 0.06);
+                "skipTrim" :
+                    false
+            }
+        );
 
-                allStrokes = qUnion(allStrokes, strokes);
+
+        const primaryGuides =
+            qCreatedBy(
+                primaryGuideId,
+                EntityType.EDGE
+            );
+
+
+        var primaryIndex =
+            0;
+
+
+        for (
+            var guideEdge
+            in evaluateQuery(
+                context,
+                primaryGuides
+            )
+        )
+        {
+            const isEndpoint =
+                (
+                    primaryIndex
+                    ==
+                    0
+                )
+                ||
+                (
+                    primaryIndex
+                    ==
+                    primaryCount
+                    -
+                    1
+                );
+
+
+            const distFromEdge =
+                min(
+                    primaryIndex,
+                    primaryCount
+                    -
+                    1
+                    -
+                    primaryIndex
+                );
+
+
+            const centerProximity =
+                min(
+                    distFromEdge
+                    /
+                    (
+                        primaryCount
+                        /
+                        2.0
+                    ),
+
+                    1.0
+                );
+
+
+            const keepProbability =
+                isEndpoint
+                ?
+                1.0
+                :
+                (
+                    0.18
+                    +
+                    0.82
+                    *
+                    centerProximity
+                );
+
+
+            if (
+                isEndpoint
+                ||
+                (
+                    (
+                        (
+                            rnd()
+                            %
+                            100
+                        )
+                        /
+                        100.0
+                    )
+                    <
+                    keepProbability
+                )
+            )
+            {
+                const r =
+                    min(
+                        0.03
+                        +
+                        (
+                            (
+                                rnd()
+                                %
+                                24
+                            )
+                            /
+                            100.0
+                        )
+                        *
+                        0.25,
+
+                        1
+                    );
+
+
+                const g =
+                    min(
+                        0.03
+                        +
+                        (
+                            (
+                                rnd()
+                                %
+                                29
+                            )
+                            /
+                            100.0
+                        )
+                        *
+                        0.25,
+
+                        1
+                    );
+
+
+                const b =
+                    min(
+                        0.03
+                        +
+                        (
+                            (
+                                rnd()
+                                %
+                                25
+                            )
+                            /
+                            100.0
+                        )
+                        *
+                        0.25,
+
+                        1
+                    );
+
+
+                //////////////////////////////////////////////////////////////////
+                // Extra variance at face boundary:
+                //
+                // intentionally prevents the outer lines from reading as
+                // perfect CAD edges.
+                //////////////////////////////////////////////////////////////////
+
+                const strokeVariance =
+                    isEndpoint
+                    ?
+                    variance
+                    *
+                    2.5
+                    :
+                    variance;
+
+
+                const strokes =
+                    handDrawScribbleGuide(
+                        context,
+
+                        faceId
+                        +
+                        (
+                            "primaryStroke"
+                            ~
+                            toString(
+                                primaryIndex
+                            )
+                        ),
+
+                        chordLength,
+                        strokeVariance,
+                        rnd,
+                        guideEdge,
+
+                        r,
+                        g,
+                        b,
+
+                        0.55,
+
+                        false,
+
+                        0.06
+                    );
+
+
+                allStrokes =
+                    qUnion(
+                        allStrokes,
+                        strokes
+                    );
             }
 
-            primaryIndex += 1;
+
+            primaryIndex +=
+                1;
         }
 
-        opDeleteBodies(context, faceId + "deletePrimaryGuides", {
-                "entities" : qCreatedBy(primaryGuideId, EntityType.BODY)
-        });
 
-        const secondaryCount = 7 + (rnd() % 4); // 7-10
-
-        var secondaryNames = makeArray(secondaryCount, "");
-        for (var m = 0; m < secondaryCount; m += 1)
-        {
-            secondaryNames[m] = "secondary" ~ toString(m);
-        }
-
-        const secondaryGuideId = faceId + "secondaryGuides";
-        opCreateCurvesOnFace(context, secondaryGuideId, {
-                "curveDefinition" : [
-                    curveOnFaceDefinition(faceQuery, FaceCurveCreationType.DIR2_AUTO_SPACED_ISO, secondaryNames, secondaryCount)
-                ],
-                "showCurves" : false,
-                "skipTrim" : false
-        });
-
-        const secondaryGuides = qCreatedBy(secondaryGuideId, EntityType.EDGE);
-        var secondaryIndex = 0;
-
-        for (var guideEdge2 in evaluateQuery(context, secondaryGuides))
-        {
-            if (((rnd() % 100) / 100.0) < 0.45)
+        opDeleteBodies(
+            context,
+            faceId + "deletePrimaryGuides",
             {
-                const r2 = min(0.10 + ((rnd() % 20) / 100.0) * 0.3, 1);
-                const g2 = min(0.10 + ((rnd() % 22) / 100.0) * 0.3, 1);
-                const b2 = min(0.10 + ((rnd() % 22) / 100.0) * 0.3, 1);
+                "entities" :
+                    qCreatedBy(
+                        primaryGuideId,
+                        EntityType.BODY
+                    )
+            }
+        );
 
-                const strokes2 = handDrawScribbleGuide(
-                    context,
-                    faceId + ("secondaryStroke" ~ toString(secondaryIndex)),
-                    chordLength, variance, rnd, guideEdge2,
-                    r2, g2, b2, 0.4, true, 0.10);
 
-                allStrokes = qUnion(allStrokes, strokes2);
+        //////////////////////////////////////////////////////////////////
+        // SECONDARY ISO CURVES
+        //////////////////////////////////////////////////////////////////
+
+        const secondaryCount =
+            5
+            +
+            (
+                rnd()
+                %
+                3
+            );
+
+
+        var secondaryNames =
+            makeArray(
+                secondaryCount,
+                ""
+            );
+
+
+        for (
+            var m = 0;
+            m < secondaryCount;
+            m += 1
+        )
+        {
+            secondaryNames[m] =
+                "secondary"
+                ~
+                toString(
+                    m
+                );
+        }
+
+
+        const secondaryGuideId =
+            faceId
+            +
+            "secondaryGuides";
+
+
+        opCreateCurvesOnFace(
+            context,
+            secondaryGuideId,
+            {
+                "curveDefinition" :
+                    [
+                        curveOnFaceDefinition(
+                            faceQuery,
+                            FaceCurveCreationType.DIR2_AUTO_SPACED_ISO,
+                            secondaryNames,
+                            secondaryCount
+                        )
+                    ],
+
+                "showCurves" :
+                    false,
+
+                "skipTrim" :
+                    false
+            }
+        );
+
+
+        const secondaryGuides =
+            qCreatedBy(
+                secondaryGuideId,
+                EntityType.EDGE
+            );
+
+
+        var secondaryIndex =
+            0;
+
+
+        for (
+            var guideEdge2
+            in evaluateQuery(
+                context,
+                secondaryGuides
+            )
+        )
+        {
+            if (
+                (
+                    (
+                        rnd()
+                        %
+                        100
+                    )
+                    /
+                    100.0
+                )
+                <
+                0.45
+            )
+            {
+                const r2 =
+                    min(
+                        0.10
+                        +
+                        (
+                            (
+                                rnd()
+                                %
+                                20
+                            )
+                            /
+                            100.0
+                        )
+                        *
+                        0.3,
+
+                        1
+                    );
+
+
+                const g2 =
+                    min(
+                        0.10
+                        +
+                        (
+                            (
+                                rnd()
+                                %
+                                22
+                            )
+                            /
+                            100.0
+                        )
+                        *
+                        0.3,
+
+                        1
+                    );
+
+
+                const b2 =
+                    min(
+                        0.10
+                        +
+                        (
+                            (
+                                rnd()
+                                %
+                                22
+                            )
+                            /
+                            100.0
+                        )
+                        *
+                        0.3,
+
+                        1
+                    );
+
+
+                const strokes2 =
+                    handDrawScribbleGuide(
+                        context,
+
+                        faceId
+                        +
+                        (
+                            "secondaryStroke"
+                            ~
+                            toString(
+                                secondaryIndex
+                            )
+                        ),
+
+                        chordLength,
+                        variance,
+                        rnd,
+                        guideEdge2,
+
+                        r2,
+                        g2,
+                        b2,
+
+                        0.4,
+
+                        true,
+
+                        0.10
+                    );
+
+
+                allStrokes =
+                    qUnion(
+                        allStrokes,
+                        strokes2
+                    );
             }
 
-            secondaryIndex += 1;
+
+            secondaryIndex +=
+                1;
         }
 
-        opDeleteBodies(context, faceId + "deleteSecondaryGuides", {
-                "entities" : qCreatedBy(secondaryGuideId, EntityType.BODY)
-        });
 
-        faceIndex += 1;
+        opDeleteBodies(
+            context,
+            faceId + "deleteSecondaryGuides",
+            {
+                "entities" :
+                    qCreatedBy(
+                        secondaryGuideId,
+                        EntityType.BODY
+                    )
+            }
+        );
+
+
+        faceIndex +=
+            1;
     }
 
-    if (!isQueryEmpty(context, allStrokes))
+
+    if (
+        !isQueryEmpty(
+            context,
+            allStrokes
+        )
+    )
     {
-        opCreateCompositePart(context, id + "faceFillComposite", {
-                "bodies" : allStrokes,
-                "closed" : false
-        });
+        opCreateCompositePart(
+            context,
+            id + "faceFillComposite",
+            {
+                "bodies" :
+                    allStrokes,
+
+                "closed" :
+                    false
+            }
+        );
     }
 }
+
+
+//////////////////////////////////////////////////////////////////////
+//
+// SINGLE SCRIBBLE GUIDE
+//
+//////////////////////////////////////////////////////////////////////
 
 function handDrawScribbleGuide(
     context is Context,
@@ -478,229 +2339,548 @@ function handDrawScribbleGuide(
     singlePass is boolean,
     mistakeChance is number)
 {
-    var edgeLength = evLength(context, { "entities" : edgeQuery });
-    var pointCount = ceil(max(edgeLength / chordLength, 5));
+    var edgeLength =
+        evLength(
+            context,
+            {
+                "entities" :
+                    edgeQuery
+            }
+        );
 
-    var tangents = @evEdgeTangentLines(context, {
-            "edge" : edgeQuery,
-            "parameters" : range(0.0, 1.0, pointCount)
-    });
 
-    var rawRandom = rnd() % 100;
-    var numStrokes = singlePass ? 1 : (1 + floor(rawRandom / 34)); // 1-3
+    var pointCount =
+        ceil(
+            max(
+                edgeLength
+                /
+                chordLength,
 
-    var strokesQuery = qNothing();
+                5
+            )
+        );
 
-    for (var strokeIndex = 0; strokeIndex < numStrokes; strokeIndex += 1)
+
+    var tangents =
+        @evEdgeTangentLines(
+            context,
+            {
+                "edge" :
+                    edgeQuery,
+
+                "parameters" :
+                    range(
+                        0.0,
+                        1.0,
+                        pointCount
+                    )
+            }
+        );
+
+
+    var rawRandom =
+        rnd()
+        %
+        100;
+
+
+    var numStrokes =
+        singlePass
+        ?
+        1
+        :
+        (
+            1
+            +
+            floor(
+                rawRandom
+                /
+                34
+            )
+        );
+
+
+    var strokesQuery =
+        qNothing();
+
+
+    for (
+        var strokeIndex = 0;
+        strokeIndex < numStrokes;
+        strokeIndex += 1
+    )
     {
-        var newPoints = makeArray(pointCount, undefined);
+        var newPoints =
+            makeArray(
+                pointCount,
+                undefined
+            );
 
-        for (var i = 0; i < pointCount; i += 1)
+
+        for (
+            var i = 0;
+            i < pointCount;
+            i += 1
+        )
         {
-            var basePt = tangents[i].origin as Vector;
+            var basePt =
+                tangents[i].origin
+                as Vector;
 
-            var s1 = rnd();
-            var s2 = rnd();
 
-            var jitterFactor = 0.5 + ((s2 % 100) / 100.0) * 0.5;
+            var s1 =
+                rnd();
 
-            var isMistake = (((rnd() % 100) / 100.0) < mistakeChance);
-            var mistakeFactor = isMistake ? (1.30 + ((rnd() % 100) / 100.0) * 1.11) : 1.0;
 
-            var offsetX = 2 * (((s1 + i * 17 + strokeIndex * 29) % 100) / 100.0 - 0.5) * variance * jitterFactor * mistakeFactor;
-            var offsetY = 2 * (((s1 + i * 31 + strokeIndex * 43) % 100) / 100.0 - 0.5) * variance * jitterFactor * mistakeFactor;
-            var offsetZ = 2 * (((s1 + i * 47 + strokeIndex * 61) % 100) / 100.0 - 0.5) * variance * jitterFactor * mistakeFactor;
+            var s2 =
+                rnd();
 
-            var perturbed = basePt;
-            perturbed[0] += offsetX;
-            perturbed[1] += offsetY;
-            perturbed[2] += offsetZ;
 
-            newPoints[i] = perturbed;
+            var jitterFactor =
+                0.5
+                +
+                (
+                    (
+                        s2
+                        %
+                        100
+                    )
+                    /
+                    100.0
+                )
+                *
+                0.5;
+
+
+            var isMistake =
+                (
+                    (
+                        (
+                            rnd()
+                            %
+                            100
+                        )
+                        /
+                        100.0
+                    )
+                    <
+                    mistakeChance
+                );
+
+
+            var mistakeFactor =
+                isMistake
+                ?
+                (
+                    1.30
+                    +
+                    (
+                        (
+                            rnd()
+                            %
+                            100
+                        )
+                        /
+                        100.0
+                    )
+                    *
+                    1.11
+                )
+                :
+                1.0;
+
+
+            var offsetX =
+                2
+                *
+                (
+                    (
+                        (
+                            (
+                                s1
+                                +
+                                i * 17
+                                +
+                                strokeIndex * 29
+                            )
+                            %
+                            100
+                        )
+                        /
+                        100.0
+                    )
+                    -
+                    0.5
+                )
+                *
+                variance
+                *
+                jitterFactor
+                *
+                mistakeFactor;
+
+
+            var offsetY =
+                2
+                *
+                (
+                    (
+                        (
+                            (
+                                s1
+                                +
+                                i * 31
+                                +
+                                strokeIndex * 43
+                            )
+                            %
+                            100
+                        )
+                        /
+                        100.0
+                    )
+                    -
+                    0.5
+                )
+                *
+                variance
+                *
+                jitterFactor
+                *
+                mistakeFactor;
+
+
+            var offsetZ =
+                2
+                *
+                (
+                    (
+                        (
+                            (
+                                s1
+                                +
+                                i * 47
+                                +
+                                strokeIndex * 61
+                            )
+                            %
+                            100
+                        )
+                        /
+                        100.0
+                    )
+                    -
+                    0.5
+                )
+                *
+                variance
+                *
+                jitterFactor
+                *
+                mistakeFactor;
+
+
+            var perturbed =
+                basePt;
+
+
+            perturbed[0] +=
+                offsetX;
+
+
+            perturbed[1] +=
+                offsetY;
+
+
+            perturbed[2] +=
+                offsetZ;
+
+
+            newPoints[i] =
+                perturbed;
         }
 
-        const strokeId = id + ("_stroke" ~ toString(strokeIndex));
 
-        opFitSpline(context, strokeId, { "points" : newPoints });
+        const strokeId =
+            id
+            +
+            (
+                "_stroke"
+                ~
+                toString(
+                    strokeIndex
+                )
+            );
 
-        const strokeBody = qCreatedBy(strokeId, EntityType.BODY);
 
-        const colorJitter = (rnd() % 100) / 100.0;
-        const strokeAlpha = min(max(alpha + (colorJitter - 0.5) * 0.2, 0.1), 1.0);
+        opFitSpline(
+            context,
+            strokeId,
+            {
+                "points" :
+                    newPoints
+            }
+        );
 
-        setProperty(context, {
-                "entities" : strokeBody,
-                "propertyType" : PropertyType.APPEARANCE,
-                "value" : color(red, green, blue, strokeAlpha)
-        });
 
-        strokesQuery = qUnion(strokesQuery, strokeBody);
+        const strokeBody =
+            qCreatedBy(
+                strokeId,
+                EntityType.BODY
+            );
+
+
+        const colorJitter =
+            (
+                rnd()
+                %
+                100
+            )
+            /
+            100.0;
+
+
+        const strokeAlpha =
+            min(
+                max(
+                    alpha
+                    +
+                    (
+                        colorJitter
+                        -
+                        0.5
+                    )
+                    *
+                    0.2,
+
+                    0.1
+                ),
+
+                1.0
+            );
+
+
+        setProperty(
+            context,
+            {
+                "entities" :
+                    strokeBody,
+
+                "propertyType" :
+                    PropertyType.APPEARANCE,
+
+                "value" :
+                    color(
+                        red,
+                        green,
+                        blue,
+                        strokeAlpha
+                    )
+            }
+        );
+
+
+        strokesQuery =
+            qUnion(
+                strokesQuery,
+                strokeBody
+            );
     }
+
 
     return strokesQuery;
 }
 
-//////////////////////////////////////////////////////////////////////
-//
-// FUZZY DIRECTION GESTURE (copied verbatim from needsInputMove.fs --
-// see that file for the full rationale)
-//
-//////////////////////////////////////////////////////////////////////
-
-function drawFuzzyDirectionGesture(
-    context is Context,
-    id is Id,
-    start is Vector,
-    direction is Vector,
-    nominalLength is ValueWithUnits,
-    labelText is string,
-    gestureColor is map)
-{
-    if (norm(direction) < 0.0001)
-    {
-        return;
-    }
-
-    const dir = normalize(direction);
-
-    const reference = (abs(dir[2]) < 0.9) ? vector(0, 0, 1) : vector(0, 1, 0);
-    const perp1 = normalize(cross(dir, reference));
-    const perp2 = cross(dir, perp1);
-
-    var rnd = RandomNumberFunctionWithSalt(id, "gesture");
-
-    const strokeCount = 3;
-    const pointCount = 6;
-
-    var allStrokes = qNothing();
-
-    for (var s = 0; s < strokeCount; s += 1)
-    {
-        var pts = makeArray(pointCount, undefined);
-
-        for (var i = 0; i < pointCount; i += 1)
-        {
-            const t = i / (pointCount - 1);
-            const basePt = start + dir * (nominalLength * t);
-
-            // Reduced from 0.04-0.14 -- at the old amplitude the
-            // point-to-point sideways jitter was comparable in size to
-            // the along-axis spacing between sample points, so the
-            // stroke zigzagged almost as much sideways as it advanced,
-            // reading as a tangled scribble instead of a recognizable
-            // direction. Live feedback: "the three axes aren't straight
-            // lines." This keeps a hand-drawn wobble without losing the
-            // line's own directionality.
-            const spread = nominalLength * (0.015 + 0.025 * t);
-
-            const s1 = rnd();
-            const jitter1 = ((s1 + i * 19 + s * 53) % 100) / 100.0 - 0.5;
-            const jitter2 = ((s1 + i * 41 + s * 67) % 100) / 100.0 - 0.5;
-
-            pts[i] = basePt + perp1 * (spread * jitter1) + perp2 * (spread * jitter2 * 0.6);
-        }
-
-        const strokeId = id + ("_gesture" ~ toString(s));
-        opFitSpline(context, strokeId, { "points" : pts });
-        allStrokes = qUnion(allStrokes, qCreatedBy(strokeId, EntityType.BODY));
-    }
-
-    if (!isQueryEmpty(context, allStrokes))
-    {
-        opCreateCompositePart(context, id + "gestureComposite", {
-                "bodies" : allStrokes,
-                "closed" : false
-        });
-
-        setProperty(context, {
-                "entities" : qCreatedBy(id + "gestureComposite", EntityType.BODY),
-                "propertyType" : PropertyType.APPEARANCE,
-                "value" : gestureColor
-        });
-    }
-
-    const tipPt = start + dir * nominalLength;
-    const labelPlane = plane(tipPt, perp1, dir);
-    const labelSketch = newSketchOnPlane(context, id + "labelSketch", { "sketchPlane" : labelPlane });
-    const labelUv = worldToPlane(labelPlane, tipPt);
-    const textHeight = 2.5 * millimeter;
-
-    skText(labelSketch, "labelText", {
-            "text" : labelText,
-            "fontName" : "OpenSans-Regular.ttf",
-            "firstCorner" : vector(labelUv[0] - textHeight * 1.5, labelUv[1] + 1.5 * millimeter),
-            "secondCorner" : vector(labelUv[0] + textHeight * 1.5, labelUv[1] + 1.5 * millimeter + textHeight)
-    });
-
-    skSolve(labelSketch);
-}
-
-
 
 //////////////////////////////////////////////////////////////////////
 //
-// RANDOM NUMBER GENERATOR (salted variant, copied verbatim from
-// needsInputMove.fs)
+// DETERMINISTIC RANDOM
 //
 //////////////////////////////////////////////////////////////////////
 
-function RandomNumberFunctionWithSalt(id, salt)
+function RandomNumberFunctionWithSalt(
+    id,
+    salt)
 returns function
 {
-    const baseSeed = idToNum(id[0]);
-    const saltSeed = idToNum(salt);
-    return lcprng((baseSeed + saltSeed * 97) % 100000);
+    const baseSeed =
+        idToNum(
+            id[0]
+        );
+
+
+    const saltSeed =
+        idToNum(
+            salt
+        );
+
+
+    return lcprng(
+        (
+            baseSeed
+            +
+            saltSeed
+            *
+            97
+        )
+        %
+        100000
+    );
 }
 
-function idToNum(input is string)
+
+function idToNum(
+    input is string)
 returns number
 {
     const chrMap =
     {
-        'A' : 0, 'B' : 1, 'C' : 2, 'D' : 3, 'E' : 4, 'F' : 5, 'G' : 6, 'H' : 7,
-        'I' : 8, 'J' : 9, 'K' : 10, 'L' : 11, 'M' : 12, 'N' : 13, 'O' : 14, 'P' : 15,
-        'Q' : 16, 'R' : 17, 'S' : 18, 'T' : 19, 'U' : 20, 'V' : 21, 'W' : 22, 'X' : 23,
-        'Y' : 24, 'Z' : 25,
+        'A' : 0,
+        'B' : 1,
+        'C' : 2,
+        'D' : 3,
+        'E' : 4,
+        'F' : 5,
+        'G' : 6,
+        'H' : 7,
+        'I' : 8,
+        'J' : 9,
+        'K' : 10,
+        'L' : 11,
+        'M' : 12,
+        'N' : 13,
+        'O' : 14,
+        'P' : 15,
+        'Q' : 16,
+        'R' : 17,
+        'S' : 18,
+        'T' : 19,
+        'U' : 20,
+        'V' : 21,
+        'W' : 22,
+        'X' : 23,
+        'Y' : 24,
+        'Z' : 25,
 
-        'a' : 26, 'b' : 27, 'c' : 28, 'd' : 29, 'e' : 30, 'f' : 31, 'g' : 32, 'h' : 33,
-        'i' : 34, 'j' : 35, 'k' : 36, 'l' : 37, 'm' : 38, 'n' : 39, 'o' : 40, 'p' : 41,
-        'q' : 42, 'r' : 43, 's' : 44, 't' : 45, 'u' : 46, 'v' : 47, 'w' : 48, 'x' : 49,
-        'y' : 50, 'z' : 51,
+        'a' : 26,
+        'b' : 27,
+        'c' : 28,
+        'd' : 29,
+        'e' : 30,
+        'f' : 31,
+        'g' : 32,
+        'h' : 33,
+        'i' : 34,
+        'j' : 35,
+        'k' : 36,
+        'l' : 37,
+        'm' : 38,
+        'n' : 39,
+        'o' : 40,
+        'p' : 41,
+        'q' : 42,
+        'r' : 43,
+        's' : 44,
+        't' : 45,
+        'u' : 46,
+        'v' : 47,
+        'w' : 48,
+        'x' : 49,
+        'y' : 50,
+        'z' : 51,
 
-        '_' : 99, '-' : 98
+        '_' : 99,
+        '-' : 98
     };
 
-    var out is string = "";
 
-    for (var char in splitIntoCharacters(input))
+    var out is string =
+        "";
+
+
+    for (
+        var char
+        in splitIntoCharacters(
+            input
+        )
+    )
     {
-        var res = match(char, REGEX_NUMBER);
+        var res =
+            match(
+                char,
+                REGEX_NUMBER
+            );
 
-        if (res.hasMatch)
+
+        if (
+            res.hasMatch
+        )
         {
-            out = out ~ toString(res.captures[0]);
+            out =
+                out
+                ~
+                toString(
+                    res.captures[0]
+                );
         }
         else
         {
-            out = out ~ toString(chrMap[char]);
+            out =
+                out
+                ~
+                toString(
+                    chrMap[
+                        char
+                    ]
+                );
         }
     }
 
-    return stringToNumber(out) % 100000;
+
+    return stringToNumber(
+        out
+    )
+    %
+    100000;
 }
 
-function lcprng(seed is number)
+
+function lcprng(
+    seed is number)
 returns function
 {
-    const a = 1103515245;
-    const c = 12345;
-    const m = 2^31;
+    const a =
+        1103515245;
 
-    var state = new box(seed);
+
+    const c =
+        12345;
+
+
+    const m =
+        2^31;
+
+
+    var state =
+        new box(
+            seed
+        );
+
 
     return function()
     {
-        state[] = (a * state[] + c) % m;
+        state[] =
+            (
+                a
+                *
+                state[]
+                +
+                c
+            )
+            %
+            m;
+
+
         return state[];
     };
 }
