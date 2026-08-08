@@ -268,8 +268,13 @@ function drawSketchyFaceFill(context is Context, id is Id, body is Query)
         }
 
         const primaryGuideId = faceId + "primaryGuides";
-        opCreateCurvesOnFace(context, primaryGuideId,
-            curveOnFaceDefinition(faceQuery, FaceCurveCreationType.DIR1_AUTO_SPACED_ISO, primaryNames, primaryCount));
+        opCreateCurvesOnFace(context, primaryGuideId, {
+                "curveDefinition" : [
+                    curveOnFaceDefinition(faceQuery, FaceCurveCreationType.DIR1_AUTO_SPACED_ISO, primaryNames, primaryCount)
+                ],
+                "showCurves" : false,
+                "skipTrim" : false
+        });
 
         const primaryGuides = qCreatedBy(primaryGuideId, EntityType.EDGE);
         var primaryIndex = 0;
@@ -317,8 +322,13 @@ function drawSketchyFaceFill(context is Context, id is Id, body is Query)
         }
 
         const secondaryGuideId = faceId + "secondaryGuides";
-        opCreateCurvesOnFace(context, secondaryGuideId,
-            curveOnFaceDefinition(faceQuery, FaceCurveCreationType.DIR2_AUTO_SPACED_ISO, secondaryNames, secondaryCount));
+        opCreateCurvesOnFace(context, secondaryGuideId, {
+                "curveDefinition" : [
+                    curveOnFaceDefinition(faceQuery, FaceCurveCreationType.DIR2_AUTO_SPACED_ISO, secondaryNames, secondaryCount)
+                ],
+                "showCurves" : false,
+                "skipTrim" : false
+        });
 
         const secondaryGuides = qCreatedBy(secondaryGuideId, EntityType.EDGE);
         var secondaryIndex = 0;
