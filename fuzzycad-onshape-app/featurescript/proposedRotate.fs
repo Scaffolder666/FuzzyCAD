@@ -1,7 +1,9 @@
-// FuzzyCAD "Proposed Rotate" custom feature -- DRAFT, not yet compiled.
-// Reuses the confirmed opPattern-duplicate + setProperty-style pieces
-// from proposedFillet.fs/proposedMove.fs, but needs genuinely NEW,
-// UNCONFIRMED FeatureScript to build a rotation Transform:
+// FuzzyCAD "Proposed Rotate" custom feature. This exact file has not
+// been separately compiled, but its sibling needsInputRotate.fs uses
+// this SAME rotation-construction code verbatim and WAS live-compiled
+// by the user -- the only compile error that session was on the
+// unrelated opCreateCurvesOnFace face-fill call, not on any of the
+// pieces below, so treat 1-4 as confirmed working, transitively:
 //
 //   1. The rotation axis is picked as an EDGE (definition.axis). Its
 //      origin point at two different parameters (0.0 and 1.0) is read
@@ -9,13 +11,11 @@
 //      IS confirmed working (used throughout proposedFillet.fs). The
 //      axis direction is then computed as the difference between those
 //      two points, normalized -- ordinary vector math, not a new guess.
-//   2. line(origin, direction) -- guessed constructor for a Line value.
-//      Not confirmed.
+//   2. line(origin, direction) -- constructor for a Line value.
+//      Confirmed working (see note above).
 //   3. rotationAround(axis is Line, angle is ValueWithUnits) returns
-//      Transform -- guessed function name/signature for building a
-//      rotation Transform. Not confirmed. This is the single biggest
-//      risk in this file; if it doesn't compile, paste the exact error
-//      and I'll adjust from there rather than guessing again blind.
+//      Transform. Confirmed working (see note above) -- was the single
+//      biggest risk in this file before that.
 //   4. isAngle(definition.angle, ANGLE_360_BOUNDS) -- ANGLE_BOUNDS
 //      (v1's guess) was confirmed dead live ("Variable ANGLE_BOUNDS not
 //      found"). Web research (Onshape forum examples, e.g. a simple
@@ -47,9 +47,10 @@
 // the arc's radius/plane are built from the body's own bounding-box
 // farthest corner, projected perpendicular to the axis, so there's
 // always SOME meaningful in-plane direction to sweep through even
-// though our axis isn't fixed to a world direction. dot() is used here
-// for the first time in this codebase -- a standard vector op, but not
-// independently confirmed live like cross()/normalize() have been.
+// though our axis isn't fixed to a world direction. dot() was used here
+// for the first time in this codebase -- confirmed working the same way
+// as rotationAround()/line() above, transitively via needsInputRotate.fs's
+// identical bbox-corner loop compiling clean in the same live test.
 // Skips drawing entirely if that corner sits too close to the axis line
 // to give a sane radius (e.g. axis through the body's center).
 

@@ -32,15 +32,16 @@ import(path : "onshape/std/common.fs", version : "3029.0");
 
 // "Manipulator Change Function" -- lets someone drag a handle directly
 // on the geometry, in Onshape's OWN native feature-edit UI, instead of
-// typing into the X/Y/Z number fields. This is UNCONFIRMED: the exact
-// call shape below (linearManipulator(origin, direction, offset),
-// addManipulators(context, id, {...}), and the change function's own
-// signature) is copied from a real forum-posted working example
-// (https://forum.onshape.com/discussion/3610/simple-manipulator-tutorial),
-// not independently verified live by us -- flagging per this session's
-// practice for any borrowed-but-unverified call. Only works while this
-// feature's own native Onshape edit dialog is open; our right panel
-// cannot trigger or render it.
+// typing into the X/Y/Z number fields. CONFIRMED LIVE (user-tested):
+// linearManipulator takes the MAP form (base/direction/offset/
+// primaryParameterId below), not the older positional form from
+// https://forum.onshape.com/discussion/3610/simple-manipulator-tutorial
+// this was first adapted from. The other confirmed gotcha, handled in
+// fuzzycadNeedsInputMoveManipulatorChange below: newManipulators only
+// ever contains the ONE key that was just dragged, not all three
+// registered ones -- see that function's own comment. Only works while
+// this feature's own native Onshape edit dialog is open; our right
+// panel cannot trigger or render it.
 annotation {
     "Feature Type Name" : "FuzzyCAD Needs Input Move",
     "Manipulator Change Function" : "fuzzycadNeedsInputMoveManipulatorChange"
