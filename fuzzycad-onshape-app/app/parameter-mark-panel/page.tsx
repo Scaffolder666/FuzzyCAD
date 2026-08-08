@@ -663,23 +663,11 @@ function ParameterMarkPanelInner() {
     }
   }
 
-  // NO auto-polling anymore -- load once when context first resolves,
-  // then only on manual Refresh or right after this panel's own actions
-  // (accept/reject/reopen already call loadEverything() themselves).
-  // This used to setInterval(runLoad, 15000), widened to 30000 after
-  // hitting Onshape's per-endpoint rate limiter (429) once, but that
-  // wasn't the real problem: at 30s this alone was ~120 real Onshape
-  // /features calls/hour (plus ~120/hour for the project-state blob GET
-  // it triggers) just sitting idle with the panel open and nothing
-  // clicked -- confirmed to be able to burn a full annual API allocation
-  // (2,500 calls on Onshape's Free/Standard/EDU tier) in under a day of
-  // active development, which is what actually happened (HTTP 402,
-  // "Payment Required", on this exact route). Newly-inserted proposals or
-  // edits made directly in Onshape's own feature dialog now only show up
-  // after a manual Refresh click, or automatically once the SELECTION-
-  // based click-to-highlight path is the primary way of noticing live
-  // viewport changes -- that path costs zero REST calls (postMessage
-  // only).
+  // Load once when context first resolves, then only on manual Refresh
+  // or right after this panel's own actions (accept/reject/reopen
+  // already call loadEverything() themselves). See the slow background
+  // poll below for the (reintroduced, much lower-frequency) automatic
+  // path -- this effect only covers the initial load.
   useEffect(() => {
     if (!context) {
       return;
@@ -690,6 +678,37 @@ function ParameterMarkPanelInner() {
     // re-created-per-render component function (not memoized), so adding
     // it here would refire this effect on every unrelated re-render
     // instead of only when the Part Studio actually changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [context]);
+
+  // Slow background poll -- reintroduced after the manipulator/native-
+  // dialog sync gap made pure manual-refresh feel broken (dragging a
+  // manipulator or editing Onshape's own feature dialog directly changes
+  // nothing this panel can see until it re-fetches). The original 30s
+  // poll was the thing that burned a full annual API allocation (2,500
+  // calls on Onshape's Free/Standard/EDU tier) in under a day -- confirmed
+  // live via HTTP 402. This is deliberately much slower (5 min) and
+  // pauses while the tab/iframe isn't visible, but the honest math is
+  // still ~24 calls/hour (2/features-call-equivalent pair per tick) if
+  // left open and visible for a full session -- budget-safer than 30s,
+  // not free. The annual-quota guard inside loadEverything still applies
+  // on top of this, so a 402 stops the polling loop too, same as manual
+  // Refresh.
+  useEffect(() => {
+    if (!context) {
+      return;
+    }
+
+    const POLL_INTERVAL_MS = 5 * 60 * 1000;
+
+    const intervalId = setInterval(() => {
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") {
+        return;
+      }
+      void loadEverything();
+    }, POLL_INTERVAL_MS);
+
+    return () => clearInterval(intervalId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [context]);
 
