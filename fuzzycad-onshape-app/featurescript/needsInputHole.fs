@@ -501,7 +501,15 @@ function drawFuzzyDirectionGesture(
             const t = i / (pointCount - 1);
             const basePt = start + dir * (nominalLength * t);
 
-            const spread = nominalLength * (0.04 + 0.10 * t);
+            // Reduced from 0.04-0.14 -- at the old amplitude the
+            // point-to-point sideways jitter was comparable in size to
+            // the along-axis spacing between sample points, so the
+            // stroke zigzagged almost as much sideways as it advanced,
+            // reading as a tangled scribble instead of a recognizable
+            // direction. Live feedback: "the three axes aren't straight
+            // lines." This keeps a hand-drawn wobble without losing the
+            // line's own directionality.
+            const spread = nominalLength * (0.015 + 0.025 * t);
 
             const s1 = rnd();
             const jitter1 = ((s1 + i * 19 + s * 53) % 100) / 100.0 - 0.5;
