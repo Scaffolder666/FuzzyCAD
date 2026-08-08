@@ -1,102 +1,56 @@
-// FuzzyCAD "Proposed Fillet" custom feature -- built from pieces verified
-// live in Onshape's editor across several rounds:
-//   1. opPattern() duplicates a body while leaving the original untouched
-//      (confirmed: Parts count went from 2 to 4 after two test instances).
-//   2. A specific edge selected on the ORIGINAL body can be located on the
-//      duplicate via evEdgeTangentLine's midpoint + qClosestTo() against
-//      qCreatedBy(id + "duplicate", EntityType.EDGE) (confirmed: the
-//      resulting opFillet landed on the correct corresponding edge, not a
-//      parallel/opposite one).
-//   3. opFillet({"entities": ..., "radius": ...}) applies correctly to that
-//      matched edge (confirmed as part of the same live test).
-//   4. setVisibility (an outright hide) is NOT a real/importable function
-//      under that name here -- three call shapes tried, all rejected.
-//   5. setProperty(context, {"entities": ..., "propertyType":
-//      PropertyType.APPEARANCE, "value": color(r, g, b, alpha)}) IS real
-//      and DOES work -- confirmed live: on a body that had never been
-//      touched by the right panel's own REST-based part-appearance
-//      mechanism, the original faded and the duplicate took on a distinct
-//      color exactly as scripted.
+// FuzzyCAD "Proposed Fillet" custom feature -- reworked to match
+// needsInputFillet.fs's rebuilt architecture (live-tested by the user):
 //
-// KNOWN LIMITATION (confirmed live, not yet fixed): if "body" is itself
-// the output of an earlier Cosmo Feature proposal that the right panel
-// already styled via REST (app/api/onshape/part-appearance), that body
-// carries a persistent manual appearance override, and setProperty's
-// styling silently has no visible effect on it -- the manual REST
-// override wins. Geometry is still correct in that case (the fillet is
-// really there), only the visual distinction between original/proposed
-// is lost. Fixing this (e.g. having Accept clear the override instead of
-// just setting opacity back to 255) is deferred; the right panel
-// (parameter-mark-panel/page.tsx, SELF_STYLING_COSMO_FEATURE_TYPES) knows
-// this type styles itself and does not also apply its own REST-based
-// opacity toggling on top, which would just get silently overridden by
-// this script every recompute anyway.
+//   - No separate "body" selector -- owning body is derived
+//     automatically via qOwnerBody from whatever edges/faces are
+//     selected.
+//   - startTracking()/qOwnedByBody() carries the selected topology
+//     through the zero-offset duplicate, replacing the older midpoint +
+//     qClosestTo nearest-point matching.
+//   - opFillet gets tangentPropagation: true and an explicit
+//     crossSection: FilletCrossSection.CIRCULAR -- LIVE-CONFIRMED
+//     necessary: the same face + radius that filleted fine through
+//     native Onshape Fillet (whose dialog shows "Tangent propagation"
+//     checked by default) failed with FILLET_FAILED through us before
+//     this was added, since opFillet's own documented default for
+//     tangentPropagation is false.
+//   - Visualization covers the ENTIRE resulting proposed body (not just
+//     the fillet surface), matching the restored whole-body FuzzyCAD
+//     visual language -- the candidate object reads as provisional as a
+//     whole, not just at the edited feature.
 //
-// Design intent (matches proposedExtrude.fs's pattern):
-//   - "body" / "edge": copied verbatim by the right panel's insert flow --
-//     "body" is the same body the target edge belongs to, "edge" is the
-//     specific edge someone picked when marking a Fillet parameter
-//     uncertain. Since query selection can only happen against geometry
-//     that already exists, both are picked on the ORIGINAL body; this
-//     feature does the duplicate-then-match internally so the fillet
-//     preview lands on the copy, not the original.
-//   - "radius": the proposed value a reviewer is editing live in the right
-//     panel, same live-patch-in-place flow as Extrude's "depth".
-//   - Zero-offset transform: the duplicate is created exactly where the
-//     original's geometry is, so the "proposed" and "current" states
-//     visually align -- distinguishing them is entirely down to the
-//     appearance styling below.
+// Differences from needsInputFillet.fs (Proposed vs. Needs Input):
+//   - No "radiusNeedsInput" flag or fuzzy "R: ?" gesture -- Proposed
+//     means the value is already decided, so the dimension arrow is
+//     always the precise one.
+//   - No manipulator -- dragging is a Needs Input interaction; Proposed
+//     is edited via the right panel's live-value flow only.
+//   - Sketchy fill uses FuzzyCAD's blue Proposed palette instead of
+//     Needs Input's black, same distinction the project has kept since
+//     the original whole-body-fill design.
 //
-// "accepted" (hidden, same mechanism as proposedMove.fs): while false,
-// this feature only ever previews -- the original body is untouched, a
-// duplicate gets the fillet instead. The right panel patches this to
-// true on Accept, which makes this SAME feature instance fillet the
-// REAL edge on the REAL body instead of a throwaway copy -- no separate
-// "apply for real" step, no second feature.
-//
-// Pending-state preview now matches proposedMove.fs's hand-drawn
-// sketchy-wireframe treatment instead of a solid-colored duplicate: the
-// duplicate gets filleted first (so the new rounded edge is captured
-// too, via qOwnedByBody reading its CURRENT edges post-fillet, not just
-// its original topology), a 2-4-stroke hand-drawn overlay is built from
-// those edges, then the duplicate itself is deleted -- only the sketchy
-// strokes remain, avoiding the same "solid body's own edges always
-// render" problem proposedMove.fs hit. handDrawEdgeSketchy/
-// RandomNumberFunction/idToNum/lcprng below are copied verbatim from
-// proposedMove.fs's own confirmed-working versions of the same helpers.
-//
-// Radius dimension arrow: drawDimensionArrow() is proposedMove.fs's
-// drawAxisArrow() generalized to take a prebuilt label string. Its
-// direction is NOT the true fillet-cut bisector (that would need the
-// two adjacent faces' normals, via a qAdjacent(edge, ..., EntityType.
-// FACE) call whose exact argument shape isn't confirmed anywhere in
-// this codebase yet) -- instead it points along an arbitrary-but-
-// deterministic direction perpendicular to the edge's own tangent
-// (edge tangent × world Z, or × world Y if the edge is nearly vertical,
-// same "avoid a degenerate cross product" trick used elsewhere). Close
-// enough to "point away from the edge" to read as a radius callout
-// without a new unconfirmed API guess.
+// "accepted" (hidden, same mechanism as every other Proposed* type):
+// while false, this feature only ever previews -- the original body is
+// untouched, a duplicate gets the fillet instead. The right panel
+// patches this to true on Accept, which makes this SAME feature
+// instance fillet the REAL edges on the REAL body instead of a
+// throwaway copy.
 
-FeatureScript 3029;
-import(path : "onshape/std/common.fs", version : "3029.0");
+FeatureScript 3044;
+import(path : "onshape/std/common.fs", version : "3044.0");
 
 annotation { "Feature Type Name" : "FuzzyCAD Proposed Fillet" }
 export const fuzzycadProposedFillet = defineFeature(function(context is Context, id is Id, definition is map)
     precondition
     {
-        annotation { "Name" : "Body to fillet", "Filter" : EntityType.BODY }
-        definition.body is Query;
-
-        // Accepts individual edges OR a whole face -- selecting a face
-        // fillets its entire edge loop in one pass (matches native
-        // Onshape Fillet's own face-selection behavior). "||" combining
-        // entity types in a Filter is confirmed via an Onshape-employee-
-        // answered forum thread, not independently compiled by us yet.
-        annotation { "Name" : "Edges or face to round", "Filter" : EntityType.EDGE || EntityType.FACE }
+        annotation {
+            "Name" : "Edges or faces to fillet",
+            "Filter" : (EntityType.EDGE || EntityType.FACE) && BodyType.SOLID
+        }
         definition.edge is Query;
 
         annotation { "Name" : "Radius" }
-        isLength(definition.radius, LENGTH_BOUNDS);
+        isLength(definition.radius, BLEND_BOUNDS);
 
         // Controlled internally by the FuzzyCAD right panel.
         // The normal Feature dialog will not show this parameter.
@@ -108,25 +62,24 @@ export const fuzzycadProposedFillet = defineFeature(function(context is Context,
         definition.accepted is boolean;
     }
     {
-        const originalBody = definition.body;
+        if (isQueryEmpty(context, definition.edge))
+        {
+            return;
+        }
+
+        // Automatically derive the owning body/bodies -- no separate
+        // body selector needed.
+        const originalBodies = qOwnerBody(definition.edge);
 
         // ACCEPTED STATE: fillet the real edges/face on the real body
         // directly, no duplicate/preview machinery at all, then stop.
-        // opFillet's own "entities" parameter documents accepting BOTH
-        // edges and faces directly (FsDoc's opFillet parameter table) --
-        // no need to pre-expand a face into its boundary edges
-        // ourselves. "tangentPropagation": true matches native Fillet's
-        // own dialog, which shows "Tangent propagation" checked by
-        // default -- LIVE-CONFIRMED this matters: the same face +
-        // radius that filleted fine natively failed through us with
-        // FILLET_FAILED before this was added, because opFillet's own
-        // documented default for tangentPropagation is false, not true.
         if (definition.accepted)
         {
             opFillet(context, id + "acceptedFillet", {
                     "entities" : definition.edge,
                     "radius" : definition.radius,
-                    "tangentPropagation" : true
+                    "tangentPropagation" : true,
+                    "crossSection" : FilletCrossSection.CIRCULAR
             });
 
             return;
@@ -134,144 +87,99 @@ export const fuzzycadProposedFillet = defineFeature(function(context is Context,
 
         // PENDING STATE below.
 
+        // Track the selected topology BEFORE duplication, instead of
+        // the old midpoint + qClosestTo correspondence trick.
+        const trackedSelection = startTracking(context, definition.edge);
+
         opPattern(context, id + "duplicate", {
-                "entities" : originalBody,
+                "entities" : originalBodies,
                 "transforms" : [transform(vector(0, 0, 0) * meter)],
                 "instanceNames" : ["proposed"]
         });
 
-        const proposedBody = qCreatedBy(id + "duplicate", EntityType.BODY);
-        const copiedEdges = qCreatedBy(id + "duplicate", EntityType.EDGE);
-        const copiedFaces = qCreatedBy(id + "duplicate", EntityType.FACE);
+        const proposedBody = qPatternInstances(id + "duplicate", "proposed", EntityType.BODY);
+        const copiedSelection = qOwnedByBody(trackedSelection, proposedBody);
 
-        const selectedEdges = qEntityFilter(definition.edge, EntityType.EDGE);
-        const selectedFaces = qEntityFilter(definition.edge, EntityType.FACE);
-
-        // Match each ORIGINAL selected edge/face to its corresponding
-        // duplicate entity by nearest point (opPattern's zero-offset
-        // copy sits exactly on top of the original, so "closest" is
-        // unambiguous per entity), and average all their representative
-        // points into ONE anchor for the dimension label/manipulator --
-        // there's still only one shared "radius" parameter, so a single
-        // representative anchor/direction is used rather than a
-        // dimension per entity.
-        var matchedEntities = qNothing();
-        var anchorSum = vector(0, 0, 0) * meter;
-        var anchorTangent = vector(1, 0, 0);
-        var entityCount = 0;
-
-        for (var originalEdge in evaluateQuery(context, selectedEdges))
+        // If topology tracking gives us nothing, report the actual
+        // problematic selection instead of letting opFillet fail later
+        // with an opaque FILLET_FAILED.
+        if (isQueryEmpty(context, copiedSelection))
         {
-            const tangentLine = evEdgeTangentLine(context, {
-                    "edge" : originalEdge,
-                    "parameter" : 0.5
-            });
-            const point = tangentLine.origin;
-
-            matchedEntities = qUnion(matchedEntities, qClosestTo(copiedEdges, point));
-
-            anchorSum = anchorSum + point;
-            if (entityCount == 0)
-            {
-                anchorTangent = tangentLine.direction;
-            }
-            entityCount += 1;
+            throw regenError(
+                    "Could not track the selected fillet geometry onto the proposal copy.",
+                    definition.edge
+            );
         }
 
-        for (var originalFace in evaluateQuery(context, selectedFaces))
-        {
-            const tangentPlane = evFaceTangentPlane(context, {
-                    "face" : originalFace,
-                    "parameter" : vector(0.5, 0.5)
-            });
-            const point = tangentPlane.origin;
-
-            matchedEntities = qUnion(matchedEntities, qClosestTo(copiedFaces, point));
-
-            anchorSum = anchorSum + point;
-            if (entityCount == 0)
-            {
-                // A face has no single "tangent direction" the way an
-                // edge does -- fall back to an arbitrary in-plane
-                // direction so the dimension arrow/manipulator still has
-                // SOME direction to point along.
-                const reference = (abs(tangentPlane.normal[2]) < 0.9) ? vector(0, 0, 1) : vector(0, 1, 0);
-                anchorTangent = normalize(cross(tangentPlane.normal, reference));
-            }
-            entityCount += 1;
-        }
-
-        const midpoint = anchorSum / max(entityCount, 1);
-
-        opFillet(context, id + "fillet", {
-                "entities" : matchedEntities,
+        opFillet(context, id + "previewFillet", {
+                "entities" : copiedSelection,
                 "radius" : definition.radius,
-                "tangentPropagation" : true
+                "tangentPropagation" : true,
+                "crossSection" : FilletCrossSection.CIRCULAR
         });
 
-        // Fade the original -- no-ops silently if "originalBody" already
-        // carries a manual appearance override from the right panel's
-        // REST mechanism (see the KNOWN LIMITATION note above).
+        // Fade the original -- no-ops silently if "originalBodies"
+        // already carries a manual appearance override from the right
+        // panel's REST mechanism.
         setProperty(context, {
-                "entities" : originalBody,
+                "entities" : originalBodies,
                 "propertyType" : PropertyType.APPEARANCE,
                 "value" : color(0.75, 0.75, 0.75, 0.08)
         });
 
-        const chordLength = 3 * millimeter;
-        const variance = 0.5 * millimeter;
+        // Whole-body hand-drawn fill -- the entire candidate object
+        // reads as provisional, not just the fillet surface.
+        drawSketchyFaceFill(context, id + "faceFill", proposedBody);
 
-        var rnd = RandomNumberFunction(id);
-        var allSketchyStrokes = qNothing();
-        var edgeIndex = 0;
+        // Find one representative original edge, only used to position
+        // the radius dimension arrow -- has nothing to do with which
+        // geometry is filleted.
+        const selectedEdges = qEntityFilter(definition.edge, EntityType.EDGE);
+        const selectedFaces = qEntityFilter(definition.edge, EntityType.FACE);
 
-        for (var edgeQuery in evaluateQuery(context, qOwnedByBody(qEverything(EntityType.EDGE), proposedBody)))
+        var anchorEdge = qNothing();
+
+        if (!isQueryEmpty(context, selectedEdges))
         {
-            const strokes = handDrawEdgeSketchy(
+            anchorEdge = qNthElement(selectedEdges, 0);
+        }
+        else if (!isQueryEmpty(context, selectedFaces))
+        {
+            const faceBoundaryEdges = qLoopEdges(selectedFaces);
+
+            if (!isQueryEmpty(context, faceBoundaryEdges))
+            {
+                anchorEdge = qNthElement(faceBoundaryEdges, 0);
+            }
+        }
+
+        if (!isQueryEmpty(context, anchorEdge))
+        {
+            const tangentLine = evEdgeTangentLine(context, {
+                    "edge" : anchorEdge,
+                    "parameter" : 0.5
+            });
+            const midpoint = tangentLine.origin;
+            const tangentDir = tangentLine.direction;
+
+            const perpReference = (abs(tangentDir[2]) < 0.9) ? vector(0, 0, 1) : vector(0, 1, 0);
+            const radiusDir = normalize(cross(tangentDir, perpReference));
+            const dimensionColor = color(0.25, 0.55, 0.95, 1.0);
+
+            drawDimensionArrow(
                     context,
-                    id + ("sketchyEdge" ~ toString(edgeIndex)),
-                    chordLength,
-                    variance,
-                    rnd,
-                    edgeQuery
+                    id + "radiusArrow",
+                    midpoint,
+                    radiusDir * definition.radius,
+                    "R: " ~ toString(round(definition.radius / millimeter, 1)) ~ " mm",
+                    dimensionColor
             );
-            allSketchyStrokes = qUnion(allSketchyStrokes, strokes);
-            edgeIndex += 1;
         }
 
-        if (!isQueryEmpty(context, allSketchyStrokes))
-        {
-            opCreateCompositePart(context, id + "sketchyComposite", {
-                    "bodies" : allSketchyStrokes,
-                    "closed" : false
-            });
-
-            setProperty(context, {
-                    "entities" : qCreatedBy(id + "sketchyComposite", EntityType.BODY),
-                    "propertyType" : PropertyType.APPEARANCE,
-                    "value" : color(0.25, 0.55, 0.95, 1.0)
-            });
-        }
-
-        const tangentDir = anchorTangent;
-        const perpReference = (abs(tangentDir[2]) < 0.9) ? vector(0, 0, 1) : vector(0, 1, 0);
-        const radiusDir = normalize(cross(tangentDir, perpReference));
-        const dimensionColor = color(0.25, 0.55, 0.95, 1.0);
-
-        drawDimensionArrow(
-                context,
-                id + "radiusArrow",
-                midpoint,
-                radiusDir * definition.radius,
-                "R: " ~ toString(round(definition.radius / millimeter, 1)) ~ " mm",
-                dimensionColor
-        );
-
-        // Remove the temporary filleted duplicate now that its edges have
-        // been sampled into the sketchy strokes -- this is what removes
-        // the solid black CAD edges that setProperty alone can never hide
-        // (Onshape always renders a body's own edges regardless of its
-        // face appearance).
+        // Remove the temporary filleted duplicate now that its faces
+        // have been sampled into the sketchy fill -- this is what
+        // removes the solid black CAD edges that setProperty alone can
+        // never hide.
         opDeleteBodies(context, id + "deleteTemporaryProposal", {
                 "entities" : proposedBody
         });
@@ -279,10 +187,8 @@ export const fuzzycadProposedFillet = defineFeature(function(context is Context,
 
 //////////////////////////////////////////////////////////////////////
 //
-// FILLED DIMENSION ARROW (proposedMove.fs's drawAxisArrow, generalized
-// to take a prebuilt label string instead of an axis name + auto-built
-// "X: N mm" text -- everything else, including the STILL-UNCONFIRMED-
-// LIVE filled-2D-arrow-via-opExtractSurface construction, is unchanged)
+// FILLED DIMENSION ARROW (copied verbatim from needsInputFillet.fs's
+// precise-radius arrow)
 //
 //////////////////////////////////////////////////////////////////////
 
@@ -379,17 +285,153 @@ function drawDimensionArrow(
 
 //////////////////////////////////////////////////////////////////////
 //
-// HAND-DRAWN EDGE (copied verbatim from proposedMove.fs)
+// WHOLE-BODY HAND-DRAWN FACE FILL (same structure as
+// needsInputFillet.fs's drawSketchyFaceFill, same reduced line density
+// -- 31-35 primary / 5-7 secondary -- but using FuzzyCAD's blue
+// Proposed palette instead of Needs Input's black, so the two states
+// stay visually distinct)
 //
 //////////////////////////////////////////////////////////////////////
 
-function handDrawEdgeSketchy(
+function drawSketchyFaceFill(context is Context, id is Id, body is Query)
+{
+    const chordLength = 3 * millimeter;
+    const variance = 0.4 * millimeter;
+
+    var rnd = RandomNumberFunctionWithSalt(id, "faceFill");
+
+    var allStrokes = qNothing();
+
+    const faces = qOwnedByBody(qEverything(EntityType.FACE), body);
+    var faceIndex = 0;
+
+    for (var faceQuery in evaluateQuery(context, faces))
+    {
+        const faceId = id + ("face" ~ toString(faceIndex));
+
+        const primaryCount = 31 + (rnd() % 5); // 31-35
+
+        var primaryNames = makeArray(primaryCount, "");
+        for (var n = 0; n < primaryCount; n += 1)
+        {
+            primaryNames[n] = "primary" ~ toString(n);
+        }
+
+        const primaryGuideId = faceId + "primaryGuides";
+        opCreateCurvesOnFace(context, primaryGuideId, {
+                "curveDefinition" : [
+                    curveOnFaceDefinition(faceQuery, FaceCurveCreationType.DIR1_AUTO_SPACED_ISO, primaryNames, primaryCount)
+                ],
+                "showCurves" : false,
+                "skipTrim" : false
+        });
+
+        const primaryGuides = qCreatedBy(primaryGuideId, EntityType.EDGE);
+        var primaryIndex = 0;
+
+        for (var guideEdge in evaluateQuery(context, primaryGuides))
+        {
+            const isEndpoint = (primaryIndex == 0) || (primaryIndex == primaryCount - 1);
+
+            const distFromEdge = min(primaryIndex, primaryCount - 1 - primaryIndex);
+            const centerProximity = min(distFromEdge / (primaryCount / 2.0), 1.0);
+            const keepProbability = isEndpoint ? 1.0 : (0.18 + 0.82 * centerProximity);
+
+            if (isEndpoint || (((rnd() % 100) / 100.0) < keepProbability))
+            {
+                // Blue Proposed palette (roughly the same hue as the
+                // old solid 0.25/0.55/0.95, with per-stroke jitter).
+                const r = min(0.15 + ((rnd() % 20) / 100.0) * 0.15, 1);
+                const g = min(0.40 + ((rnd() % 20) / 100.0) * 0.20, 1);
+                const b = min(0.75 + ((rnd() % 20) / 100.0) * 0.20, 1);
+
+                const strokeVariance = isEndpoint ? variance * 2.5 : variance;
+
+                const strokes = handDrawScribbleGuide(
+                    context,
+                    faceId + ("primaryStroke" ~ toString(primaryIndex)),
+                    chordLength, strokeVariance, rnd, guideEdge,
+                    r, g, b, 0.55, false, 0.06);
+
+                allStrokes = qUnion(allStrokes, strokes);
+            }
+
+            primaryIndex += 1;
+        }
+
+        opDeleteBodies(context, faceId + "deletePrimaryGuides", {
+                "entities" : qCreatedBy(primaryGuideId, EntityType.BODY)
+        });
+
+        const secondaryCount = 5 + (rnd() % 3); // 5-7
+
+        var secondaryNames = makeArray(secondaryCount, "");
+        for (var m = 0; m < secondaryCount; m += 1)
+        {
+            secondaryNames[m] = "secondary" ~ toString(m);
+        }
+
+        const secondaryGuideId = faceId + "secondaryGuides";
+        opCreateCurvesOnFace(context, secondaryGuideId, {
+                "curveDefinition" : [
+                    curveOnFaceDefinition(faceQuery, FaceCurveCreationType.DIR2_AUTO_SPACED_ISO, secondaryNames, secondaryCount)
+                ],
+                "showCurves" : false,
+                "skipTrim" : false
+        });
+
+        const secondaryGuides = qCreatedBy(secondaryGuideId, EntityType.EDGE);
+        var secondaryIndex = 0;
+
+        for (var guideEdge2 in evaluateQuery(context, secondaryGuides))
+        {
+            if (((rnd() % 100) / 100.0) < 0.45)
+            {
+                const r2 = min(0.30 + ((rnd() % 20) / 100.0) * 0.15, 1);
+                const g2 = min(0.55 + ((rnd() % 20) / 100.0) * 0.20, 1);
+                const b2 = min(0.85 + ((rnd() % 15) / 100.0) * 0.15, 1);
+
+                const strokes2 = handDrawScribbleGuide(
+                    context,
+                    faceId + ("secondaryStroke" ~ toString(secondaryIndex)),
+                    chordLength, variance, rnd, guideEdge2,
+                    r2, g2, b2, 0.4, true, 0.10);
+
+                allStrokes = qUnion(allStrokes, strokes2);
+            }
+
+            secondaryIndex += 1;
+        }
+
+        opDeleteBodies(context, faceId + "deleteSecondaryGuides", {
+                "entities" : qCreatedBy(secondaryGuideId, EntityType.BODY)
+        });
+
+        faceIndex += 1;
+    }
+
+    if (!isQueryEmpty(context, allStrokes))
+    {
+        opCreateCompositePart(context, id + "faceFillComposite", {
+                "bodies" : allStrokes,
+                "closed" : false
+        });
+    }
+}
+
+function handDrawScribbleGuide(
     context is Context,
     id is Id,
     chordLength is ValueWithUnits,
     variance is ValueWithUnits,
     rnd is function,
-    edgeQuery is Query)
+    edgeQuery is Query,
+    red is number,
+    green is number,
+    blue is number,
+    alpha is number,
+    singlePass is boolean,
+    mistakeChance is number)
 {
     var edgeLength = evLength(context, { "entities" : edgeQuery });
     var pointCount = ceil(max(edgeLength / chordLength, 5));
@@ -400,7 +442,7 @@ function handDrawEdgeSketchy(
     });
 
     var rawRandom = rnd() % 100;
-    var numStrokes = 2 + floor(rawRandom / 33);
+    var numStrokes = singlePass ? 1 : (1 + floor(rawRandom / 34)); // 1-3
 
     var strokesQuery = qNothing();
 
@@ -410,7 +452,6 @@ function handDrawEdgeSketchy(
 
         for (var i = 0; i < pointCount; i += 1)
         {
-            // .origin already carries length units -- do NOT multiply by meter.
             var basePt = tangents[i].origin as Vector;
 
             var s1 = rnd();
@@ -418,9 +459,12 @@ function handDrawEdgeSketchy(
 
             var jitterFactor = 0.5 + ((s2 % 100) / 100.0) * 0.5;
 
-            var offsetX = 2 * ((((s1 + i * 17 + strokeIndex * 29) % 100) / 100.0) - 0.5) * variance * jitterFactor;
-            var offsetY = 2 * ((((s1 + i * 23 + strokeIndex * 37) % 100) / 100.0) - 0.5) * variance * jitterFactor;
-            var offsetZ = 2 * ((((s1 + i * 31 + strokeIndex * 41) % 100) / 100.0) - 0.5) * variance * jitterFactor;
+            var isMistake = (((rnd() % 100) / 100.0) < mistakeChance);
+            var mistakeFactor = isMistake ? (1.30 + ((rnd() % 100) / 100.0) * 1.11) : 1.0;
+
+            var offsetX = 2 * (((s1 + i * 17 + strokeIndex * 29) % 100) / 100.0 - 0.5) * variance * jitterFactor * mistakeFactor;
+            var offsetY = 2 * (((s1 + i * 31 + strokeIndex * 43) % 100) / 100.0 - 0.5) * variance * jitterFactor * mistakeFactor;
+            var offsetZ = 2 * (((s1 + i * 47 + strokeIndex * 61) % 100) / 100.0 - 0.5) * variance * jitterFactor * mistakeFactor;
 
             var perturbed = basePt;
             perturbed[0] += offsetX;
@@ -431,8 +475,21 @@ function handDrawEdgeSketchy(
         }
 
         const strokeId = id + ("_stroke" ~ toString(strokeIndex));
+
         opFitSpline(context, strokeId, { "points" : newPoints });
-        strokesQuery = qUnion(strokesQuery, qCreatedBy(strokeId, EntityType.BODY));
+
+        const strokeBody = qCreatedBy(strokeId, EntityType.BODY);
+
+        const colorJitter = (rnd() % 100) / 100.0;
+        const strokeAlpha = min(max(alpha + (colorJitter - 0.5) * 0.2, 0.1), 1.0);
+
+        setProperty(context, {
+                "entities" : strokeBody,
+                "propertyType" : PropertyType.APPEARANCE,
+                "value" : color(red, green, blue, strokeAlpha)
+        });
+
+        strokesQuery = qUnion(strokesQuery, strokeBody);
     }
 
     return strokesQuery;
@@ -440,32 +497,43 @@ function handDrawEdgeSketchy(
 
 //////////////////////////////////////////////////////////////////////
 //
-// RANDOM NUMBER GENERATOR (copied verbatim from proposedMove.fs)
+// RANDOM NUMBER GENERATOR (salted variant, copied verbatim from
+// needsInputFillet.fs)
 //
 //////////////////////////////////////////////////////////////////////
 
-function RandomNumberFunction(id) returns function
+function RandomNumberFunctionWithSalt(id, salt)
+returns function
 {
-    return lcprng(idToNum(id[0]));
+    const baseSeed = idToNum(id[0]);
+    const saltSeed = idToNum(salt);
+    return lcprng((baseSeed + saltSeed * 97) % 100000);
 }
 
-function idToNum(input is string) returns number
+function idToNum(input is string)
+returns number
 {
-    const chrMap = {
-            'A' : 0, 'B' : 1, 'C' : 2, 'D' : 3, 'E' : 4, 'F' : 5, 'G' : 6,
-            'H' : 7, 'I' : 8, 'J' : 9, 'K' : 10, 'L' : 11, 'M' : 12, 'N' : 13,
-            'O' : 14, 'P' : 15, 'Q' : 16, 'R' : 17, 'S' : 18, 'T' : 19, 'U' : 20,
-            'V' : 21, 'W' : 22, 'X' : 23, 'Y' : 24, 'Z' : 25,
-            'a' : 26, 'b' : 27, 'c' : 28, 'd' : 29, 'e' : 30, 'f' : 31, 'g' : 32,
-            'h' : 33, 'i' : 34, 'j' : 35, 'k' : 36, 'l' : 37, 'm' : 38, 'n' : 39,
-            'o' : 40, 'p' : 41, 'q' : 42, 'r' : 43, 's' : 44, 't' : 45, 'u' : 46,
-            'v' : 47, 'w' : 48, 'x' : 49, 'y' : 50, 'z' : 51,
-            '_' : 99, '-' : 98
+    const chrMap =
+    {
+        'A' : 0, 'B' : 1, 'C' : 2, 'D' : 3, 'E' : 4, 'F' : 5, 'G' : 6, 'H' : 7,
+        'I' : 8, 'J' : 9, 'K' : 10, 'L' : 11, 'M' : 12, 'N' : 13, 'O' : 14, 'P' : 15,
+        'Q' : 16, 'R' : 17, 'S' : 18, 'T' : 19, 'U' : 20, 'V' : 21, 'W' : 22, 'X' : 23,
+        'Y' : 24, 'Z' : 25,
+
+        'a' : 26, 'b' : 27, 'c' : 28, 'd' : 29, 'e' : 30, 'f' : 31, 'g' : 32, 'h' : 33,
+        'i' : 34, 'j' : 35, 'k' : 36, 'l' : 37, 'm' : 38, 'n' : 39, 'o' : 40, 'p' : 41,
+        'q' : 42, 'r' : 43, 's' : 44, 't' : 45, 'u' : 46, 'v' : 47, 'w' : 48, 'x' : 49,
+        'y' : 50, 'z' : 51,
+
+        '_' : 99, '-' : 98
     };
+
     var out is string = "";
+
     for (var char in splitIntoCharacters(input))
     {
         var res = match(char, REGEX_NUMBER);
+
         if (res.hasMatch)
         {
             out = out ~ toString(res.captures[0]);
@@ -475,15 +543,19 @@ function idToNum(input is string) returns number
             out = out ~ toString(chrMap[char]);
         }
     }
+
     return stringToNumber(out) % 100000;
 }
 
-function lcprng(seed is number) returns function
+function lcprng(seed is number)
+returns function
 {
     const a = 1103515245;
     const c = 12345;
     const m = 2^31;
+
     var state = new box(seed);
+
     return function()
     {
         state[] = (a * state[] + c) % m;

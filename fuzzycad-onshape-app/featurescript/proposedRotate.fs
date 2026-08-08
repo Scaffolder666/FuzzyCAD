@@ -1,61 +1,36 @@
-// FuzzyCAD "Proposed Rotate" custom feature. This exact file has not
-// been separately compiled, but its sibling needsInputRotate.fs uses
-// this SAME rotation-construction code verbatim and WAS live-compiled
-// by the user -- the only compile error that session was on the
-// unrelated opCreateCurvesOnFace face-fill call, not on any of the
-// pieces below, so treat 1-4 as confirmed working, transitively:
+// FuzzyCAD "Proposed Rotate" custom feature -- reworked to match
+// needsInputRotate.fs's rebuilt architecture (live-tested/tuned by the
+// user):
 //
-//   1. The rotation axis is picked as an EDGE (definition.axis). Its
-//      origin point at two different parameters (0.0 and 1.0) is read
-//      via evEdgeTangentLine -- reusing ONLY the ".origin" field, which
-//      IS confirmed working (used throughout proposedFillet.fs). The
-//      axis direction is then computed as the difference between those
-//      two points, normalized -- ordinary vector math, not a new guess.
-//   2. line(origin, direction) -- constructor for a Line value.
-//      Confirmed working (see note above).
-//   3. rotationAround(axis is Line, angle is ValueWithUnits) returns
-//      Transform. Confirmed working (see note above) -- was the single
-//      biggest risk in this file before that.
-//   4. isAngle(definition.angle, ANGLE_360_BOUNDS) -- ANGLE_BOUNDS
-//      (v1's guess) was confirmed dead live ("Variable ANGLE_BOUNDS not
-//      found"). Web research (Onshape forum examples, e.g. a simple
-//      rotation feature using "isAngle(definition.angle,
-//      ANGLE_360_BOUNDS);") turned up the real constant name.
+//   - Rotation reference is no longer restricted to a straight edge --
+//     QueryFilterCompound.ALLOWS_AXIS plus evAxis() accepts circular
+//     edges, arcs, cylindrical faces, and mate connectors, inferring
+//     the axis directly instead of the old two-tangent-point
+//     subtraction (which only made sense for straight edges and broke
+//     conceptually for a closed circular edge).
+//   - Whole-body hand-drawn face fill (drawSketchyFaceFill) instead of
+//     edge-only sketching -- the entire candidate object reads as
+//     provisional, matching the restored whole-body FuzzyCAD visual
+//     language.
 //
-// Same appearance-styling approach and same known REST-override
-// limitation as proposedFillet.fs/proposedMove.fs.
+// Differences from needsInputRotate.fs (Proposed vs. Needs Input):
+//   - No "angleNeedsInput" flag or fuzzy "?°" gesture -- Proposed means
+//     the value is already decided, so the angle arc is always the
+//     precise dashed one.
+//   - No manipulator -- dragging is a Needs Input interaction; Proposed
+//     is edited via the right panel's live-value flow only.
+//   - Sketchy fill uses FuzzyCAD's blue Proposed palette instead of
+//     Needs Input's black, same distinction the project has kept since
+//     the original whole-body-fill design.
 //
-// "accepted" (hidden, same mechanism as proposedMove.fs): while false,
-// this feature only ever previews -- the original body is untouched, a
-// duplicate gets rotated instead. The right panel patches this to true
-// on Accept, which makes this SAME feature instance apply the rotation
-// to the REAL body instead of a throwaway copy.
-//
-// Pending-state preview matches proposedMove.fs's hand-drawn
-// sketchy-wireframe treatment: the rotated duplicate's edges (captured
-// via qOwnedByBody, same topology as the original since a rotation
-// doesn't add/remove edges) get a 2-4-stroke hand-drawn overlay, then
-// the duplicate is deleted -- only the sketchy strokes remain.
-// handDrawEdgeSketchy/RandomNumberFunction/idToNum/lcprng below are
-// copied verbatim from proposedMove.fs's confirmed-working helpers.
-//
-// Angle dimension: a dashed arc + degree label, not a filled arrow --
-// matches the arc/dash technique the reference source itself used for
-// its own X/Y/Z rotation callouts (rather than reusing Move's straight
-// arrow, which wouldn't make sense for a rotation). Adapted to our
-// arbitrary user-picked axis (the reference always used world X/Y/Z):
-// the arc's radius/plane are built from the body's own bounding-box
-// farthest corner, projected perpendicular to the axis, so there's
-// always SOME meaningful in-plane direction to sweep through even
-// though our axis isn't fixed to a world direction. dot() was used here
-// for the first time in this codebase -- confirmed working the same way
-// as rotationAround()/line() above, transitively via needsInputRotate.fs's
-// identical bbox-corner loop compiling clean in the same live test.
-// Skips drawing entirely if that corner sits too close to the axis line
-// to give a sane radius (e.g. axis through the body's center).
+// "accepted" (hidden, same mechanism as every other Proposed* type):
+// while false, this feature only ever previews -- the original body is
+// untouched, a rotated duplicate represents the candidate geometry. The
+// right panel patches this to true on Accept, which makes this SAME
+// feature instance rotate the REAL body instead of a throwaway copy.
 
-FeatureScript 3029;
-import(path : "onshape/std/common.fs", version : "3029.0");
+FeatureScript 3044;
+import(path : "onshape/std/common.fs", version : "3044.0");
 
 annotation { "Feature Type Name" : "FuzzyCAD Proposed Rotate" }
 export const fuzzycadProposedRotate = defineFeature(function(context is Context, id is Id, definition is map)
@@ -64,7 +39,14 @@ export const fuzzycadProposedRotate = defineFeature(function(context is Context,
         annotation { "Name" : "Body to rotate", "Filter" : EntityType.BODY }
         definition.body is Query;
 
-        annotation { "Name" : "Rotation axis", "Filter" : EntityType.EDGE }
+        // Accepts geometry Onshape can infer an axis from: a straight
+        // edge/line, a circular edge, an arc, a cylindrical face, or a
+        // Mate Connector -- not just a straight edge.
+        annotation {
+            "Name" : "Rotation reference",
+            "Filter" : QueryFilterCompound.ALLOWS_AXIS,
+            "MaxNumberOfPicks" : 1
+        }
         definition.axis is Query;
 
         annotation { "Name" : "Angle" }
@@ -80,20 +62,22 @@ export const fuzzycadProposedRotate = defineFeature(function(context is Context,
         definition.accepted is boolean;
     }
     {
+        if (isQueryEmpty(context, definition.body) || isQueryEmpty(context, definition.axis))
+        {
+            return;
+        }
+
         const originalBody = definition.body;
 
-        const axisStart = evEdgeTangentLine(context, {
-                "edge" : definition.axis,
-                "parameter" : 0.0
-        }).origin;
+        // Extract the rotation axis from whatever kind of reference was
+        // selected (line/circle/arc/cylinder/mate connector) instead of
+        // the old two-tangent-point subtraction, which only made sense
+        // for a straight edge.
+        const rotationAxis = evAxis(context, { "axis" : definition.axis });
+        const axisStart = rotationAxis.origin;
+        const axisDirection = rotationAxis.direction;
 
-        const axisEnd = evEdgeTangentLine(context, {
-                "edge" : definition.axis,
-                "parameter" : 1.0
-        }).origin;
-
-        const axisDirection = normalize(axisEnd - axisStart);
-        const rotation = rotationAround(line(axisStart, axisDirection), definition.angle);
+        const rotation = rotationAround(rotationAxis, definition.angle);
 
         // ACCEPTED STATE: rotate the real body directly, no
         // duplicate/preview machinery at all, then stop.
@@ -107,7 +91,7 @@ export const fuzzycadProposedRotate = defineFeature(function(context is Context,
             return;
         }
 
-        // PENDING STATE below (unchanged).
+        // PENDING STATE below.
 
         opPattern(context, id + "duplicate", {
                 "entities" : originalBody,
@@ -123,49 +107,14 @@ export const fuzzycadProposedRotate = defineFeature(function(context is Context,
                 "value" : color(0.75, 0.75, 0.75, 0.08)
         });
 
-        const chordLength = 3 * millimeter;
-        const variance = 0.5 * millimeter;
-
-        var rnd = RandomNumberFunction(id);
-        var allSketchyStrokes = qNothing();
-        var edgeIndex = 0;
-
-        for (var edgeQuery in evaluateQuery(context, qOwnedByBody(qEverything(EntityType.EDGE), proposedBody)))
-        {
-            const strokes = handDrawEdgeSketchy(
-                    context,
-                    id + ("sketchyEdge" ~ toString(edgeIndex)),
-                    chordLength,
-                    variance,
-                    rnd,
-                    edgeQuery
-            );
-            allSketchyStrokes = qUnion(allSketchyStrokes, strokes);
-            edgeIndex += 1;
-        }
-
-        if (!isQueryEmpty(context, allSketchyStrokes))
-        {
-            opCreateCompositePart(context, id + "sketchyComposite", {
-                    "bodies" : allSketchyStrokes,
-                    "closed" : false
-            });
-
-            setProperty(context, {
-                    "entities" : qCreatedBy(id + "sketchyComposite", EntityType.BODY),
-                    "propertyType" : PropertyType.APPEARANCE,
-                    "value" : color(0.25, 0.55, 0.95, 1.0)
-            });
-        }
+        // Whole-body hand-drawn fill -- the entire candidate object
+        // reads as provisional, not just the rotated silhouette.
+        drawSketchyFaceFill(context, id + "faceFill", proposedBody);
 
         // Pick whichever of the bounding box's 8 corners sits FARTHEST
-        // (perpendicular distance) from the rotation axis, instead of
-        // always using one fixed corner (maxCorner) that might happen to
-        // sit close to the axis and give a barely-visible arc. Since
-        // linear displacement under a rotation is radius * angle, the
-        // corner with the largest perpendicular radius is also the point
-        // that physically moves the most -- drawing the arc there both
-        // reads clearer and matches "where the change is biggest."
+        // (perpendicular distance) from the rotation axis, so the arc
+        // reads clearly regardless of where the axis sits relative to
+        // the body.
         const bbox = evBox3d(context, { "topology" : originalBody, "tight" : true });
         const corners = [
             vector(bbox.minCorner[0], bbox.minCorner[1], bbox.minCorner[2]),
@@ -200,7 +149,7 @@ export const fuzzycadProposedRotate = defineFeature(function(context is Context,
         if (arcRadius / millimeter > 0.001)
         {
             const perpVec = normalize(bestPerpOffset);
-            const perpVec2 = cross(axisDirection, perpVec);
+            const perpVec2 = normalize(cross(axisDirection, perpVec));
             const arcCenter = axisStart + bestAlongAxis;
             const dimensionColor = color(0.25, 0.55, 0.95, 1.0);
 
@@ -225,13 +174,7 @@ export const fuzzycadProposedRotate = defineFeature(function(context is Context,
 
 //////////////////////////////////////////////////////////////////////
 //
-// DASHED ANGLE ARC + LABEL
-//
-// Sweeps from `startDir` toward `otherDir` (both unit vectors
-// perpendicular to `axisDirection` and to each other) by `angle`,
-// drawn as short dashed segments (same dash/gap ratio as the
-// reference source's own rotation-arc callouts) rather than a solid
-// arc, then a text label at the arc's midpoint angle.
+// PRECISE DASHED ANGLE ARC (copied verbatim from needsInputRotate.fs)
 //
 //////////////////////////////////////////////////////////////////////
 
@@ -305,17 +248,152 @@ function drawAngleArc(
 
 //////////////////////////////////////////////////////////////////////
 //
-// HAND-DRAWN EDGE (copied verbatim from proposedMove.fs)
+// WHOLE-BODY HAND-DRAWN FACE FILL (same structure as
+// needsInputRotate.fs's drawSketchyFaceFill, same reduced line density
+// -- 31-35 primary / 5-7 secondary -- but using FuzzyCAD's blue
+// Proposed palette instead of Needs Input's black)
 //
 //////////////////////////////////////////////////////////////////////
 
-function handDrawEdgeSketchy(
+function drawSketchyFaceFill(context is Context, id is Id, body is Query)
+{
+    const chordLength = 3 * millimeter;
+    const variance = 0.4 * millimeter;
+
+    var rnd = RandomNumberFunctionWithSalt(id, "faceFill");
+
+    var allStrokes = qNothing();
+
+    const faces = qOwnedByBody(qEverything(EntityType.FACE), body);
+    var faceIndex = 0;
+
+    for (var faceQuery in evaluateQuery(context, faces))
+    {
+        const faceId = id + ("face" ~ toString(faceIndex));
+
+        const primaryCount = 31 + (rnd() % 5); // 31-35
+
+        var primaryNames = makeArray(primaryCount, "");
+        for (var n = 0; n < primaryCount; n += 1)
+        {
+            primaryNames[n] = "primary" ~ toString(n);
+        }
+
+        const primaryGuideId = faceId + "primaryGuides";
+        opCreateCurvesOnFace(context, primaryGuideId, {
+                "curveDefinition" : [
+                    curveOnFaceDefinition(faceQuery, FaceCurveCreationType.DIR1_AUTO_SPACED_ISO, primaryNames, primaryCount)
+                ],
+                "showCurves" : false,
+                "skipTrim" : false
+        });
+
+        const primaryGuides = qCreatedBy(primaryGuideId, EntityType.EDGE);
+        var primaryIndex = 0;
+
+        for (var guideEdge in evaluateQuery(context, primaryGuides))
+        {
+            const isEndpoint = (primaryIndex == 0) || (primaryIndex == primaryCount - 1);
+
+            const distFromEdge = min(primaryIndex, primaryCount - 1 - primaryIndex);
+            const centerProximity = min(distFromEdge / (primaryCount / 2.0), 1.0);
+            const keepProbability = isEndpoint ? 1.0 : (0.18 + 0.82 * centerProximity);
+
+            if (isEndpoint || (((rnd() % 100) / 100.0) < keepProbability))
+            {
+                // Blue Proposed palette (roughly the same hue as the
+                // old solid 0.25/0.55/0.95, with per-stroke jitter).
+                const r = min(0.15 + ((rnd() % 20) / 100.0) * 0.15, 1);
+                const g = min(0.40 + ((rnd() % 20) / 100.0) * 0.20, 1);
+                const b = min(0.75 + ((rnd() % 20) / 100.0) * 0.20, 1);
+
+                const strokeVariance = isEndpoint ? variance * 2.5 : variance;
+
+                const strokes = handDrawScribbleGuide(
+                    context,
+                    faceId + ("primaryStroke" ~ toString(primaryIndex)),
+                    chordLength, strokeVariance, rnd, guideEdge,
+                    r, g, b, 0.55, false, 0.06);
+
+                allStrokes = qUnion(allStrokes, strokes);
+            }
+
+            primaryIndex += 1;
+        }
+
+        opDeleteBodies(context, faceId + "deletePrimaryGuides", {
+                "entities" : qCreatedBy(primaryGuideId, EntityType.BODY)
+        });
+
+        const secondaryCount = 5 + (rnd() % 3); // 5-7
+
+        var secondaryNames = makeArray(secondaryCount, "");
+        for (var m = 0; m < secondaryCount; m += 1)
+        {
+            secondaryNames[m] = "secondary" ~ toString(m);
+        }
+
+        const secondaryGuideId = faceId + "secondaryGuides";
+        opCreateCurvesOnFace(context, secondaryGuideId, {
+                "curveDefinition" : [
+                    curveOnFaceDefinition(faceQuery, FaceCurveCreationType.DIR2_AUTO_SPACED_ISO, secondaryNames, secondaryCount)
+                ],
+                "showCurves" : false,
+                "skipTrim" : false
+        });
+
+        const secondaryGuides = qCreatedBy(secondaryGuideId, EntityType.EDGE);
+        var secondaryIndex = 0;
+
+        for (var guideEdge2 in evaluateQuery(context, secondaryGuides))
+        {
+            if (((rnd() % 100) / 100.0) < 0.45)
+            {
+                const r2 = min(0.30 + ((rnd() % 20) / 100.0) * 0.15, 1);
+                const g2 = min(0.55 + ((rnd() % 20) / 100.0) * 0.20, 1);
+                const b2 = min(0.85 + ((rnd() % 15) / 100.0) * 0.15, 1);
+
+                const strokes2 = handDrawScribbleGuide(
+                    context,
+                    faceId + ("secondaryStroke" ~ toString(secondaryIndex)),
+                    chordLength, variance, rnd, guideEdge2,
+                    r2, g2, b2, 0.4, true, 0.10);
+
+                allStrokes = qUnion(allStrokes, strokes2);
+            }
+
+            secondaryIndex += 1;
+        }
+
+        opDeleteBodies(context, faceId + "deleteSecondaryGuides", {
+                "entities" : qCreatedBy(secondaryGuideId, EntityType.BODY)
+        });
+
+        faceIndex += 1;
+    }
+
+    if (!isQueryEmpty(context, allStrokes))
+    {
+        opCreateCompositePart(context, id + "faceFillComposite", {
+                "bodies" : allStrokes,
+                "closed" : false
+        });
+    }
+}
+
+function handDrawScribbleGuide(
     context is Context,
     id is Id,
     chordLength is ValueWithUnits,
     variance is ValueWithUnits,
     rnd is function,
-    edgeQuery is Query)
+    edgeQuery is Query,
+    red is number,
+    green is number,
+    blue is number,
+    alpha is number,
+    singlePass is boolean,
+    mistakeChance is number)
 {
     var edgeLength = evLength(context, { "entities" : edgeQuery });
     var pointCount = ceil(max(edgeLength / chordLength, 5));
@@ -326,7 +404,7 @@ function handDrawEdgeSketchy(
     });
 
     var rawRandom = rnd() % 100;
-    var numStrokes = 2 + floor(rawRandom / 33);
+    var numStrokes = singlePass ? 1 : (1 + floor(rawRandom / 34)); // 1-3
 
     var strokesQuery = qNothing();
 
@@ -336,7 +414,6 @@ function handDrawEdgeSketchy(
 
         for (var i = 0; i < pointCount; i += 1)
         {
-            // .origin already carries length units -- do NOT multiply by meter.
             var basePt = tangents[i].origin as Vector;
 
             var s1 = rnd();
@@ -344,9 +421,12 @@ function handDrawEdgeSketchy(
 
             var jitterFactor = 0.5 + ((s2 % 100) / 100.0) * 0.5;
 
-            var offsetX = 2 * ((((s1 + i * 17 + strokeIndex * 29) % 100) / 100.0) - 0.5) * variance * jitterFactor;
-            var offsetY = 2 * ((((s1 + i * 23 + strokeIndex * 37) % 100) / 100.0) - 0.5) * variance * jitterFactor;
-            var offsetZ = 2 * ((((s1 + i * 31 + strokeIndex * 41) % 100) / 100.0) - 0.5) * variance * jitterFactor;
+            var isMistake = (((rnd() % 100) / 100.0) < mistakeChance);
+            var mistakeFactor = isMistake ? (1.30 + ((rnd() % 100) / 100.0) * 1.11) : 1.0;
+
+            var offsetX = 2 * (((s1 + i * 17 + strokeIndex * 29) % 100) / 100.0 - 0.5) * variance * jitterFactor * mistakeFactor;
+            var offsetY = 2 * (((s1 + i * 31 + strokeIndex * 43) % 100) / 100.0 - 0.5) * variance * jitterFactor * mistakeFactor;
+            var offsetZ = 2 * (((s1 + i * 47 + strokeIndex * 61) % 100) / 100.0 - 0.5) * variance * jitterFactor * mistakeFactor;
 
             var perturbed = basePt;
             perturbed[0] += offsetX;
@@ -357,8 +437,21 @@ function handDrawEdgeSketchy(
         }
 
         const strokeId = id + ("_stroke" ~ toString(strokeIndex));
+
         opFitSpline(context, strokeId, { "points" : newPoints });
-        strokesQuery = qUnion(strokesQuery, qCreatedBy(strokeId, EntityType.BODY));
+
+        const strokeBody = qCreatedBy(strokeId, EntityType.BODY);
+
+        const colorJitter = (rnd() % 100) / 100.0;
+        const strokeAlpha = min(max(alpha + (colorJitter - 0.5) * 0.2, 0.1), 1.0);
+
+        setProperty(context, {
+                "entities" : strokeBody,
+                "propertyType" : PropertyType.APPEARANCE,
+                "value" : color(red, green, blue, strokeAlpha)
+        });
+
+        strokesQuery = qUnion(strokesQuery, strokeBody);
     }
 
     return strokesQuery;
@@ -366,32 +459,43 @@ function handDrawEdgeSketchy(
 
 //////////////////////////////////////////////////////////////////////
 //
-// RANDOM NUMBER GENERATOR (copied verbatim from proposedMove.fs)
+// RANDOM NUMBER GENERATOR (salted variant, copied verbatim from
+// needsInputRotate.fs)
 //
 //////////////////////////////////////////////////////////////////////
 
-function RandomNumberFunction(id) returns function
+function RandomNumberFunctionWithSalt(id, salt)
+returns function
 {
-    return lcprng(idToNum(id[0]));
+    const baseSeed = idToNum(id[0]);
+    const saltSeed = idToNum(salt);
+    return lcprng((baseSeed + saltSeed * 97) % 100000);
 }
 
-function idToNum(input is string) returns number
+function idToNum(input is string)
+returns number
 {
-    const chrMap = {
-            'A' : 0, 'B' : 1, 'C' : 2, 'D' : 3, 'E' : 4, 'F' : 5, 'G' : 6,
-            'H' : 7, 'I' : 8, 'J' : 9, 'K' : 10, 'L' : 11, 'M' : 12, 'N' : 13,
-            'O' : 14, 'P' : 15, 'Q' : 16, 'R' : 17, 'S' : 18, 'T' : 19, 'U' : 20,
-            'V' : 21, 'W' : 22, 'X' : 23, 'Y' : 24, 'Z' : 25,
-            'a' : 26, 'b' : 27, 'c' : 28, 'd' : 29, 'e' : 30, 'f' : 31, 'g' : 32,
-            'h' : 33, 'i' : 34, 'j' : 35, 'k' : 36, 'l' : 37, 'm' : 38, 'n' : 39,
-            'o' : 40, 'p' : 41, 'q' : 42, 'r' : 43, 's' : 44, 't' : 45, 'u' : 46,
-            'v' : 47, 'w' : 48, 'x' : 49, 'y' : 50, 'z' : 51,
-            '_' : 99, '-' : 98
+    const chrMap =
+    {
+        'A' : 0, 'B' : 1, 'C' : 2, 'D' : 3, 'E' : 4, 'F' : 5, 'G' : 6, 'H' : 7,
+        'I' : 8, 'J' : 9, 'K' : 10, 'L' : 11, 'M' : 12, 'N' : 13, 'O' : 14, 'P' : 15,
+        'Q' : 16, 'R' : 17, 'S' : 18, 'T' : 19, 'U' : 20, 'V' : 21, 'W' : 22, 'X' : 23,
+        'Y' : 24, 'Z' : 25,
+
+        'a' : 26, 'b' : 27, 'c' : 28, 'd' : 29, 'e' : 30, 'f' : 31, 'g' : 32, 'h' : 33,
+        'i' : 34, 'j' : 35, 'k' : 36, 'l' : 37, 'm' : 38, 'n' : 39, 'o' : 40, 'p' : 41,
+        'q' : 42, 'r' : 43, 's' : 44, 't' : 45, 'u' : 46, 'v' : 47, 'w' : 48, 'x' : 49,
+        'y' : 50, 'z' : 51,
+
+        '_' : 99, '-' : 98
     };
+
     var out is string = "";
+
     for (var char in splitIntoCharacters(input))
     {
         var res = match(char, REGEX_NUMBER);
+
         if (res.hasMatch)
         {
             out = out ~ toString(res.captures[0]);
@@ -401,15 +505,19 @@ function idToNum(input is string) returns number
             out = out ~ toString(chrMap[char]);
         }
     }
+
     return stringToNumber(out) % 100000;
 }
 
-function lcprng(seed is number) returns function
+function lcprng(seed is number)
+returns function
 {
     const a = 1103515245;
     const c = 12345;
     const m = 2^31;
+
     var state = new box(seed);
+
     return function()
     {
         state[] = (a * state[] + c) % m;

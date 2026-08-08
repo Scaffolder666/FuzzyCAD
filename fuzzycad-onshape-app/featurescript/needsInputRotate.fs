@@ -48,7 +48,10 @@ import(path : "onshape/std/common.fs", version : "3044.0");
 annotation
 {
     "Feature Type Name" :
-        "FuzzyCAD Needs Input Rotate"
+        "FuzzyCAD Needs Input Rotate",
+
+    "Manipulator Change Function" :
+        "fuzzycadNeedsInputRotateManipulatorChange"
 }
 
 export const fuzzycadNeedsInputRotate =
@@ -621,6 +624,42 @@ defineFeature(function(
                     dimensionColor
                 );
             }
+
+
+            //////////////////////////////////////////////////////////////////
+            //
+            // ANGLE MANIPULATOR
+            //
+            // angularManipulator's constructor fields (axisOrigin,
+            // axisDirection, rotationOrigin) are forum-confirmed; the
+            // readback field name on newManipulators (used in
+            // fuzzycadNeedsInputRotateManipulatorChange below) is
+            // "angle" per Onshape's own uispec.html doc, the same
+            // source that confirmed "offset" for the linear
+            // manipulators used elsewhere in this codebase -- not yet
+            // independently live-verified.
+            //
+            //////////////////////////////////////////////////////////////////
+
+            addManipulators(
+                context,
+                id,
+                {
+                    "angleManipulator" :
+                        angularManipulator(
+                            {
+                                "axisOrigin" :
+                                    arcCenter,
+
+                                "axisDirection" :
+                                    axisDirection,
+
+                                "rotationOrigin" :
+                                    arcCenter
+                            }
+                        )
+                }
+            );
         }
 
 
@@ -639,6 +678,37 @@ defineFeature(function(
             }
         );
     });
+
+
+//////////////////////////////////////////////////////////////////////
+//
+// MANIPULATOR CHANGE
+//
+//////////////////////////////////////////////////////////////////////
+
+export function fuzzycadNeedsInputRotateManipulatorChange(
+    context is Context,
+    definition is map,
+    newManipulators is map)
+returns map
+{
+    if (
+        newManipulators[
+            "angleManipulator"
+        ]
+        !=
+        undefined
+    )
+    {
+        definition.angle =
+            newManipulators[
+                "angleManipulator"
+            ].angle;
+    }
+
+
+    return definition;
+}
 
 
 //////////////////////////////////////////////////////////////////////
