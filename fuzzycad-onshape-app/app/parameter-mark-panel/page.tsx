@@ -305,6 +305,11 @@ function ParameterMarkPanelInner() {
   // DOM nodes for each proposal card, keyed by featureId, so a SELECTION
   // match can scrollIntoView the right one.
   const cardNodesRef = useRef<Map<string, HTMLDivElement>>(new Map());
+  // Debounce timer for the SELECTION-triggered refresh (see the
+  // SELECTION listener below) -- a ref, not state, since it's just
+  // bookkeeping for setTimeout/clearTimeout and shouldn't itself cause
+  // a re-render.
+  const selectionRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Proposal grouping (see document.ts's ProposalGroup): a purely
   // cosmetic cluster of cards a reviewer thinks belong to the same
   // design intent. groupSelectMode toggles a checkbox on every card;
@@ -461,6 +466,21 @@ function ParameterMarkPanelInner() {
    * ,...]}) and maps each selectionId to whichever Cosmo Feature created
    * it, via entityToFeatureRef (built below). Multiple simultaneous
    * matches (multi-select) all get highlighted, not just the first.
+   *
+   * Also the closest thing to an event-driven refresh trigger we have:
+   * Onshape's extension messaging (confirmed against the official docs)
+   * does NOT expose any "feature changed" / "manipulator dragged" /
+   * "regenerated" event to third-party right-panel apps -- SELECTION is
+   * the only inbound message type at all. So instead of a blind timer
+   * poll, a SELECTION message (which fires for free, no REST call) is
+   * used as a proxy for "something might have just changed" -- clicking
+   * a manipulator handle or a feature to open its edit dialog both
+   * involve selecting something first, so this catches a lot of real
+   * edit workflows at zero idle cost. It will NOT catch continued
+   * dragging with no new selection, or typing directly into the native
+   * dialog with no click -- those still need a manual Refresh.
+   * Debounced (1.5s of no new SELECTION) so a multi-click or drag
+   * doesn't trigger a burst of reloads.
    */
   useEffect(() => {
     if (!hasUrlContext) return;
@@ -481,10 +501,27 @@ function ParameterMarkPanelInner() {
       }
 
       setSelectedFeatureIds(matched);
+
+      if (selectionRefreshTimerRef.current !== null) {
+        clearTimeout(selectionRefreshTimerRef.current);
+      }
+      selectionRefreshTimerRef.current = setTimeout(() => {
+        selectionRefreshTimerRef.current = null;
+        void loadEverything();
+      }, 1500);
     }
 
     window.addEventListener("message", handleMessage);
-    return () => window.removeEventListener("message", handleMessage);
+    return () => {
+      window.removeEventListener("message", handleMessage);
+      if (selectionRefreshTimerRef.current !== null) {
+        clearTimeout(selectionRefreshTimerRef.current);
+        selectionRefreshTimerRef.current = null;
+      }
+    };
+    // loadEverything is intentionally omitted -- same reasoning as the
+    // initial-load effect above (stable, non-memoized function).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hasUrlContext, urlServer]);
 
   useEffect(() => {
@@ -678,37 +715,6 @@ function ParameterMarkPanelInner() {
     // re-created-per-render component function (not memoized), so adding
     // it here would refire this effect on every unrelated re-render
     // instead of only when the Part Studio actually changes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [context]);
-
-  // Slow background poll -- reintroduced after the manipulator/native-
-  // dialog sync gap made pure manual-refresh feel broken (dragging a
-  // manipulator or editing Onshape's own feature dialog directly changes
-  // nothing this panel can see until it re-fetches). The original 30s
-  // poll was the thing that burned a full annual API allocation (2,500
-  // calls on Onshape's Free/Standard/EDU tier) in under a day -- confirmed
-  // live via HTTP 402. This is deliberately much slower (5 min) and
-  // pauses while the tab/iframe isn't visible, but the honest math is
-  // still ~24 calls/hour (2/features-call-equivalent pair per tick) if
-  // left open and visible for a full session -- budget-safer than 30s,
-  // not free. The annual-quota guard inside loadEverything still applies
-  // on top of this, so a 402 stops the polling loop too, same as manual
-  // Refresh.
-  useEffect(() => {
-    if (!context) {
-      return;
-    }
-
-    const POLL_INTERVAL_MS = 5 * 60 * 1000;
-
-    const intervalId = setInterval(() => {
-      if (typeof document !== "undefined" && document.visibilityState === "hidden") {
-        return;
-      }
-      void loadEverything();
-    }, POLL_INTERVAL_MS);
-
-    return () => clearInterval(intervalId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [context]);
 
