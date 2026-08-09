@@ -128,7 +128,10 @@ export const fuzzycadCompareAlternatives = defineFeature(function(context is Con
         if (size(currentBodies) != 1)
         {
             throw regenError(
-                "Select exactly one Current component.",
+                "Select exactly one Current component (currently resolves to "
+                    ~ toString(size(currentBodies))
+                    ~ " -- Current must be picked from THIS Part Studio; use "
+                    ~ "Alternative A/B for a body from another tab).",
                 ["currentComponent"]
             );
         }
