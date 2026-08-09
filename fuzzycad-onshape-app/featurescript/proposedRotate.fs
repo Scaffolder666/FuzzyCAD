@@ -151,7 +151,7 @@ export const fuzzycadProposedRotate = defineFeature(function(context is Context,
             const perpVec = normalize(bestPerpOffset);
             const perpVec2 = normalize(cross(axisDirection, perpVec));
             const arcCenter = axisStart + bestAlongAxis;
-            const dimensionColor = color(0.25, 0.55, 0.95, 1.0);
+            const dimensionColor = color(0.05, 0.55, 1.0, 1.0);
 
             drawAngleArc(
                     context,

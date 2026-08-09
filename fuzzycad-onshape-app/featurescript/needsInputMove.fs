@@ -140,7 +140,7 @@ export const fuzzycadNeedsInputMove = defineFeature(function(context is Context,
         // drawFuzzyDirectionGesture below): a rough direction, no claimed
         // distance. Only an axis whose flag has been unchecked (someone
         // has actually confirmed it) gets the precise arrow + number.
-        const arrowColor = color(0, 0, 0, 0.85);
+        const arrowColor = color(0, 0, 0, 1.0);
 
         const bbox = evBox3d(context, { "topology" : originalBody, "tight" : true });
         const bboxCenter = vector(

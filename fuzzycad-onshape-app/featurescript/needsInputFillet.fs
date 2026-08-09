@@ -529,7 +529,7 @@ defineFeature(function(
                     0,
                     0,
                     0,
-                    0.92
+                    1.0
                 );
 
 

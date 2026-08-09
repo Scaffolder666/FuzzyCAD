@@ -109,7 +109,7 @@ export const fuzzycadNeedsInputChamfer = defineFeature(function(context is Conte
         const tangentDir = edgeMidLine.direction;
         const perpReference = (abs(tangentDir[2]) < 0.9) ? vector(0, 0, 1) : vector(0, 1, 0);
         const widthDir = normalize(cross(tangentDir, perpReference));
-        const dimensionColor = color(0, 0, 0, 0.85);
+        const dimensionColor = color(0, 0, 0, 1.0);
 
         // A precise filled arrow + exact mm label would be fake precision
         // while "width" is still just a placeholder -- see

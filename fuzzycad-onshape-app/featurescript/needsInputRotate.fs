@@ -544,7 +544,7 @@ defineFeature(function(
                     0,
                     0,
                     0,
-                    0.88
+                    1.0
                 );
 
 

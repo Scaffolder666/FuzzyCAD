@@ -104,7 +104,7 @@ export const fuzzycadNeedsInputExtrude = defineFeature(function(context is Conte
 
         drawSketchyFaceFill(context, id + "faceFill", proposedBody);
 
-        const dimensionColor = color(0, 0, 0, 0.85);
+        const dimensionColor = color(0, 0, 0, 1.0);
 
         // A precise filled arrow + exact mm label would be fake precision
         // while "depth" is still just a placeholder -- see

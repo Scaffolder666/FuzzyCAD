@@ -131,11 +131,11 @@ export const fuzzycadProposedExtrude = defineFeature(function(context is Context
             setProperty(context, {
                     "entities" : qCreatedBy(id + "sketchyComposite", EntityType.BODY),
                     "propertyType" : PropertyType.APPEARANCE,
-                    "value" : color(0.25, 0.55, 0.95, 1.0)
+                    "value" : color(0.05, 0.55, 1.0, 1.0)
             });
         }
 
-        const dimensionColor = color(0.25, 0.55, 0.95, 1.0);
+        const dimensionColor = color(0.05, 0.55, 1.0, 1.0);
 
         drawDimensionArrow(
                 context,

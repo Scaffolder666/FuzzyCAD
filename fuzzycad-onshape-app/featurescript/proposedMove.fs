@@ -242,9 +242,9 @@ export const fuzzycadProposedMove = defineFeature(function(
 
         const arrowColor =
             color(
-                0.25,
+                0.05,
                 0.55,
-                0.95,
+                1.0,
                 1.0
             );
 
