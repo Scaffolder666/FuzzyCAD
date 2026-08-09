@@ -1052,24 +1052,6 @@ function ParameterMarkPanelInner() {
     );
   }
 
-  /** Flips a boolean parameter (e.g. "oppositeDirection") immediately -- no debounce needed, unlike the quantity inputs. */
-  async function toggleDirection(entry: ValueParameterEntry, next: boolean) {
-    if (!context) return;
-    await updatePartStudioFeatureSuppressed(
-      {
-        documentId: context.documentId,
-        workspaceId: context.workspaceId,
-        partStudioElementId: context.elementId,
-        server: context.server,
-      },
-      {
-        featureId: entry.featureId,
-        parameterUpdates: [{ parameterId: entry.parameterId, value: next }],
-      },
-    );
-    void loadEverything();
-  }
-
   /**
    * Accept: confirms the proposal is final and restores its output
    * parts' normal appearance. Does not write into any other feature --
@@ -1222,23 +1204,16 @@ function ParameterMarkPanelInner() {
           <span className={styles.cardTypeTag}>({group.featureType})</span>
         </div>
 
-        {group.parameters.map((entry) =>
-          entry.typeName === "BTMParameterBoolean" ? (
-            <DirectionToggleRow
-              key={entry.parameterId}
-              entry={entry}
-              disabled={resolved}
-              onToggle={(next) => void toggleDirection(entry, next)}
-            />
-          ) : (
+        {group.parameters
+          .filter((entry) => entry.typeName !== "BTMParameterBoolean")
+          .map((entry) => (
             <ParamValueRow
               key={entry.parameterId}
               entry={entry}
               disabled={resolved}
               onLivePreview={(value) => void livePreviewValue(entry, value)}
             />
-          ),
-        )}
+          ))}
 
         <div className={styles.rowActions}>
           {resolved ? (
@@ -1566,37 +1541,6 @@ function ParamValueRow({
         }}
         onClick={(event) => event.stopPropagation()}
       />
-    </div>
-  );
-}
-
-/** A boolean parameter (currently just "oppositeDirection") rendered as an arrow button instead of a text field -- click flips it immediately, no debounce needed. */
-function DirectionToggleRow({
-  entry,
-  disabled,
-  onToggle,
-}: {
-  entry: ValueParameterEntry;
-  disabled: boolean;
-  onToggle: (next: boolean) => void;
-}) {
-  const current = Boolean(entry.message.value);
-
-  return (
-    <div className={styles.paramEditRow}>
-      <span className={styles.paramEditLabel}>direction</span>
-      <button
-        type="button"
-        className={styles.directionButton}
-        disabled={disabled}
-        title="Flip extrude direction"
-        onClick={(event) => {
-          event.stopPropagation();
-          onToggle(!current);
-        }}
-      >
-        {current ? "↓ reversed" : "↑ normal"}
-      </button>
     </div>
   );
 }
