@@ -666,7 +666,6 @@ function ParameterMarkPanelInner() {
             // "accepted" (see ACCEPT_VIA_HIDDEN_PARAMETER_COSMO_FEATURE_TYPES)
             // is an internal control flag driven by Accept/Reopen below, not
             // something to show as an editable checkbox alongside moveX/Y/Z.
-            !(ACCEPT_VIA_HIDDEN_PARAMETER_COSMO_FEATURE_TYPES.has(entry.featureType) && entry.parameterId === "accepted"),
             // Note: "activeOption" (fuzzycadCompareAlternatives) is
             // deliberately NOT excluded here, unlike "accepted" above --
             // renderAlternativeComparisonCard reads its current value
@@ -675,6 +674,7 @@ function ParameterMarkPanelInner() {
             // generic ParamValueRow the way ordinary Quantity params are,
             // because that card uses its own dedicated render path
             // instead of group.parameters.map(ParamValueRow).
+            !(ACCEPT_VIA_HIDDEN_PARAMETER_COSMO_FEATURE_TYPES.has(entry.featureType) && entry.parameterId === "accepted"),
         )
       : [];
     setParameters(cosmoOnly);
