@@ -1,29 +1,10 @@
-// FuzzyCAD "Needs Input Chamfer" custom feature -- sibling of
-// proposedChamfer.fs, a separate Cosmo Feature type -- see
-// needsInputExtrude.fs's header comment for the full rationale.
-//
-// REWRITTEN to match proposedChamfer.fs's hidden-"accepted"-param
-// architecture plus the hand-drawn FACE SCRIBBLE FILL technique instead
-// of the old whole-body amber color -- see needsInputMove.fs's header
-// comment for the full rationale on the face-fill switch and the
-// black-instead-of-blue color choice. The width dimension arrow is kept
-// (drawDimensionArrow, copied from proposedChamfer.fs) but now drawn in
-// black to match.
-//
-// opChamfer's "width" key is still unconfirmed (same risk noted in
-// proposedChamfer.fs -- test that file first).
-//
-// "width" starts at whatever placeholder value whoever inserts this
-// leaves it at -- someone else fills in the real number via the right
-// panel's existing live-edit path.
+FeatureScript 3044;
+import(path : "onshape/std/common.fs", version : "3044.0");
 
-FeatureScript 3029;
-import(path : "onshape/std/common.fs", version : "3029.0");
+// Needs Input Chamfer
+// Sparse/incomplete geometry + very faint boundary.
+// Engineering leader remains clean; uncertainty is expressed by C = ?.
 
-// "Manipulator Change Function" -- lets someone drag a handle directly
-// on the geometry to set width, same mechanism as needsInputMove.fs
-// (see that file's header for the confirmed-live linearManipulator map
-// syntax + the "newManipulators has exactly one entry" gotcha).
 annotation {
     "Feature Type Name" : "FuzzyCAD Needs Input Chamfer",
     "Manipulator Change Function" : "fuzzycadNeedsInputChamferManipulatorChange"
@@ -38,20 +19,11 @@ export const fuzzycadNeedsInputChamfer = defineFeature(function(context is Conte
         definition.edge is Query;
 
         annotation { "Name" : "Width" }
-        isLength(definition.width, LENGTH_BOUNDS);
+        isLength(definition.width, BLEND_BOUNDS);
 
-        // Per-parameter "still open" flag -- unlike Proposed* (the value
-        // is already decided, reviewer just accepts/rejects), a Needs
-        // Input instance may already have a known width by the time
-        // someone inserts it. Defaults to true (open) and is visible (NOT
-        // ALWAYS_HIDDEN) so the inserter can mark it known instead. Purely
-        // metadata for the right panel's candidate-value UI; does not
-        // affect geometry, which always uses whatever "width" holds.
         annotation { "Name" : "Width needs input", "Default" : true }
         definition.widthNeedsInput is boolean;
 
-        // Controlled internally by the FuzzyCAD right panel.
-        // The normal Feature dialog will not show this parameter.
         annotation {
             "Name" : "Accepted",
             "Default" : false,
@@ -60,21 +32,31 @@ export const fuzzycadNeedsInputChamfer = defineFeature(function(context is Conte
         definition.accepted is boolean;
     }
     {
-        const originalBody = definition.body;
+        if (isQueryEmpty(context, definition.body) || isQueryEmpty(context, definition.edge))
+        {
+            return;
+        }
 
-        // ACCEPTED STATE: chamfer the real edge on the real body
-        // directly, no duplicate/preview machinery at all, then stop.
+        const originalBody = definition.body;
+        const edgeLine = evEdgeTangentLine(context, {
+                "edge" : definition.edge,
+                "parameter" : 0.5
+        });
+        const midpoint = edgeLine.origin;
+        const tangentDir = edgeLine.direction;
+
         if (definition.accepted)
         {
             opChamfer(context, id + "acceptedChamfer", {
                     "entities" : definition.edge,
-                    "width" : definition.width
+                    "chamferType" : ChamferType.EQUAL_OFFSETS,
+                    "width" : definition.width,
+                    "tangentPropagation" : true
             });
-
             return;
         }
 
-        // PENDING STATE below.
+        const trackedSelection = startTracking(context, definition.edge);
 
         opPattern(context, id + "duplicate", {
                 "entities" : originalBody,
@@ -82,20 +64,25 @@ export const fuzzycadNeedsInputChamfer = defineFeature(function(context is Conte
                 "instanceNames" : ["proposed"]
         });
 
-        const proposedBody = qCreatedBy(id + "duplicate", EntityType.BODY);
+        const proposedBody =
+            qPatternInstances(id + "duplicate", "proposed", EntityType.BODY);
 
-        const edgeMidLine = evEdgeTangentLine(context, {
-                "edge" : definition.edge,
-                "parameter" : 0.5
-        });
-        const midpoint = edgeMidLine.origin;
+        const copiedSelection =
+            qOwnedByBody(trackedSelection, proposedBody);
 
-        const copiedEdges = qCreatedBy(id + "duplicate", EntityType.EDGE);
-        const matchedEdge = qClosestTo(copiedEdges, midpoint);
+        if (isQueryEmpty(context, copiedSelection))
+        {
+            throw regenError(
+                "Could not track the selected chamfer edge onto the proposal copy.",
+                definition.edge
+            );
+        }
 
-        opChamfer(context, id + "chamfer", {
-                "entities" : matchedEdge,
-                "width" : definition.width
+        opChamfer(context, id + "previewChamfer", {
+                "entities" : copiedSelection,
+                "chamferType" : ChamferType.EQUAL_OFFSETS,
+                "width" : definition.width,
+                "tangentPropagation" : true
         });
 
         setProperty(context, {
@@ -104,177 +91,77 @@ export const fuzzycadNeedsInputChamfer = defineFeature(function(context is Conte
                 "value" : color(0.75, 0.75, 0.75, 0.08)
         });
 
-        drawSketchyFaceFill(context, id + "faceFill", proposedBody);
+        drawNeedsInputSketch(context, id + "needsSketch", proposedBody);
+        drawVeryLightGhostOutline(context, id + "ghostOutline", proposedBody);
 
-        const tangentDir = edgeMidLine.direction;
-        const perpReference = (abs(tangentDir[2]) < 0.9) ? vector(0, 0, 1) : vector(0, 1, 0);
-        const widthDir = normalize(cross(tangentDir, perpReference));
-        const dimensionColor = color(0, 0, 0, 1.0);
+        const ref =
+            (abs(tangentDir[2]) < 0.9)
+            ? vector(0, 0, 1)
+            : vector(0, 1, 0);
 
-        // A precise filled arrow + exact mm label would be fake precision
-        // while "width" is still just a placeholder -- see
-        // needsInputMove.fs's drawFuzzyDirectionGesture for the rationale.
-        if (definition.widthNeedsInput)
-        {
-            drawFuzzyDirectionGesture(
-                    context,
-                    id + "widthGesture",
-                    midpoint,
-                    widthDir,
-                    30 * millimeter,
-                    "W: ?",
-                    dimensionColor
-            );
-        }
-        else
-        {
-            drawDimensionArrow(
-                    context,
-                    id + "widthArrow",
-                    midpoint,
-                    widthDir * definition.width,
-                    "W: " ~ toString(round(definition.width / millimeter, 1)) ~ " mm",
-                    dimensionColor
-            );
-        }
+        const calloutDir =
+            normalize(cross(tangentDir, ref));
 
-        opDeleteBodies(context, id + "deleteTemporaryProposal", {
-                "entities" : proposedBody
-        });
+        const leaderLength =
+            max(definition.width * 5, 22 * millimeter);
 
-        // Drag handle for width, anchored at the edge midpoint along
-        // the same direction the dimension arrow/gesture already uses.
+        const labelText =
+            definition.widthNeedsInput
+            ? "C = ?"
+            : "C = " ~ toString(round(definition.width / millimeter, 1)) ~ " mm";
+
+        drawEngineeringLeader(
+            context,
+            id + "chamferLeader",
+            midpoint,
+            calloutDir,
+            leaderLength,
+            labelText
+        );
+
         addManipulators(context, id, {
                 "widthManipulator" : linearManipulator({
                         "base" : midpoint,
-                        "direction" : widthDir,
+                        "direction" : calloutDir,
                         "offset" : definition.width,
                         "primaryParameterId" : "width"
                 })
         });
+
+        opDeleteBodies(context, id + "deleteTemporaryProposal", {
+                "entities" : proposedBody
+        });
     });
 
-// Manipulator Change Function referenced by the annotation above.
-export function fuzzycadNeedsInputChamferManipulatorChange(context is Context, definition is map, newManipulators is map) returns map
+export function fuzzycadNeedsInputChamferManipulatorChange(
+    context is Context,
+    definition is map,
+    newManipulators is map)
+returns map
 {
     if (newManipulators["widthManipulator"] != undefined)
     {
-        definition.width = newManipulators["widthManipulator"].offset;
+        definition.width =
+            newManipulators["widthManipulator"].offset;
     }
 
     return definition;
 }
 
+
 //////////////////////////////////////////////////////////////////////
-//
-// FILLED DIMENSION ARROW (copied verbatim from proposedChamfer.fs)
-//
+// SPARSE / INCOMPLETE NEEDS INPUT GEOMETRY
 //////////////////////////////////////////////////////////////////////
 
-function drawDimensionArrow(
+function drawNeedsInputSketch(
     context is Context,
     id is Id,
-    start is Vector,
-    axisOffset is Vector,
-    labelText is string,
-    arrowColor is map)
+    body is Query)
 {
-    const distance = norm(axisOffset);
-    const distanceMm = distance / millimeter;
+    const chordLength = 4.5 * millimeter;
+    const variance = 0.55 * millimeter;
 
-    if (distanceMm < 0.001)
-    {
-        return;
-    }
-
-    const direction = normalize(axisOffset);
-
-    const reference = (abs(direction[2]) < 0.9) ? vector(0, 0, 1) : vector(0, 1, 0);
-    const planeNormal = normalize(cross(direction, reference));
-    const arrowPlane = plane(start, planeNormal, direction);
-
-    const shaftWidth = min(max(distanceMm * 0.12, 2.5), 7) * millimeter;
-    const headLength = min(distanceMm * 0.5, 24) * millimeter;
-    const headWidth = shaftWidth * 4.5;
-
-    const arrowSketch = newSketchOnPlane(context, id + "arrowSketch", { "sketchPlane" : arrowPlane });
-
-    skLineSegment(arrowSketch, "headUpper", {
-            "start" : vector(distance, 0 * meter),
-            "end" : vector(distance - headLength, headWidth / 2)
-    });
-    skLineSegment(arrowSketch, "headLower", {
-            "start" : vector(distance, 0 * meter),
-            "end" : vector(distance - headLength, -headWidth / 2)
-    });
-    skLineSegment(arrowSketch, "headUpperTransition", {
-            "start" : vector(distance - headLength, headWidth / 2),
-            "end" : vector(distance - headLength, shaftWidth / 2)
-    });
-    skLineSegment(arrowSketch, "headLowerTransition", {
-            "start" : vector(distance - headLength, -headWidth / 2),
-            "end" : vector(distance - headLength, -shaftWidth / 2)
-    });
-    skLineSegment(arrowSketch, "shaftUpper", {
-            "start" : vector(distance - headLength, shaftWidth / 2),
-            "end" : vector(0 * meter, shaftWidth / 2)
-    });
-    skLineSegment(arrowSketch, "shaftLower", {
-            "start" : vector(distance - headLength, -shaftWidth / 2),
-            "end" : vector(0 * meter, -shaftWidth / 2)
-    });
-    skLineSegment(arrowSketch, "shaftBack", {
-            "start" : vector(0 * meter, shaftWidth / 2),
-            "end" : vector(0 * meter, -shaftWidth / 2)
-    });
-
-    skSolve(arrowSketch);
-
-    opExtractSurface(context, id + "arrowSurface", {
-            "faces" : qSketchRegion(id + "arrowSketch"),
-            "offset" : 0 * meter,
-            "useFacesAroundToTrimOffset" : false
-    });
-
-    opDeleteBodies(context, id + "deleteArrowSketch", {
-            "entities" : qCreatedBy(id + "arrowSketch")
-    });
-
-    setProperty(context, {
-            "entities" : qCreatedBy(id + "arrowSurface", EntityType.BODY),
-            "propertyType" : PropertyType.APPEARANCE,
-            "value" : arrowColor
-    });
-
-    const midPoint = start + axisOffset / 2;
-    const labelSketch = newSketchOnPlane(context, id + "labelSketch", { "sketchPlane" : arrowPlane });
-    const labelUv = worldToPlane(arrowPlane, midPoint);
-    const labelOffset = headWidth / 2 + 1.5 * millimeter;
-    const textHeight = 2.5 * millimeter;
-
-    skText(labelSketch, "labelText", {
-            "text" : labelText,
-            "fontName" : "OpenSans-Regular.ttf",
-            "firstCorner" : vector(labelUv[0] - textHeight * 1.5, labelUv[1] + labelOffset),
-            "secondCorner" : vector(labelUv[0] + textHeight * 1.5, labelUv[1] + labelOffset + textHeight)
-    });
-
-    skSolve(labelSketch);
-}
-
-//////////////////////////////////////////////////////////////////////
-//
-// HAND-DRAWN FACE SCRIBBLE FILL (copied verbatim from needsInputMove.fs)
-//
-//////////////////////////////////////////////////////////////////////
-
-function drawSketchyFaceFill(context is Context, id is Id, body is Query)
-{
-    const chordLength = 3 * millimeter;
-    const variance = 0.4 * millimeter;
-
-    var rnd = RandomNumberFunctionWithSalt(id, "faceFill");
-
+    var rnd = RandomNumberFunctionWithSalt(id, "sparseNeedsInputFill");
     var allStrokes = qNothing();
 
     const faces = qOwnedByBody(qEverything(EntityType.FACE), body);
@@ -284,53 +171,66 @@ function drawSketchyFaceFill(context is Context, id is Id, body is Query)
     {
         const faceId = id + ("face" ~ toString(faceIndex));
 
-        const primaryCount = 46 + (rnd() % 7); // 46-52
-
+        // Only 12–18 candidate guides, and many are discarded.
+        const primaryCount = 12 + (rnd() % 7);
         var primaryNames = makeArray(primaryCount, "");
+
         for (var n = 0; n < primaryCount; n += 1)
         {
             primaryNames[n] = "primary" ~ toString(n);
         }
 
         const primaryGuideId = faceId + "primaryGuides";
-        opCreateCurvesOnFace(context, primaryGuideId, {
+
+        opCreateCurvesOnFace(
+            context,
+            primaryGuideId,
+            {
                 "curveDefinition" : [
-                    curveOnFaceDefinition(faceQuery, FaceCurveCreationType.DIR1_AUTO_SPACED_ISO, primaryNames, primaryCount)
+                    curveOnFaceDefinition(
+                        faceQuery,
+                        FaceCurveCreationType.DIR1_AUTO_SPACED_ISO,
+                        primaryNames,
+                        primaryCount
+                    )
                 ],
                 "showCurves" : false,
                 "skipTrim" : false
-        });
+            }
+        );
 
         const primaryGuides = qCreatedBy(primaryGuideId, EntityType.EDGE);
         var primaryIndex = 0;
 
         for (var guideEdge in evaluateQuery(context, primaryGuides))
         {
-            const isEndpoint = (primaryIndex == 0) || (primaryIndex == primaryCount - 1);
+            const isBoundaryGuide =
+                (primaryIndex == 0) ||
+                (primaryIndex == primaryCount - 1);
 
-            const distFromEdge = min(primaryIndex, primaryCount - 1 - primaryIndex);
-            const centerProximity = min(distFromEdge / (primaryCount / 2.0), 1.0);
-            const keepProbability = isEndpoint ? 1.0 : (0.18 + 0.82 * centerProximity);
+            const keepProbability = isBoundaryGuide
+                ? 0.18
+                : 0.46 + ((rnd() % 20) / 100.0);
 
-            if (isEndpoint || (((rnd() % 100) / 100.0) < keepProbability))
+            if (((rnd() % 100) / 100.0) < keepProbability)
             {
-                const r = min(0.03 + ((rnd() % 24) / 100.0) * 0.25, 1);
-                const g = min(0.03 + ((rnd() % 29) / 100.0) * 0.25, 1);
-                const b = min(0.03 + ((rnd() % 25) / 100.0) * 0.25, 1);
+                const grey = 0.05 + ((rnd() % 18) / 100.0);
+                const alpha = 0.26 + ((rnd() % 30) / 100.0);
+                const strokeVariance =
+                    variance * (1.25 + ((rnd() % 175) / 100.0));
 
-                // Boundary-adjacent guides (isEndpoint) sit almost
-                // exactly on the face's own real edge, so with normal
-                // jitter they read as one crisp, ruler-straight line
-                // framing the looser interior scribble -- extra
-                // variance softens that "hard edge" look, per live
-                // feedback on the first successful compile.
-                const strokeVariance = isEndpoint ? variance * 2.5 : variance;
-
-                const strokes = handDrawScribbleGuide(
+                const strokes = handDrawNeedsInputGuide(
                     context,
                     faceId + ("primaryStroke" ~ toString(primaryIndex)),
-                    chordLength, strokeVariance, rnd, guideEdge,
-                    r, g, b, 0.55, false, 0.06);
+                    chordLength,
+                    strokeVariance,
+                    rnd,
+                    guideEdge,
+                    grey,
+                    alpha,
+                    false,
+                    0.14
+                );
 
                 allStrokes = qUnion(allStrokes, strokes);
             }
@@ -338,43 +238,68 @@ function drawSketchyFaceFill(context is Context, id is Id, body is Query)
             primaryIndex += 1;
         }
 
-        opDeleteBodies(context, faceId + "deletePrimaryGuides", {
-                "entities" : qCreatedBy(primaryGuideId, EntityType.BODY)
-        });
+        const primaryGuideBodies = qCreatedBy(primaryGuideId, EntityType.BODY);
+        if (!isQueryEmpty(context, primaryGuideBodies))
+        {
+            opDeleteBodies(
+                context,
+                faceId + "deletePrimaryGuides",
+                { "entities" : primaryGuideBodies }
+            );
+        }
 
-        const secondaryCount = 7 + (rnd() % 4); // 7-10
-
+        // Sparse cross-hatching: only 3–5 candidates, most discarded.
+        const secondaryCount = 3 + (rnd() % 3);
         var secondaryNames = makeArray(secondaryCount, "");
+
         for (var m = 0; m < secondaryCount; m += 1)
         {
             secondaryNames[m] = "secondary" ~ toString(m);
         }
 
         const secondaryGuideId = faceId + "secondaryGuides";
-        opCreateCurvesOnFace(context, secondaryGuideId, {
+
+        opCreateCurvesOnFace(
+            context,
+            secondaryGuideId,
+            {
                 "curveDefinition" : [
-                    curveOnFaceDefinition(faceQuery, FaceCurveCreationType.DIR2_AUTO_SPACED_ISO, secondaryNames, secondaryCount)
+                    curveOnFaceDefinition(
+                        faceQuery,
+                        FaceCurveCreationType.DIR2_AUTO_SPACED_ISO,
+                        secondaryNames,
+                        secondaryCount
+                    )
                 ],
                 "showCurves" : false,
                 "skipTrim" : false
-        });
+            }
+        );
 
         const secondaryGuides = qCreatedBy(secondaryGuideId, EntityType.EDGE);
         var secondaryIndex = 0;
 
         for (var guideEdge2 in evaluateQuery(context, secondaryGuides))
         {
-            if (((rnd() % 100) / 100.0) < 0.45)
+            if ((rnd() % 100) < 34)
             {
-                const r2 = min(0.10 + ((rnd() % 20) / 100.0) * 0.3, 1);
-                const g2 = min(0.10 + ((rnd() % 22) / 100.0) * 0.3, 1);
-                const b2 = min(0.10 + ((rnd() % 22) / 100.0) * 0.3, 1);
+                const grey2 = 0.10 + ((rnd() % 18) / 100.0);
+                const alpha2 = 0.22 + ((rnd() % 24) / 100.0);
+                const strokeVariance2 =
+                    variance * (1.6 + ((rnd() % 190) / 100.0));
 
-                const strokes2 = handDrawScribbleGuide(
+                const strokes2 = handDrawNeedsInputGuide(
                     context,
                     faceId + ("secondaryStroke" ~ toString(secondaryIndex)),
-                    chordLength, variance, rnd, guideEdge2,
-                    r2, g2, b2, 0.4, true, 0.10);
+                    chordLength * 1.15,
+                    strokeVariance2,
+                    rnd,
+                    guideEdge2,
+                    grey2,
+                    alpha2,
+                    true,
+                    0.18
+                );
 
                 allStrokes = qUnion(allStrokes, strokes2);
             }
@@ -382,201 +307,325 @@ function drawSketchyFaceFill(context is Context, id is Id, body is Query)
             secondaryIndex += 1;
         }
 
-        opDeleteBodies(context, faceId + "deleteSecondaryGuides", {
-                "entities" : qCreatedBy(secondaryGuideId, EntityType.BODY)
-        });
+        const secondaryGuideBodies = qCreatedBy(secondaryGuideId, EntityType.BODY);
+        if (!isQueryEmpty(context, secondaryGuideBodies))
+        {
+            opDeleteBodies(
+                context,
+                faceId + "deleteSecondaryGuides",
+                { "entities" : secondaryGuideBodies }
+            );
+        }
 
         faceIndex += 1;
     }
 
     if (!isQueryEmpty(context, allStrokes))
     {
-        opCreateCompositePart(context, id + "faceFillComposite", {
+        opCreateCompositePart(
+            context,
+            id + "faceFillComposite",
+            {
                 "bodies" : allStrokes,
                 "closed" : false
-        });
+            }
+        );
     }
 }
 
-function handDrawScribbleGuide(
+function handDrawNeedsInputGuide(
     context is Context,
     id is Id,
     chordLength is ValueWithUnits,
     variance is ValueWithUnits,
     rnd is function,
     edgeQuery is Query,
-    red is number,
-    green is number,
-    blue is number,
+    grey is number,
     alpha is number,
     singlePass is boolean,
     mistakeChance is number)
+returns Query
 {
-    var edgeLength = evLength(context, { "entities" : edgeQuery });
-    var pointCount = ceil(max(edgeLength / chordLength, 5));
+    const edgeLength = evLength(context, { "entities" : edgeQuery });
 
-    var tangents = @evEdgeTangentLines(context, {
-            "edge" : edgeQuery,
-            "parameters" : range(0.0, 1.0, pointCount)
-    });
+    const numStrokes = singlePass
+        ? 1
+        : (((rnd() % 100) < 78) ? 1 : 2);
 
-    var rawRandom = rnd() % 100;
-    var numStrokes = singlePass ? 1 : (1 + floor(rawRandom / 34)); // 1-3
-
-    var strokesQuery = qNothing();
+    var result = qNothing();
 
     for (var strokeIndex = 0; strokeIndex < numStrokes; strokeIndex += 1)
     {
-        var newPoints = makeArray(pointCount, undefined);
+        const startParameter =
+            0.03 + ((rnd() % 28) / 100.0);
+
+        const endParameter =
+            0.67 + ((rnd() % 30) / 100.0);
+
+        const coverage = endParameter - startParameter;
+
+        const pointCount = ceil(
+            max(
+                (edgeLength * coverage) / chordLength,
+                4
+            )
+        );
+
+        const tangents = @evEdgeTangentLines(
+            context,
+            {
+                "edge" : edgeQuery,
+                "parameters" : range(
+                    startParameter,
+                    endParameter,
+                    pointCount
+                )
+            }
+        );
+
+        var pts = makeArray(pointCount, undefined);
 
         for (var i = 0; i < pointCount; i += 1)
         {
-            var basePt = tangents[i].origin as Vector;
+            var p = tangents[i].origin as Vector;
+            const s1 = rnd();
+            const s2 = rnd();
 
-            var s1 = rnd();
-            var s2 = rnd();
+            const jitterFactor =
+                0.65 + ((s2 % 100) / 100.0) * 0.85;
 
-            var jitterFactor = 0.5 + ((s2 % 100) / 100.0) * 0.5;
+            const isMistake =
+                (((rnd() % 100) / 100.0) < mistakeChance);
 
-            var isMistake = (((rnd() % 100) / 100.0) < mistakeChance);
-            var mistakeFactor = isMistake ? (1.30 + ((rnd() % 100) / 100.0) * 1.11) : 1.0;
+            const mistakeFactor = isMistake
+                ? 1.45 + ((rnd() % 100) / 100.0) * 1.55
+                : 1.0;
 
-            var offsetX = 2 * (((s1 + i * 17 + strokeIndex * 29) % 100) / 100.0 - 0.5) * variance * jitterFactor * mistakeFactor;
-            var offsetY = 2 * (((s1 + i * 31 + strokeIndex * 43) % 100) / 100.0 - 0.5) * variance * jitterFactor * mistakeFactor;
-            var offsetZ = 2 * (((s1 + i * 47 + strokeIndex * 61) % 100) / 100.0 - 0.5) * variance * jitterFactor * mistakeFactor;
+            const normalizedIndex =
+                pointCount > 1
+                ? i / (pointCount - 1)
+                : 0.5;
 
-            var perturbed = basePt;
-            perturbed[0] += offsetX;
-            perturbed[1] += offsetY;
-            perturbed[2] += offsetZ;
+            const endLooseness =
+                1.0 + abs(normalizedIndex - 0.5) * 0.9;
 
-            newPoints[i] = perturbed;
+            p[0] += 2 * (((s1 + i * 17 + strokeIndex * 29) % 100) / 100.0 - 0.5) * variance * jitterFactor * mistakeFactor * endLooseness;
+            p[1] += 2 * (((s1 + i * 31 + strokeIndex * 43) % 100) / 100.0 - 0.5) * variance * jitterFactor * mistakeFactor * endLooseness;
+            p[2] += 2 * (((s1 + i * 47 + strokeIndex * 61) % 100) / 100.0 - 0.5) * variance * jitterFactor * mistakeFactor * endLooseness;
+
+            pts[i] = p;
         }
 
-        const strokeId = id + ("_stroke" ~ toString(strokeIndex));
+        const strokeId = id + ("stroke" ~ toString(strokeIndex));
 
-        opFitSpline(context, strokeId, { "points" : newPoints });
+        opFitSpline(context, strokeId, { "points" : pts });
 
         const strokeBody = qCreatedBy(strokeId, EntityType.BODY);
+        const alphaJitter =
+            (((rnd() % 100) / 100.0) - 0.5) * 0.18;
 
-        const colorJitter = (rnd() % 100) / 100.0;
-        const strokeAlpha = min(max(alpha + (colorJitter - 0.5) * 0.2, 0.1), 1.0);
+        const strokeAlpha =
+            min(max(alpha + alphaJitter, 0.14), 0.72);
 
-        setProperty(context, {
+        setProperty(
+            context,
+            {
                 "entities" : strokeBody,
                 "propertyType" : PropertyType.APPEARANCE,
-                "value" : color(red, green, blue, strokeAlpha)
-        });
+                "value" : color(grey, grey, grey, strokeAlpha)
+            }
+        );
 
-        strokesQuery = qUnion(strokesQuery, strokeBody);
+        result = qUnion(result, strokeBody);
     }
 
-    return strokesQuery;
+    return result;
 }
 
 //////////////////////////////////////////////////////////////////////
-//
-// FUZZY DIRECTION GESTURE (copied verbatim from needsInputMove.fs --
-// see that file for the full rationale)
-//
+// VERY FAINT COMPLETE OUTLINE
 //////////////////////////////////////////////////////////////////////
 
-function drawFuzzyDirectionGesture(
+function drawVeryLightGhostOutline(
     context is Context,
     id is Id,
-    start is Vector,
-    direction is Vector,
-    nominalLength is ValueWithUnits,
-    labelText is string,
-    gestureColor is map)
+    body is Query)
 {
-    if (norm(direction) < 0.0001)
+    const outlineColor = color(0.38, 0.38, 0.38, 0.14);
+    const sampleSpacing = 5 * millimeter;
+
+    const bodyEdges = evaluateQuery(
+        context,
+        qOwnedByBody(qEverything(EntityType.EDGE), body)
+    );
+
+    var outlineBodies = qNothing();
+
+    for (var edgeIndex = 0; edgeIndex < size(bodyEdges); edgeIndex += 1)
+    {
+        const edgeQuery = bodyEdges[edgeIndex];
+        const edgeLength = evLength(context, { "entities" : edgeQuery });
+        const pointCount = ceil(max(edgeLength / sampleSpacing, 5));
+
+        const tangents = @evEdgeTangentLines(
+            context,
+            {
+                "edge" : edgeQuery,
+                "parameters" : range(0.0, 0.995, pointCount)
+            }
+        );
+
+        var points = makeArray(pointCount, undefined);
+
+        for (var p = 0; p < pointCount; p += 1)
+        {
+            points[p] = tangents[p].origin as Vector;
+        }
+
+        const outlineId = id + ("edge" ~ toString(edgeIndex));
+        opFitSpline(context, outlineId, { "points" : points });
+
+        const outlineBody = qCreatedBy(outlineId, EntityType.BODY);
+
+        setProperty(
+            context,
+            {
+                "entities" : outlineBody,
+                "propertyType" : PropertyType.APPEARANCE,
+                "value" : outlineColor
+            }
+        );
+
+        outlineBodies = qUnion(outlineBodies, outlineBody);
+    }
+
+    if (!isQueryEmpty(context, outlineBodies))
+    {
+        opCreateCompositePart(
+            context,
+            id + "outlineComposite",
+            {
+                "bodies" : outlineBodies,
+                "closed" : false
+            }
+        );
+    }
+}
+function drawEngineeringLeader(
+    context is Context,
+    id is Id,
+    anchorPoint is Vector,
+    direction is Vector,
+    leaderLength is ValueWithUnits,
+    labelText is string)
+{
+    if (leaderLength / millimeter < 0.001)
     {
         return;
     }
 
     const dir = normalize(direction);
+    const ref = (abs(dir[2]) < 0.9) ? vector(0, 0, 1) : vector(0, 1, 0);
+    const side = normalize(cross(dir, ref));
+    const side2 = normalize(cross(dir, side));
 
-    const reference = (abs(dir[2]) < 0.9) ? vector(0, 0, 1) : vector(0, 1, 0);
-    const perp1 = normalize(cross(dir, reference));
-    const perp2 = cross(dir, perp1);
+    // Arrow points TO the edited edge/feature.
+    const labelPoint = anchorPoint + dir * leaderLength;
+    const arrowColor = color(0.88, 0.16, 0.12, 1.0);
+    const headLength = min(max(leaderLength * 0.20, 4 * millimeter), 10 * millimeter);
+    const headWidth = min(max(leaderLength * 0.09, 2.5 * millimeter), 6 * millimeter);
 
-    var rnd = RandomNumberFunctionWithSalt(id, "gesture");
+    var bodies = qNothing();
 
-    const strokeCount = 3;
-    const pointCount = 6;
+    opFitSpline(
+        context,
+        id + "leader",
+        { "points" : [labelPoint, anchorPoint] }
+    );
 
-    var allStrokes = qNothing();
+    bodies = qUnion(
+        bodies,
+        qCreatedBy(id + "leader", EntityType.BODY)
+    );
 
-    for (var s = 0; s < strokeCount; s += 1)
+    const headBase = anchorPoint + dir * headLength;
+    const dirs = [side, -side, side2, -side2];
+
+    for (var i = 0; i < 4; i += 1)
     {
-        var pts = makeArray(pointCount, undefined);
+        const wingId = id + ("wing" ~ toString(i));
+        opFitSpline(
+            context,
+            wingId,
+            {
+                "points" : [
+                    anchorPoint,
+                    headBase + dirs[i] * headWidth
+                ]
+            }
+        );
+        bodies = qUnion(
+            bodies,
+            qCreatedBy(wingId, EntityType.BODY)
+        );
+    }
 
-        for (var i = 0; i < pointCount; i += 1)
+    opCreateCompositePart(
+        context,
+        id + "composite",
         {
-            const t = i / (pointCount - 1);
-            const basePt = start + dir * (nominalLength * t);
-
-            // Reduced from 0.04-0.14 -- at the old amplitude the
-            // point-to-point sideways jitter was comparable in size to
-            // the along-axis spacing between sample points, so the
-            // stroke zigzagged almost as much sideways as it advanced,
-            // reading as a tangled scribble instead of a recognizable
-            // direction. Live feedback: "the three axes aren't straight
-            // lines." This keeps a hand-drawn wobble without losing the
-            // line's own directionality.
-            const spread = nominalLength * (0.015 + 0.025 * t);
-
-            const s1 = rnd();
-            const jitter1 = ((s1 + i * 19 + s * 53) % 100) / 100.0 - 0.5;
-            const jitter2 = ((s1 + i * 41 + s * 67) % 100) / 100.0 - 0.5;
-
-            pts[i] = basePt + perp1 * (spread * jitter1) + perp2 * (spread * jitter2 * 0.6);
+            "bodies" : bodies,
+            "closed" : false
         }
+    );
 
-        const strokeId = id + ("_gesture" ~ toString(s));
-        opFitSpline(context, strokeId, { "points" : pts });
-        allStrokes = qUnion(allStrokes, qCreatedBy(strokeId, EntityType.BODY));
-    }
+    setProperty(
+        context,
+        {
+            "entities" : qCreatedBy(id + "composite", EntityType.BODY),
+            "propertyType" : PropertyType.APPEARANCE,
+            "value" : arrowColor
+        }
+    );
 
-    if (!isQueryEmpty(context, allStrokes))
-    {
-        opCreateCompositePart(context, id + "gestureComposite", {
-                "bodies" : allStrokes,
-                "closed" : false
-        });
+    const textPoint = labelPoint + side2 * (4 * millimeter);
+    const textPlane =
+        plane(
+            textPoint + side * (0.02 * millimeter),
+            side
+        );
 
-        setProperty(context, {
-                "entities" : qCreatedBy(id + "gestureComposite", EntityType.BODY),
-                "propertyType" : PropertyType.APPEARANCE,
-                "value" : gestureColor
-        });
-    }
+    const textUv = worldToPlane(textPlane, textPoint);
+    const textSketch =
+        newSketchOnPlane(
+            context,
+            id + "labelSketch",
+            { "sketchPlane" : textPlane }
+        );
 
-    const tipPt = start + dir * nominalLength;
-    const labelPlane = plane(tipPt, perp1, dir);
-    const labelSketch = newSketchOnPlane(context, id + "labelSketch", { "sketchPlane" : labelPlane });
-    const labelUv = worldToPlane(labelPlane, tipPt);
-    const textHeight = 2.5 * millimeter;
+    const textSize = 3.6 * millimeter;
 
-    skText(labelSketch, "labelText", {
+    skText(
+        textSketch,
+        "label",
+        {
             "text" : labelText,
             "fontName" : "OpenSans-Regular.ttf",
-            "firstCorner" : vector(labelUv[0] - textHeight * 1.5, labelUv[1] + 1.5 * millimeter),
-            "secondCorner" : vector(labelUv[0] + textHeight * 1.5, labelUv[1] + 1.5 * millimeter + textHeight)
-    });
+            "firstCorner" :
+                vector(
+                    textUv[0] - 2.2 * textSize,
+                    textUv[1] - textSize
+                ),
+            "secondCorner" :
+                vector(
+                    textUv[0] + 2.2 * textSize,
+                    textUv[1] + textSize
+                )
+        }
+    );
 
-    skSolve(labelSketch);
+    skSolve(textSketch);
 }
-
-
-
-//////////////////////////////////////////////////////////////////////
-//
-// RANDOM NUMBER GENERATOR (salted variant, copied verbatim from
-// needsInputMove.fs)
-//
-//////////////////////////////////////////////////////////////////////
 
 function RandomNumberFunctionWithSalt(id, salt)
 returns function
@@ -585,7 +634,6 @@ returns function
     const saltSeed = idToNum(salt);
     return lcprng((baseSeed + saltSeed * 97) % 100000);
 }
-
 function idToNum(input is string)
 returns number
 {
@@ -595,12 +643,10 @@ returns number
         'I' : 8, 'J' : 9, 'K' : 10, 'L' : 11, 'M' : 12, 'N' : 13, 'O' : 14, 'P' : 15,
         'Q' : 16, 'R' : 17, 'S' : 18, 'T' : 19, 'U' : 20, 'V' : 21, 'W' : 22, 'X' : 23,
         'Y' : 24, 'Z' : 25,
-
         'a' : 26, 'b' : 27, 'c' : 28, 'd' : 29, 'e' : 30, 'f' : 31, 'g' : 32, 'h' : 33,
         'i' : 34, 'j' : 35, 'k' : 36, 'l' : 37, 'm' : 38, 'n' : 39, 'o' : 40, 'p' : 41,
         'q' : 42, 'r' : 43, 's' : 44, 't' : 45, 'u' : 46, 'v' : 47, 'w' : 48, 'x' : 49,
         'y' : 50, 'z' : 51,
-
         '_' : 99, '-' : 98
     };
 
@@ -638,3 +684,4 @@ returns function
         return state[];
     };
 }
+
