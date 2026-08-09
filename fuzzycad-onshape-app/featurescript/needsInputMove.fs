@@ -1,47 +1,6 @@
-// FuzzyCAD "Needs Input Move" custom feature -- sibling of
-// proposedMove.fs, a separate Cosmo Feature type -- see
-// needsInputExtrude.fs's header comment for the full rationale.
-//
-// REWRITTEN to match proposedMove.fs's v8 architecture: a hidden
-// "accepted" boolean (UIHint.ALWAYS_HIDDEN) lets the SAME feature
-// instance switch between a pending-state preview and a real committed
-// opTransform, instead of the old separate amber-whole-body styling
-// with no accept path of its own.
-//
-// Visualization technique CHANGED again, per explicit request: instead
-// of proposedMove.fs's hand-drawn EDGE wireframe (handDrawEdgeSketchy),
-// this uses a hand-drawn FACE FILL scribble (drawSketchyFaceFill below)
-// -- dense pencil-hatch strokes sampled from opCreateCurvesOnFace guide
-// curves across every face of the proposed body, rather than just its
-// silhouette edges. Colors were also explicitly changed from Proposed*'s
-// blue to black, since "Needs Input" is meant to read as a rougher,
-// less-final placeholder sketch than "Proposed".
-//
-// opCreateCurvesOnFace / curveOnFaceDefinition / FaceCurveCreationType
-// are NOT independently confirmed live by us in this file -- they were
-// supplied already-working in the pasted reference this was adapted
-// from. Flagging here per this session's practice of not silently
-// treating borrowed-but-unverified calls as confirmed.
-//
-// "Move X/Y/Z" start at whatever placeholder values (e.g. 0) whoever
-// inserts this leaves them at -- someone else fills in the real numbers
-// via the right panel's existing live-edit path.
+FeatureScript 3044;
+import(path : "onshape/std/common.fs", version : "3044.0");
 
-FeatureScript 3029;
-import(path : "onshape/std/common.fs", version : "3029.0");
-
-// "Manipulator Change Function" -- lets someone drag a handle directly
-// on the geometry, in Onshape's OWN native feature-edit UI, instead of
-// typing into the X/Y/Z number fields. CONFIRMED LIVE (user-tested):
-// linearManipulator takes the MAP form (base/direction/offset/
-// primaryParameterId below), not the older positional form from
-// https://forum.onshape.com/discussion/3610/simple-manipulator-tutorial
-// this was first adapted from. The other confirmed gotcha, handled in
-// fuzzycadNeedsInputMoveManipulatorChange below: newManipulators only
-// ever contains the ONE key that was just dragged, not all three
-// registered ones -- see that function's own comment. Only works while
-// this feature's own native Onshape edit dialog is open; our right
-// panel cannot trigger or render it.
 annotation {
     "Feature Type Name" : "FuzzyCAD Needs Input Move",
     "Manipulator Change Function" : "fuzzycadNeedsInputMoveManipulatorChange"
@@ -54,34 +13,19 @@ export const fuzzycadNeedsInputMove = defineFeature(function(context is Context,
 
         annotation { "Name" : "Move X" }
         isLength(definition.moveX, LENGTH_BOUNDS);
-
-        // Per-parameter "still open" flags -- unlike Proposed* (every
-        // value is already decided, reviewer just accepts/rejects), a
-        // Needs Input instance can be a MIX of known and unknown values:
-        // whoever inserts it may already know Move X but not Y/Z, for
-        // example. Each flag defaults to true (open) and is visible (NOT
-        // ALWAYS_HIDDEN) so the inserter -- or anyone editing later --
-        // consciously marks which fields are still real open questions.
-        // Purely metadata for the right panel to key its candidate-value
-        // UI off of; does not affect geometry, which always uses
-        // whatever moveX/Y/Z currently holds regardless of these flags.
         annotation { "Name" : "Move X needs input", "Default" : true }
         definition.moveXNeedsInput is boolean;
 
         annotation { "Name" : "Move Y" }
         isLength(definition.moveY, LENGTH_BOUNDS);
-
         annotation { "Name" : "Move Y needs input", "Default" : true }
         definition.moveYNeedsInput is boolean;
 
         annotation { "Name" : "Move Z" }
         isLength(definition.moveZ, LENGTH_BOUNDS);
-
         annotation { "Name" : "Move Z needs input", "Default" : true }
         definition.moveZNeedsInput is boolean;
 
-        // Controlled internally by the FuzzyCAD right panel.
-        // The normal Feature dialog will not show this parameter.
         annotation {
             "Name" : "Accepted",
             "Default" : false,
@@ -91,12 +35,7 @@ export const fuzzycadNeedsInputMove = defineFeature(function(context is Context,
     }
     {
         const originalBody = definition.body;
-
         const offset = vector(definition.moveX, definition.moveY, definition.moveZ);
-
-        //////////////////////////////////////////////////////////////////
-        // ACCEPTED STATE -- real geometry, no preview.
-        //////////////////////////////////////////////////////////////////
 
         if (definition.accepted)
         {
@@ -104,22 +43,15 @@ export const fuzzycadNeedsInputMove = defineFeature(function(context is Context,
                     "bodies" : originalBody,
                     "transform" : transform(offset)
             });
-
             return;
         }
 
-        //////////////////////////////////////////////////////////////////
-        // PENDING STATE
-        //////////////////////////////////////////////////////////////////
-
-        // 1. Fade the original body.
         setProperty(context, {
                 "entities" : originalBody,
                 "propertyType" : PropertyType.APPEARANCE,
                 "value" : color(0.75, 0.75, 0.75, 0.08)
         });
 
-        // 2. Temporary moved copy, just to get the proposed faces.
         opPattern(context, id + "duplicate", {
                 "entities" : originalBody,
                 "transforms" : [transform(offset)],
@@ -128,100 +60,68 @@ export const fuzzycadNeedsInputMove = defineFeature(function(context is Context,
 
         const proposedBody = qCreatedBy(id + "duplicate", EntityType.BODY);
 
-        // 3. Hand-drawn face scribble fill across the proposed body.
+        // NEEDS INPUT: sparse, incomplete, more random geometry.
         drawSketchyFaceFill(context, id + "faceFill", proposedBody);
 
-        // 4. Movement arrows, black instead of Proposed*'s blue. Per axis:
-        // if that axis is still flagged "needs input", a precise filled
-        // arrow with an exact distance label would be FAKE PRECISION --
-        // nobody has confirmed that number yet, it's just whatever
-        // placeholder is sitting in moveX/Y/Z. So a still-open axis gets
-        // a loose, hand-gestured indicator instead (see
-        // drawFuzzyDirectionGesture below): a rough direction, no claimed
-        // distance. Only an axis whose flag has been unchecked (someone
-        // has actually confirmed it) gets the precise arrow + number.
-        const arrowColor = color(0, 0, 0, 1.0);
+        // Very faint boundary support: enough to read the candidate shape
+        // from difficult camera angles without making it look precise.
+        drawVeryLightGhostOutline(context, id + "ghostOutline", proposedBody);
 
         const bbox = evBox3d(context, { "topology" : originalBody, "tight" : true });
-        const bboxCenter = vector(
-                (bbox.minCorner[0] + bbox.maxCorner[0]) / 2,
-                (bbox.minCorner[1] + bbox.maxCorner[1]) / 2,
-                (bbox.minCorner[2] + bbox.maxCorner[2]) / 2
+        const startPoint = vector(
+            (bbox.minCorner[0] + bbox.maxCorner[0]) / 2,
+            (bbox.minCorner[1] + bbox.maxCorner[1]) / 2,
+            (bbox.minCorner[2] + bbox.maxCorner[2]) / 2
         );
+        const endPoint = startPoint + offset;
 
-        const bboxDiagonal = norm(bbox.maxCorner - bbox.minCorner);
-        const gestureLength = min(max(bboxDiagonal * 0.25, 8 * millimeter), 40 * millimeter);
-
-        // Reference bounding-box wireframe + W/D/H callouts on the
-        // ORIGINAL body -- purely cosmetic, "look like a professional
-        // engineering drawing" polish, not a proposal about anything.
-        // No fake-precision concern here: the body's own current size is
-        // a real, known fact regardless of what moveX/Y/Z are, so this
-        // draws unconditionally (not gated by any NeedsInput flag).
-        const bboxColor = color(0.45, 0.45, 0.45, 0.7);
-        drawBoundingBoxDimensions(context, id + "bboxDims", bbox, bboxColor);
-
-        if (definition.moveXNeedsInput)
+        // Annotation stays clean and engineering-like.
+        // If any component is still open, the label is explicitly changed
+        // to "?" below by drawNeedsInputMoveArrowLabel.
+        if (norm(offset) / millimeter > 0.001)
         {
-            const xDir = (definition.moveX < 0 * meter) ? vector(-1, 0, 0) : vector(1, 0, 0);
-            drawFuzzyDirectionGesture(context, id + "gestureX", bboxCenter, xDir, gestureLength, "X: ?", arrowColor);
+            drawBigMoveArrow(
+                context,
+                id + "moveArrow",
+                startPoint,
+                endPoint,
+                definition.moveX,
+                definition.moveY,
+                definition.moveZ,
+                definition.moveXNeedsInput || definition.moveYNeedsInput || definition.moveZNeedsInput
+            );
         }
         else
         {
-            drawAxisArrow(context, id + "arrowX", bboxCenter, vector(definition.moveX, 0 * meter, 0 * meter), "X", arrowColor);
+            // No displacement placeholder yet: show a clean three-axis
+            // engineering direction triad instead of inventing a destination.
+            drawOpenMoveTriad(
+                context,
+                id + "openMoveTriad",
+                startPoint,
+                min(max(norm(bbox.maxCorner - bbox.minCorner) * 0.25, 12 * millimeter), 35 * millimeter)
+            );
         }
 
-        if (definition.moveYNeedsInput)
-        {
-            const yDir = (definition.moveY < 0 * meter) ? vector(0, -1, 0) : vector(0, 1, 0);
-            drawFuzzyDirectionGesture(context, id + "gestureY", bboxCenter, yDir, gestureLength, "Y: ?", arrowColor);
-        }
-        else
-        {
-            drawAxisArrow(context, id + "arrowY", bboxCenter, vector(0 * meter, definition.moveY, 0 * meter), "Y", arrowColor);
-        }
+        opDeleteBodies(context, id + "deleteTemporaryProposal", {
+                "entities" : proposedBody
+        });
 
-        if (definition.moveZNeedsInput)
-        {
-            const zDir = (definition.moveZ < 0 * meter) ? vector(0, 0, -1) : vector(0, 0, 1);
-            drawFuzzyDirectionGesture(context, id + "gestureZ", bboxCenter, zDir, gestureLength, "Z: ?", arrowColor);
-        }
-        else
-        {
-            drawAxisArrow(context, id + "arrowZ", bboxCenter, vector(0 * meter, 0 * meter, definition.moveZ), "Z", arrowColor);
-        }
-
-        // 5. Delete the temporary exact proposed solid -- only the
-        // scribble strokes and arrows (independent wire/surface bodies)
-        // remain.
-        opDeleteBodies(context, id + "deleteTemporaryProposal", { "entities" : proposedBody });
-
-        // 6. Drag handles, one per axis, anchored at the same bbox
-        // center the arrows/gestures use. Onshape calls
-        // fuzzycadNeedsInputMoveManipulatorChange (below) whenever one
-        // is dragged, regardless of whether that axis is currently
-        // flagged needs-input or not -- dragging is itself a way of
-        // supplying/confirming a value, same as typing a number.
-        //
-        // Map-argument form with "primaryParameterId" (confirmed via a
-        // real forum-posted linearManipulator({...}) call, not the
-        // positional form the first version of this file used) -- lets
-        // Onshape focus the matching Feature dialog field while dragging.
         addManipulators(context, id, {
                 "moveXManipulator" : linearManipulator({
-                        "base" : bboxCenter,
+                        "base" : startPoint,
                         "direction" : vector(1, 0, 0),
                         "offset" : definition.moveX,
                         "primaryParameterId" : "moveX"
                 }),
                 "moveYManipulator" : linearManipulator({
-                        "base" : bboxCenter,
+                        "base" : startPoint,
                         "direction" : vector(0, 1, 0),
                         "offset" : definition.moveY,
                         "primaryParameterId" : "moveY"
                 }),
                 "moveZManipulator" : linearManipulator({
-                        "base" : bboxCenter,
+                        "base" : startPoint,
                         "direction" : vector(0, 0, 1),
                         "offset" : definition.moveZ,
                         "primaryParameterId" : "moveZ"
@@ -229,67 +129,263 @@ export const fuzzycadNeedsInputMove = defineFeature(function(context is Context,
         });
     });
 
-// Manipulator Change Function referenced by the annotation above --
-// reads the dragged axis's new offset back into the matching moveX/Y/Z
-// parameter. Does NOT touch the <axis>NeedsInput flags -- dragging
-// confirms a NUMBER, it doesn't automatically uncheck "still open"
-// (someone could still be dragging around to explore/gesture rather
-// than commit); the flag stays a separate, deliberate action in the
-// right panel.
-//
-// BUG FIX (this was the actual cause of "drag one axis, it snaps back"):
-// Onshape's own docs confirm newManipulators has EXACTLY ONE entry per
-// call -- the one that was just dragged, not all three we registered.
-// Unconditionally reading all three keys meant the two NOT being dragged
-// resolved to undefined, and assigning definition.moveY/moveZ to
-// undefined corrupted the definition on every drag. Each axis now only
-// updates if its own key is actually present in this call.
-export function fuzzycadNeedsInputMoveManipulatorChange(context is Context, definition is map, newManipulators is map) returns map
+export function fuzzycadNeedsInputMoveManipulatorChange(
+    context is Context,
+    definition is map,
+    newManipulators is map) returns map
 {
     if (newManipulators["moveXManipulator"] != undefined)
-    {
         definition.moveX = newManipulators["moveXManipulator"].offset;
-    }
 
     if (newManipulators["moveYManipulator"] != undefined)
-    {
         definition.moveY = newManipulators["moveYManipulator"].offset;
-    }
 
     if (newManipulators["moveZManipulator"] != undefined)
-    {
         definition.moveZ = newManipulators["moveZManipulator"].offset;
-    }
 
     return definition;
 }
 
-
-
-//////////////////////////////////////////////////////////////////////
-//
-// HAND-DRAWN FACE SCRIBBLE FILL
-//
-// For every face of `body`: a dense "primary" field of DIR1
-// auto-spaced guide curves (kept with rising probability toward the
-// face center, so the fill reads denser in the middle like real pencil
-// shading), each kept guide redrawn as 1-3 jittered pencil strokes;
-// then a sparser "secondary" DIR2 field, single-pass strokes with a
-// higher "bad pencil moment" chance, for a cross-hatched look. All
-// strokes across all faces are combined into one composite part.
-//
-//////////////////////////////////////////////////////////////////////
-
-function drawSketchyFaceFill(context is Context, id is Id, body is Query)
+function drawOpenMoveTriad(
+    context is Context,
+    id is Id,
+    origin is Vector,
+    length is ValueWithUnits)
 {
-    const chordLength = 3 * millimeter;
-    const variance = 0.4 * millimeter;
+    const arrowColor = color(0.88, 0.16, 0.12, 1.0);
+    const dirs = [vector(1,0,0), vector(0,1,0), vector(0,0,1)];
+    const names = ["X?", "Y?", "Z?"];
+    var allBodies = qNothing();
 
-    var rnd = RandomNumberFunctionWithSalt(id, "faceFill");
+    for (var i = 0; i < 3; i += 1)
+    {
+        const end = origin + dirs[i] * length;
+        const ref = (i == 2) ? vector(0,1,0) : vector(0,0,1);
+        const side = normalize(cross(dirs[i], ref));
+        const headLength = min(length * 0.25, 8 * millimeter);
+        const headWidth = min(length * 0.13, 5 * millimeter);
+        const base = end - dirs[i] * headLength;
 
+        const shaftId = id + ("shaft" ~ toString(i));
+        const wingAId = id + ("wingA" ~ toString(i));
+        const wingBId = id + ("wingB" ~ toString(i));
+
+        opFitSpline(context, shaftId, { "points" : [origin, end] });
+        opFitSpline(context, wingAId, { "points" : [end, base + side * headWidth] });
+        opFitSpline(context, wingBId, { "points" : [end, base - side * headWidth] });
+
+        allBodies = qUnion(allBodies, qCreatedBy(shaftId, EntityType.BODY));
+        allBodies = qUnion(allBodies, qCreatedBy(wingAId, EntityType.BODY));
+        allBodies = qUnion(allBodies, qCreatedBy(wingBId, EntityType.BODY));
+
+        const labelPoint = end + dirs[i] * (3 * millimeter);
+        const labelPlane = plane(labelPoint, dirs[i]);
+        const uv = worldToPlane(labelPlane, labelPoint);
+        const sketch = newSketchOnPlane(context, id + ("label" ~ toString(i)), { "sketchPlane" : labelPlane });
+        const t = 3 * millimeter;
+        skText(sketch, "txt", {
+                "text" : names[i],
+                "fontName" : "OpenSans-Regular.ttf",
+                "firstCorner" : vector(uv[0] - t, uv[1] - t),
+                "secondCorner" : vector(uv[0] + t, uv[1] + t)
+        });
+        skSolve(sketch);
+    }
+
+    if (!isQueryEmpty(context, allBodies))
+    {
+        opCreateCompositePart(context, id + "composite", {
+                "bodies" : allBodies,
+                "closed" : false
+        });
+        setProperty(context, {
+                "entities" : qCreatedBy(id + "composite", EntityType.BODY),
+                "propertyType" : PropertyType.APPEARANCE,
+                "value" : arrowColor
+        });
+    }
+}
+
+function drawBigMoveArrow(
+    context is Context,
+    id is Id,
+    startPoint is Vector,
+    endPoint is Vector,
+    moveX is ValueWithUnits,
+    moveY is ValueWithUnits,
+    moveZ is ValueWithUnits,
+    isOpen is boolean)
+{
+    const offset = endPoint - startPoint;
+    const distance = norm(offset);
+    if (distance / millimeter < 0.001)
+    {
+        return;
+    }
+
+    const direction = normalize(offset);
+    const ref = (abs(direction[2]) < 0.9) ? vector(0, 0, 1) : vector(0, 1, 0);
+    const side = normalize(cross(direction, ref));
+    const side2 = normalize(cross(direction, side));
+
+    const arrowColor = color(0.88, 0.16, 0.12, 1.0);
+    const markerColor = color(0.15, 0.15, 0.15, 0.82);
+
+    // A small 3D shaft cage means the direction line still reads when
+    // one of its planes turns edge-on to the camera.
+    const shaftSpread = min(max(distance * 0.025, 0.8 * millimeter), 2.5 * millimeter);
+    const headLength = min(max(distance * 0.22, 7 * millimeter), 18 * millimeter);
+    const headWidth = min(max(distance * 0.11, 4 * millimeter), 9 * millimeter);
+    const markerSize = min(max(distance * 0.07, 3 * millimeter), 7 * millimeter);
+
+    var arrowBodies = qNothing();
+
+    // Main shaft + four parallel shafts around it. These are engineering
+    // lines, intentionally straight and deterministic, not sketchy.
+    const shaftOffsets = [
+        vector(0, 0, 0) * meter,
+        side * shaftSpread,
+        -side * shaftSpread,
+        side2 * shaftSpread,
+        -side2 * shaftSpread
+    ];
+
+    for (var s = 0; s < 5; s += 1)
+    {
+        const shaftId = id + ("shaft" ~ toString(s));
+        opFitSpline(context, shaftId, {
+                "points" : [startPoint + shaftOffsets[s], endPoint + shaftOffsets[s]]
+        });
+        arrowBodies = qUnion(arrowBodies, qCreatedBy(shaftId, EntityType.BODY));
+    }
+
+    // 8-wing wire-cone arrowhead. Because the head exists around the
+    // full 3D cross-section, at least several wings remain readable from
+    // almost any camera direction.
+    const headBase = endPoint - direction * headLength;
+    const diag1 = normalize(side + side2);
+    const diag2 = normalize(side - side2);
+    const headDirs = [side, -side, side2, -side2, diag1, -diag1, diag2, -diag2];
+
+    for (var h = 0; h < 8; h += 1)
+    {
+        const wingId = id + ("headWing" ~ toString(h));
+        const wingPt = headBase + headDirs[h] * headWidth;
+        opFitSpline(context, wingId, { "points" : [endPoint, wingPt] });
+        arrowBodies = qUnion(arrowBodies, qCreatedBy(wingId, EntityType.BODY));
+    }
+
+    if (!isQueryEmpty(context, arrowBodies))
+    {
+        opCreateCompositePart(context, id + "arrowComposite", {
+                "bodies" : arrowBodies,
+                "closed" : false
+        });
+        setProperty(context, {
+                "entities" : qCreatedBy(id + "arrowComposite", EntityType.BODY),
+                "propertyType" : PropertyType.APPEARANCE,
+                "value" : arrowColor
+        });
+    }
+
+    // Engineering start marker: 3D cross at the original position.
+    var startMarkerBodies = qNothing();
+    const startMarkerEnds = [
+        startPoint + side * markerSize, startPoint - side * markerSize,
+        startPoint + side2 * markerSize, startPoint - side2 * markerSize,
+        startPoint + direction * markerSize * 0.45, startPoint - direction * markerSize * 0.45
+    ];
+    opFitSpline(context, id + "startCross1", { "points" : [startMarkerEnds[0], startMarkerEnds[1]] });
+    opFitSpline(context, id + "startCross2", { "points" : [startMarkerEnds[2], startMarkerEnds[3]] });
+    opFitSpline(context, id + "startCross3", { "points" : [startMarkerEnds[4], startMarkerEnds[5]] });
+    startMarkerBodies = qUnion(startMarkerBodies, qCreatedBy(id + "startCross1", EntityType.BODY));
+    startMarkerBodies = qUnion(startMarkerBodies, qCreatedBy(id + "startCross2", EntityType.BODY));
+    startMarkerBodies = qUnion(startMarkerBodies, qCreatedBy(id + "startCross3", EntityType.BODY));
+
+    // Engineering target marker: a diamond in the plane normal to travel,
+    // plus a cross through the target point.
+    const d1 = endPoint + side * markerSize;
+    const d2 = endPoint + side2 * markerSize;
+    const d3 = endPoint - side * markerSize;
+    const d4 = endPoint - side2 * markerSize;
+    opFitSpline(context, id + "targetD1", { "points" : [d1, d2] });
+    opFitSpline(context, id + "targetD2", { "points" : [d2, d3] });
+    opFitSpline(context, id + "targetD3", { "points" : [d3, d4] });
+    opFitSpline(context, id + "targetD4", { "points" : [d4, d1] });
+    opFitSpline(context, id + "targetCross1", { "points" : [d1, d3] });
+    opFitSpline(context, id + "targetCross2", { "points" : [d2, d4] });
+
+    var markerBodies = startMarkerBodies;
+    markerBodies = qUnion(markerBodies, qCreatedBy(id + "targetD1", EntityType.BODY));
+    markerBodies = qUnion(markerBodies, qCreatedBy(id + "targetD2", EntityType.BODY));
+    markerBodies = qUnion(markerBodies, qCreatedBy(id + "targetD3", EntityType.BODY));
+    markerBodies = qUnion(markerBodies, qCreatedBy(id + "targetD4", EntityType.BODY));
+    markerBodies = qUnion(markerBodies, qCreatedBy(id + "targetCross1", EntityType.BODY));
+    markerBodies = qUnion(markerBodies, qCreatedBy(id + "targetCross2", EntityType.BODY));
+
+    opCreateCompositePart(context, id + "markerComposite", {
+            "bodies" : markerBodies,
+            "closed" : false
+    });
+    setProperty(context, {
+            "entities" : qCreatedBy(id + "markerComposite", EntityType.BODY),
+            "propertyType" : PropertyType.APPEARANCE,
+            "value" : markerColor
+    });
+
+    // Main motion label and component breakdown. The red arrow carries the
+    // action; the black annotation carries measured engineering detail.
+    const midPoint = startPoint + offset * 0.5 + side2 * min(distance * 0.11, 9 * millimeter);
+    const labelPlane = plane(midPoint + side * (0.02 * millimeter), side);
+    const labelUv = worldToPlane(labelPlane, midPoint);
+    const labelSketch = newSketchOnPlane(context, id + "labelSketch", { "sketchPlane" : labelPlane });
+    const textSize = 4.2 * millimeter;
+    skText(labelSketch, "label", {
+            "text" : isOpen
+                ? "MOVE  Δ = ?"
+                : "MOVE  Δ = " ~ toString(round(distance / millimeter, 1)) ~ " mm",
+            "fontName" : "OpenSans-Regular.ttf",
+            "firstCorner" : vector(labelUv[0] - 2.5 * textSize, labelUv[1] - textSize),
+            "secondCorner" : vector(labelUv[0] + 2.5 * textSize, labelUv[1] + textSize)
+    });
+    skSolve(labelSketch);
+
+    const detailPoint = midPoint - side2 * (7 * millimeter);
+    const detailPlane = plane(detailPoint + side * (0.02 * millimeter), side);
+    const detailUv = worldToPlane(detailPlane, detailPoint);
+    const detailSketch = newSketchOnPlane(context, id + "detailSketch", { "sketchPlane" : detailPlane });
+    const detailSize = 2.8 * millimeter;
+    skText(detailSketch, "detail", {
+            "text" : isOpen
+                ? "ΔX/ΔY/ΔZ  OPEN"
+                : "ΔX " ~ toString(round(moveX / millimeter, 1)) ~ "   ΔY " ~ toString(round(moveY / millimeter, 1)) ~ "   ΔZ " ~ toString(round(moveZ / millimeter, 1)),
+            "fontName" : "OpenSans-Regular.ttf",
+            "firstCorner" : vector(detailUv[0] - 3.0 * detailSize, detailUv[1] - detailSize),
+            "secondCorner" : vector(detailUv[0] + 3.0 * detailSize, detailUv[1] + detailSize)
+    });
+    skSolve(detailSketch);
+}
+
+
+function drawSketchyFaceFill(
+    context is Context,
+    id is Id,
+    body is Query)
+{
+    // NEEDS INPUT visual language:
+    // fewer guides, more irregular coverage, partial strokes.
+    // The engineering annotations remain clean elsewhere in the feature.
+    const chordLength = 4.5 * millimeter;
+    const variance = 0.55 * millimeter;
+
+    var rnd = RandomNumberFunctionWithSalt(id, "sparseNeedsInputFill");
     var allStrokes = qNothing();
 
-    const faces = qOwnedByBody(qEverything(EntityType.FACE), body);
+    const faces = qOwnedByBody(
+        qEverything(EntityType.FACE),
+        body
+    );
+
     var faceIndex = 0;
 
     for (var faceQuery in evaluateQuery(context, faces))
@@ -297,56 +393,78 @@ function drawSketchyFaceFill(context is Context, id is Id, body is Query)
         const faceId = id + ("face" ~ toString(faceIndex));
 
         //////////////////////////////////////////////////////////////
-        // Primary field
+        // PRIMARY FIELD
+        //
+        // Previous Needs Input versions used ~30-50 curves per face.
+        // This intentionally drops to 12-18, then discards many of them.
         //////////////////////////////////////////////////////////////
 
-        const primaryCount = 46 + (rnd() % 7); // 46-52
-
+        const primaryCount = 12 + (rnd() % 7);
         var primaryNames = makeArray(primaryCount, "");
+
         for (var n = 0; n < primaryCount; n += 1)
         {
             primaryNames[n] = "primary" ~ toString(n);
         }
 
         const primaryGuideId = faceId + "primaryGuides";
-        opCreateCurvesOnFace(context, primaryGuideId, {
+
+        opCreateCurvesOnFace(
+            context,
+            primaryGuideId,
+            {
                 "curveDefinition" : [
-                    curveOnFaceDefinition(faceQuery, FaceCurveCreationType.DIR1_AUTO_SPACED_ISO, primaryNames, primaryCount)
+                    curveOnFaceDefinition(
+                        faceQuery,
+                        FaceCurveCreationType.DIR1_AUTO_SPACED_ISO,
+                        primaryNames,
+                        primaryCount
+                    )
                 ],
                 "showCurves" : false,
                 "skipTrim" : false
-        });
+            }
+        );
 
         const primaryGuides = qCreatedBy(primaryGuideId, EntityType.EDGE);
         var primaryIndex = 0;
 
         for (var guideEdge in evaluateQuery(context, primaryGuides))
         {
-            const isEndpoint = (primaryIndex == 0) || (primaryIndex == primaryCount - 1);
+            const isBoundaryGuide =
+                (primaryIndex == 0) ||
+                (primaryIndex == primaryCount - 1);
 
-            const distFromEdge = min(primaryIndex, primaryCount - 1 - primaryIndex);
-            const centerProximity = min(distFromEdge / (primaryCount / 2.0), 1.0);
-            const keepProbability = isEndpoint ? 1.0 : (0.18 + 0.82 * centerProximity);
+            // Boundary guides are deliberately less likely to survive.
+            // This prevents Needs Input from reading like a crisp CAD shell.
+            const keepProbability = isBoundaryGuide
+                ? 0.18
+                : 0.46 + ((rnd() % 20) / 100.0);
 
-            if (isEndpoint || (((rnd() % 100) / 100.0) < keepProbability))
+            if (((rnd() % 100) / 100.0) < keepProbability)
             {
-                const r = min(0.03 + ((rnd() % 24) / 100.0) * 0.25, 1);
-                const g = min(0.03 + ((rnd() % 29) / 100.0) * 0.25, 1);
-                const b = min(0.03 + ((rnd() % 25) / 100.0) * 0.25, 1);
+                const grey = 0.05 + ((rnd() % 18) / 100.0);
+                const alpha = 0.26 + ((rnd() % 30) / 100.0);
 
-                // Boundary-adjacent guides (isEndpoint) sit almost
-                // exactly on the face's own real edge, so with normal
-                // jitter they read as one crisp, ruler-straight line
-                // framing the looser interior scribble -- extra
-                // variance softens that "hard edge" look, per live
-                // feedback on the first successful compile.
-                const strokeVariance = isEndpoint ? variance * 2.5 : variance;
+                // Each kept guide gets substantially different wobble.
+                const strokeVariance =
+                    variance *
+                    (1.25 + ((rnd() % 175) / 100.0));
 
                 const strokes = handDrawScribbleGuide(
                     context,
                     faceId + ("primaryStroke" ~ toString(primaryIndex)),
-                    chordLength, strokeVariance, rnd, guideEdge,
-                    r, g, b, 0.55, false, 0.06);
+                    chordLength,
+                    strokeVariance,
+                    rnd,
+                    guideEdge,
+                    grey,
+                    grey,
+                    grey,
+                    alpha,
+                    false,
+                    0.14
+                );
 
                 allStrokes = qUnion(allStrokes, strokes);
             }
@@ -354,47 +472,76 @@ function drawSketchyFaceFill(context is Context, id is Id, body is Query)
             primaryIndex += 1;
         }
 
-        opDeleteBodies(context, faceId + "deletePrimaryGuides", {
-                "entities" : qCreatedBy(primaryGuideId, EntityType.BODY)
-        });
+        const primaryGuideBodies = qCreatedBy(primaryGuideId, EntityType.BODY);
+        if (!isQueryEmpty(context, primaryGuideBodies))
+        {
+            opDeleteBodies(
+                context,
+                faceId + "deletePrimaryGuides",
+                { "entities" : primaryGuideBodies }
+            );
+        }
 
         //////////////////////////////////////////////////////////////
-        // Secondary field
+        // SECONDARY FIELD
+        //
+        // Only 3-5 candidates, and most are dropped.
         //////////////////////////////////////////////////////////////
 
-        const secondaryCount = 7 + (rnd() % 4); // 7-10
-
+        const secondaryCount = 3 + (rnd() % 3);
         var secondaryNames = makeArray(secondaryCount, "");
+
         for (var m = 0; m < secondaryCount; m += 1)
         {
             secondaryNames[m] = "secondary" ~ toString(m);
         }
 
         const secondaryGuideId = faceId + "secondaryGuides";
-        opCreateCurvesOnFace(context, secondaryGuideId, {
+
+        opCreateCurvesOnFace(
+            context,
+            secondaryGuideId,
+            {
                 "curveDefinition" : [
-                    curveOnFaceDefinition(faceQuery, FaceCurveCreationType.DIR2_AUTO_SPACED_ISO, secondaryNames, secondaryCount)
+                    curveOnFaceDefinition(
+                        faceQuery,
+                        FaceCurveCreationType.DIR2_AUTO_SPACED_ISO,
+                        secondaryNames,
+                        secondaryCount
+                    )
                 ],
                 "showCurves" : false,
                 "skipTrim" : false
-        });
+            }
+        );
 
         const secondaryGuides = qCreatedBy(secondaryGuideId, EntityType.EDGE);
         var secondaryIndex = 0;
 
         for (var guideEdge2 in evaluateQuery(context, secondaryGuides))
         {
-            if (((rnd() % 100) / 100.0) < 0.45)
+            if ((rnd() % 100) < 34)
             {
-                const r2 = min(0.10 + ((rnd() % 20) / 100.0) * 0.3, 1);
-                const g2 = min(0.10 + ((rnd() % 22) / 100.0) * 0.3, 1);
-                const b2 = min(0.10 + ((rnd() % 22) / 100.0) * 0.3, 1);
+                const grey2 = 0.10 + ((rnd() % 18) / 100.0);
+                const alpha2 = 0.22 + ((rnd() % 24) / 100.0);
+                const secondaryVariance =
+                    variance *
+                    (1.6 + ((rnd() % 190) / 100.0));
 
                 const strokes2 = handDrawScribbleGuide(
                     context,
                     faceId + ("secondaryStroke" ~ toString(secondaryIndex)),
-                    chordLength, variance, rnd, guideEdge2,
-                    r2, g2, b2, 0.4, true, 0.10);
+                    chordLength * 1.15,
+                    secondaryVariance,
+                    rnd,
+                    guideEdge2,
+                    grey2,
+                    grey2,
+                    grey2,
+                    alpha2,
+                    true,
+                    0.18
+                );
 
                 allStrokes = qUnion(allStrokes, strokes2);
             }
@@ -402,33 +549,40 @@ function drawSketchyFaceFill(context is Context, id is Id, body is Query)
             secondaryIndex += 1;
         }
 
-        opDeleteBodies(context, faceId + "deleteSecondaryGuides", {
-                "entities" : qCreatedBy(secondaryGuideId, EntityType.BODY)
-        });
+        const secondaryGuideBodies = qCreatedBy(secondaryGuideId, EntityType.BODY);
+        if (!isQueryEmpty(context, secondaryGuideBodies))
+        {
+            opDeleteBodies(
+                context,
+                faceId + "deleteSecondaryGuides",
+                { "entities" : secondaryGuideBodies }
+            );
+        }
 
         faceIndex += 1;
     }
 
     if (!isQueryEmpty(context, allStrokes))
     {
-        opCreateCompositePart(context, id + "faceFillComposite", {
+        opCreateCompositePart(
+            context,
+            id + "faceFillComposite",
+            {
                 "bodies" : allStrokes,
                 "closed" : false
-        });
+            }
+        );
     }
 }
 
 
-
 //////////////////////////////////////////////////////////////////////
 //
-// HAND-DRAWN SCRIBBLE ALONG ONE GUIDE CURVE
+// PARTIAL / IRREGULAR SCRIBBLE GUIDE
 //
-// Same jitter principle as proposedMove.fs's handDrawEdgeSketchy, but
-// with a different prime set (so the face-fill jitter stream looks
-// distinct from any edge-wireframe stream in the same instance) and an
-// added "mistake" chance that occasionally exaggerates one point's
-// offset, like a stray pencil slip.
+// Key difference from Proposed:
+// each Needs Input stroke intentionally covers only PART of its guide.
+// That creates visual incompleteness without adding more ink.
 //
 //////////////////////////////////////////////////////////////////////
 
@@ -446,40 +600,99 @@ function handDrawScribbleGuide(
     singlePass is boolean,
     mistakeChance is number)
 {
-    var edgeLength = evLength(context, { "entities" : edgeQuery });
-    var pointCount = ceil(max(edgeLength / chordLength, 5));
+    const edgeLength = evLength(
+        context,
+        { "entities" : edgeQuery }
+    );
 
-    var tangents = @evEdgeTangentLines(context, {
-            "edge" : edgeQuery,
-            "parameters" : range(0.0, 1.0, pointCount)
-    });
-
-    var rawRandom = rnd() % 100;
-    var numStrokes = singlePass ? 1 : (1 + floor(rawRandom / 34)); // 1-3
+    // Needs Input is intentionally sparse:
+    // normally one stroke, occasionally a second pass.
+    const numStrokes = singlePass
+        ? 1
+        : (((rnd() % 100) < 78) ? 1 : 2);
 
     var strokesQuery = qNothing();
 
     for (var strokeIndex = 0; strokeIndex < numStrokes; strokeIndex += 1)
     {
+        //////////////////////////////////////////////////////////////
+        // RANDOM PARTIAL COVERAGE
+        //
+        // Instead of always drawing parameter 0 -> 1, each stroke begins
+        // and ends at different locations on the guide.
+        //////////////////////////////////////////////////////////////
+
+        const startParameter =
+            0.03 + ((rnd() % 28) / 100.0);
+
+        const endParameter =
+            0.67 + ((rnd() % 30) / 100.0);
+
+        const coverage = endParameter - startParameter;
+
+        const pointCount = ceil(
+            max(
+                (edgeLength * coverage) / chordLength,
+                4
+            )
+        );
+
+        const tangents = @evEdgeTangentLines(
+            context,
+            {
+                "edge" : edgeQuery,
+                "parameters" : range(
+                    startParameter,
+                    endParameter,
+                    pointCount
+                )
+            }
+        );
+
         var newPoints = makeArray(pointCount, undefined);
 
         for (var i = 0; i < pointCount; i += 1)
         {
-            // .origin already carries length units -- do not multiply
-            // by meter (matches proposedMove.fs's confirmed-live note).
             var basePt = tangents[i].origin as Vector;
 
-            var s1 = rnd();
-            var s2 = rnd();
+            const s1 = rnd();
+            const s2 = rnd();
 
-            var jitterFactor = 0.5 + ((s2 % 100) / 100.0) * 0.5;
+            const jitterFactor =
+                0.65 + ((s2 % 100) / 100.0) * 0.85;
 
-            var isMistake = (((rnd() % 100) / 100.0) < mistakeChance);
-            var mistakeFactor = isMistake ? (1.30 + ((rnd() % 100) / 100.0) * 1.11) : 1.0;
+            const isMistake =
+                (((rnd() % 100) / 100.0) < mistakeChance);
 
-            var offsetX = 2 * (((s1 + i * 17 + strokeIndex * 29) % 100) / 100.0 - 0.5) * variance * jitterFactor * mistakeFactor;
-            var offsetY = 2 * (((s1 + i * 31 + strokeIndex * 43) % 100) / 100.0 - 0.5) * variance * jitterFactor * mistakeFactor;
-            var offsetZ = 2 * (((s1 + i * 47 + strokeIndex * 61) % 100) / 100.0 - 0.5) * variance * jitterFactor * mistakeFactor;
+            const mistakeFactor = isMistake
+                ? 1.45 + ((rnd() % 100) / 100.0) * 1.55
+                : 1.0;
+
+            // Slightly more distortion toward the ends makes strokes feel
+            // less like uniformly perturbed CAD isocurves.
+            const normalizedIndex =
+                pointCount > 1
+                ? i / (pointCount - 1)
+                : 0.5;
+
+            const endLooseness =
+                1.0 +
+                abs(normalizedIndex - 0.5) * 0.9;
+
+            const offsetX =
+                2 *
+                (((((s1 + i * 17 + strokeIndex * 29) % 100) / 100.0) - 0.5)) *
+                variance * jitterFactor * mistakeFactor * endLooseness;
+
+            const offsetY =
+                2 *
+                (((((s1 + i * 31 + strokeIndex * 43) % 100) / 100.0) - 0.5)) *
+                variance * jitterFactor * mistakeFactor * endLooseness;
+
+            const offsetZ =
+                2 *
+                (((((s1 + i * 47 + strokeIndex * 61) % 100) / 100.0) - 0.5)) *
+                variance * jitterFactor * mistakeFactor * endLooseness;
 
             var perturbed = basePt;
             perturbed[0] += offsetX;
@@ -491,18 +704,34 @@ function handDrawScribbleGuide(
 
         const strokeId = id + ("_stroke" ~ toString(strokeIndex));
 
-        opFitSpline(context, strokeId, { "points" : newPoints });
+        opFitSpline(
+            context,
+            strokeId,
+            { "points" : newPoints }
+        );
 
         const strokeBody = qCreatedBy(strokeId, EntityType.BODY);
 
-        const colorJitter = (rnd() % 100) / 100.0;
-        const strokeAlpha = min(max(alpha + (colorJitter - 0.5) * 0.2, 0.1), 1.0);
+        // Per-stroke opacity remains intentionally uneven.
+        const alphaJitter =
+            (((rnd() % 100) / 100.0) - 0.5) * 0.18;
 
-        setProperty(context, {
+        const strokeAlpha =
+            min(max(alpha + alphaJitter, 0.14), 0.72);
+
+        setProperty(
+            context,
+            {
                 "entities" : strokeBody,
                 "propertyType" : PropertyType.APPEARANCE,
-                "value" : color(red, green, blue, strokeAlpha)
-        });
+                "value" : color(
+                    red,
+                    green,
+                    blue,
+                    strokeAlpha
+                )
+            }
+        );
 
         strokesQuery = qUnion(strokesQuery, strokeBody);
     }
@@ -511,394 +740,278 @@ function handDrawScribbleGuide(
 }
 
 
-
 //////////////////////////////////////////////////////////////////////
 //
-// FILLED AXIS ARROW -- copied verbatim (including the enlarged sizing
-// constants) from proposedMove.fs's current version, so Move's needs-
-// input arrows read the same size as its proposed-value counterparts.
+// VERY LIGHT GHOST OUTLINE
+//
+// Needs Input uses sparse / incomplete / random interior strokes, but a
+// completely missing boundary can make the candidate geometry hard to
+// read from some camera angles. This adds ONE very faint, clean outline
+// over the temporary proposed body before that exact body is deleted.
+//
+// Important visual hierarchy:
+//   sparse random strokes = uncertainty / incompleteness
+//   faint outline         = only enough structure to read the shape
+//   red annotation        = action / engineering direction
+//
+// The outline is deliberately low opacity and has no random jitter.
+// We stop edge sampling just before parameter 1.0 to avoid feeding an
+// identical first/last point into opFitSpline on closed circular edges.
 //
 //////////////////////////////////////////////////////////////////////
 
-function drawAxisArrow(
+function drawVeryLightGhostOutline(
     context is Context,
     id is Id,
-    start is Vector,
-    axisOffset is Vector,
-    axisName is string,
-    arrowColor is map)
+    body is Query)
 {
-    const distance = norm(axisOffset);
-    const distanceMm = distance / millimeter;
+    const outlineColor = color(0.38, 0.38, 0.38, 0.14);
+    const sampleSpacing = 5 * millimeter;
 
-    if (distanceMm < 0.001)
+    const bodyEdges = evaluateQuery(
+        context,
+        qOwnedByBody(
+            qEverything(EntityType.EDGE),
+            body
+        )
+    );
+
+    var outlineBodies = qNothing();
+
+    for (var edgeIndex = 0; edgeIndex < size(bodyEdges); edgeIndex += 1)
     {
-        return;
-    }
+        const edgeQuery = bodyEdges[edgeIndex];
+        const edgeLength = evLength(context, { "entities" : edgeQuery });
+        const pointCount = ceil(max(edgeLength / sampleSpacing, 5));
 
-    const direction = normalize(axisOffset);
+        const tangents = @evEdgeTangentLines(
+            context,
+            {
+                "edge" : edgeQuery,
+                "parameters" : range(0.0, 0.995, pointCount)
+            }
+        );
 
-    const reference = (abs(direction[2]) < 0.9) ? vector(0, 0, 1) : vector(0, 1, 0);
-    const planeNormal = normalize(cross(direction, reference));
-    const arrowPlane = plane(start, planeNormal, direction);
+        var points = makeArray(pointCount, undefined);
 
-    const shaftWidth = min(max(distanceMm * 0.12, 2.5), 7) * millimeter;
-    const headLength = min(distanceMm * 0.5, 24) * millimeter;
-    const headWidth = shaftWidth * 4.5;
-
-    const arrowSketch = newSketchOnPlane(context, id + "arrowSketch", { "sketchPlane" : arrowPlane });
-
-    skLineSegment(arrowSketch, "headUpper", {
-            "start" : vector(distance, 0 * meter),
-            "end" : vector(distance - headLength, headWidth / 2)
-    });
-
-    skLineSegment(arrowSketch, "headLower", {
-            "start" : vector(distance, 0 * meter),
-            "end" : vector(distance - headLength, -headWidth / 2)
-    });
-
-    skLineSegment(arrowSketch, "headUpperTransition", {
-            "start" : vector(distance - headLength, headWidth / 2),
-            "end" : vector(distance - headLength, shaftWidth / 2)
-    });
-
-    skLineSegment(arrowSketch, "headLowerTransition", {
-            "start" : vector(distance - headLength, -headWidth / 2),
-            "end" : vector(distance - headLength, -shaftWidth / 2)
-    });
-
-    skLineSegment(arrowSketch, "shaftUpper", {
-            "start" : vector(distance - headLength, shaftWidth / 2),
-            "end" : vector(0 * meter, shaftWidth / 2)
-    });
-
-    skLineSegment(arrowSketch, "shaftLower", {
-            "start" : vector(distance - headLength, -shaftWidth / 2),
-            "end" : vector(0 * meter, -shaftWidth / 2)
-    });
-
-    skLineSegment(arrowSketch, "shaftBack", {
-            "start" : vector(0 * meter, shaftWidth / 2),
-            "end" : vector(0 * meter, -shaftWidth / 2)
-    });
-
-    skSolve(arrowSketch);
-
-    opExtractSurface(context, id + "arrowSurface", {
-            "faces" : qSketchRegion(id + "arrowSketch"),
-            "offset" : 0 * meter,
-            "useFacesAroundToTrimOffset" : false
-    });
-
-    opDeleteBodies(context, id + "deleteArrowSketch", {
-            "entities" : qCreatedBy(id + "arrowSketch")
-    });
-
-    setProperty(context, {
-            "entities" : qCreatedBy(id + "arrowSurface", EntityType.BODY),
-            "propertyType" : PropertyType.APPEARANCE,
-            "value" : arrowColor
-    });
-
-    const midPoint = start + axisOffset / 2;
-
-    const labelSketch = newSketchOnPlane(context, id + "labelSketch", { "sketchPlane" : arrowPlane });
-    const labelUv = worldToPlane(arrowPlane, midPoint);
-
-    const labelOffset = headWidth / 2 + 1.5 * millimeter;
-    const textHeight = 2.5 * millimeter;
-
-    skText(labelSketch, "labelText", {
-            "text" : axisName ~ ": " ~ toString(round(distanceMm, 1)) ~ " mm",
-            "fontName" : "OpenSans-Regular.ttf",
-            "firstCorner" : vector(labelUv[0] - textHeight * 1.5, labelUv[1] + labelOffset),
-            "secondCorner" : vector(labelUv[0] + textHeight * 1.5, labelUv[1] + labelOffset + textHeight)
-    });
-
-    skSolve(labelSketch);
-}
-
-
-
-//////////////////////////////////////////////////////////////////////
-//
-// FUZZY DIRECTION GESTURE
-//
-// Used instead of drawAxisArrow when the paired <param>NeedsInput flag
-// is still true: a precise filled arrow with an exact distance label
-// would just be dressing up an unconfirmed placeholder as a real
-// number. Draws a few short, heavily jittered freehand strokes along
-// `direction` instead of one filled arrow shape, with a plain "?"
-// label instead of a distance. `nominalLength` is a fixed fraction of
-// the body's own bounding-box diagonal, NOT derived from the
-// placeholder's magnitude -- so the gesture's length never implies
-// that magnitude means anything. The jitter spread widens toward the
-// tip so the strokes visually "trail off" instead of terminating at a
-// precise point, echoing drawSketchyFaceFill/handDrawScribbleGuide's
-// jitter technique but applied to a straight gesture rather than a
-// sampled real edge.
-//
-//////////////////////////////////////////////////////////////////////
-
-function drawFuzzyDirectionGesture(
-    context is Context,
-    id is Id,
-    start is Vector,
-    direction is Vector,
-    nominalLength is ValueWithUnits,
-    labelText is string,
-    gestureColor is map)
-{
-    if (norm(direction) < 0.0001)
-    {
-        return;
-    }
-
-    const dir = normalize(direction);
-
-    const reference = (abs(dir[2]) < 0.9) ? vector(0, 0, 1) : vector(0, 1, 0);
-    const perp1 = normalize(cross(dir, reference));
-    const perp2 = cross(dir, perp1);
-
-    var rnd = RandomNumberFunctionWithSalt(id, "gesture");
-
-    const strokeCount = 3;
-    const pointCount = 6;
-
-    var allStrokes = qNothing();
-
-    for (var s = 0; s < strokeCount; s += 1)
-    {
-        var pts = makeArray(pointCount, undefined);
-
-        for (var i = 0; i < pointCount; i += 1)
+        for (var p = 0; p < pointCount; p += 1)
         {
-            const t = i / (pointCount - 1);
-            const basePt = start + dir * (nominalLength * t);
-
-            // Reduced from 0.04-0.14 -- at the old amplitude the
-            // point-to-point sideways jitter was comparable in size to
-            // the along-axis spacing between sample points, so the
-            // stroke zigzagged almost as much sideways as it advanced,
-            // reading as a tangled scribble instead of a recognizable
-            // direction. Live feedback: "the three axes aren't straight
-            // lines." This keeps a hand-drawn wobble without losing the
-            // line's own directionality.
-            const spread = nominalLength * (0.015 + 0.025 * t);
-
-            const s1 = rnd();
-            const jitter1 = ((s1 + i * 19 + s * 53) % 100) / 100.0 - 0.5;
-            const jitter2 = ((s1 + i * 41 + s * 67) % 100) / 100.0 - 0.5;
-
-            pts[i] = basePt + perp1 * (spread * jitter1) + perp2 * (spread * jitter2 * 0.6);
+            points[p] = tangents[p].origin as Vector;
         }
 
-        const strokeId = id + ("_gesture" ~ toString(s));
-        opFitSpline(context, strokeId, { "points" : pts });
-        allStrokes = qUnion(allStrokes, qCreatedBy(strokeId, EntityType.BODY));
-    }
+        const outlineId = id + ("edge" ~ toString(edgeIndex));
+        opFitSpline(context, outlineId, { "points" : points });
 
-    if (!isQueryEmpty(context, allStrokes))
-    {
-        opCreateCompositePart(context, id + "gestureComposite", {
-                "bodies" : allStrokes,
-                "closed" : false
-        });
+        const outlineBody = qCreatedBy(outlineId, EntityType.BODY);
 
-        setProperty(context, {
-                "entities" : qCreatedBy(id + "gestureComposite", EntityType.BODY),
+        setProperty(
+            context,
+            {
+                "entities" : outlineBody,
                 "propertyType" : PropertyType.APPEARANCE,
-                "value" : gestureColor
-        });
+                "value" : outlineColor
+            }
+        );
+
+        outlineBodies = qUnion(outlineBodies, outlineBody);
     }
 
-    const tipPt = start + dir * nominalLength;
-    const labelPlane = plane(tipPt, perp1, dir);
-    const labelSketch = newSketchOnPlane(context, id + "labelSketch", { "sketchPlane" : labelPlane });
-    const labelUv = worldToPlane(labelPlane, tipPt);
-    const textHeight = 2.5 * millimeter;
-
-    skText(labelSketch, "labelText", {
-            "text" : labelText,
-            "fontName" : "OpenSans-Regular.ttf",
-            "firstCorner" : vector(labelUv[0] - textHeight * 1.5, labelUv[1] + 1.5 * millimeter),
-            "secondCorner" : vector(labelUv[0] + textHeight * 1.5, labelUv[1] + 1.5 * millimeter + textHeight)
-    });
-
-    skSolve(labelSketch);
-}
-
-
-
-//////////////////////////////////////////////////////////////////////
-//
-// BOUNDING BOX WIREFRAME + W/D/H DIMENSIONS
-//
-// Purely cosmetic "professional engineering drawing" polish -- draws
-// the 12-edge wireframe of a bounding box plus three dimension labels
-// (width/depth/height along X/Y/Z respectively) at three of its edge
-// midpoints, offset slightly outward so the text doesn't sit on top of
-// the wireframe itself. Uses opFitSpline for each edge (same technique
-// as the hand-drawn strokes elsewhere in this file) rather than sketch
-// line segments, since the 12 edges aren't all coplanar.
-//
-//////////////////////////////////////////////////////////////////////
-
-function drawBoundingBoxDimensions(context is Context, id is Id, bbox is map, wireColor is map)
-{
-    const minC = bbox.minCorner;
-    const maxC = bbox.maxCorner;
-
-    const c000 = vector(minC[0], minC[1], minC[2]);
-    const c100 = vector(maxC[0], minC[1], minC[2]);
-    const c010 = vector(minC[0], maxC[1], minC[2]);
-    const c110 = vector(maxC[0], maxC[1], minC[2]);
-    const c001 = vector(minC[0], minC[1], maxC[2]);
-    const c101 = vector(maxC[0], minC[1], maxC[2]);
-    const c011 = vector(minC[0], maxC[1], maxC[2]);
-    const c111 = vector(maxC[0], maxC[1], maxC[2]);
-
-    const edges = [
-        [c000, c100], [c100, c110], [c110, c010], [c010, c000],
-        [c001, c101], [c101, c111], [c111, c011], [c011, c001],
-        [c000, c001], [c100, c101], [c110, c111], [c010, c011]
-    ];
-
-    var allEdges = qNothing();
-
-    for (var e = 0; e < 12; e += 1)
+    if (!isQueryEmpty(context, outlineBodies))
     {
-        const edgeId = id + ("bboxEdge" ~ toString(e));
-        opFitSpline(context, edgeId, { "points" : [edges[e][0], edges[e][1]] });
-        allEdges = qUnion(allEdges, qCreatedBy(edgeId, EntityType.BODY));
-    }
-
-    if (!isQueryEmpty(context, allEdges))
-    {
-        opCreateCompositePart(context, id + "bboxComposite", {
-                "bodies" : allEdges,
+        opCreateCompositePart(
+            context,
+            id + "outlineComposite",
+            {
+                "bodies" : outlineBodies,
                 "closed" : false
-        });
-
-        setProperty(context, {
-                "entities" : qCreatedBy(id + "bboxComposite", EntityType.BODY),
-                "propertyType" : PropertyType.APPEARANCE,
-                "value" : wireColor
-        });
+            }
+        );
     }
-
-    const width = maxC[0] - minC[0];
-    const depth = maxC[1] - minC[1];
-    const height = maxC[2] - minC[2];
-
-    drawBoxDimensionLabel(context, id + "labelW", (c000 + c100) / 2, vector(0, -1, 0),
-        "W: " ~ toString(round(width / millimeter, 1)) ~ " mm");
-    drawBoxDimensionLabel(context, id + "labelD", (c000 + c010) / 2, vector(-1, 0, 0),
-        "D: " ~ toString(round(depth / millimeter, 1)) ~ " mm");
-    drawBoxDimensionLabel(context, id + "labelH", (c000 + c001) / 2, vector(-1, 0, 0),
-        "H: " ~ toString(round(height / millimeter, 1)) ~ " mm");
 }
 
-function drawBoxDimensionLabel(
-    context is Context,
-    id is Id,
-    edgeMidpoint is Vector,
-    outwardDirection is Vector,
-    labelText is string)
-{
-    const dir = normalize(outwardDirection);
-    const labelPoint = edgeMidpoint + dir * (3 * millimeter);
-
-    const reference = (abs(dir[2]) < 0.9) ? vector(0, 0, 1) : vector(0, 1, 0);
-    const planeNormal = normalize(cross(dir, reference));
-    const labelPlane = plane(labelPoint, planeNormal, dir);
-
-    const labelSketch = newSketchOnPlane(context, id + "labelSketch", { "sketchPlane" : labelPlane });
-    const labelUv = worldToPlane(labelPlane, labelPoint);
-    const textHeight = 2.5 * millimeter;
-
-    skText(labelSketch, "labelText", {
-            "text" : labelText,
-            "fontName" : "OpenSans-Regular.ttf",
-            "firstCorner" : vector(labelUv[0] - textHeight * 1.5, labelUv[1]),
-            "secondCorner" : vector(labelUv[0] + textHeight * 1.5, labelUv[1] + textHeight)
-    });
-
-    skSolve(labelSketch);
-}
-
-
-
-//////////////////////////////////////////////////////////////////////
-//
-// RANDOM NUMBER GENERATOR (salted variant -- lets two different
-// pseudo-random streams exist within the same feature instance without
-// colliding, e.g. face-fill vs. some future edge scribble).
-//
-//////////////////////////////////////////////////////////////////////
-
-function RandomNumberFunctionWithSalt(id, salt)
+function RandomNumberFunctionWithSalt(
+    id,
+    salt)
 returns function
 {
-    const baseSeed = idToNum(id[0]);
-    const saltSeed = idToNum(salt);
-    return lcprng((baseSeed + saltSeed * 97) % 100000);
+    const baseSeed =
+        idToNum(
+            id[0]
+        );
+
+
+    const saltSeed =
+        idToNum(
+            salt
+        );
+
+
+    return lcprng(
+        (
+            baseSeed
+            +
+            saltSeed
+            *
+            97
+        )
+        %
+        100000
+    );
 }
 
 
-
-function idToNum(input is string)
+function idToNum(
+    input is string)
 returns number
 {
     const chrMap =
     {
-        'A' : 0, 'B' : 1, 'C' : 2, 'D' : 3, 'E' : 4, 'F' : 5, 'G' : 6, 'H' : 7,
-        'I' : 8, 'J' : 9, 'K' : 10, 'L' : 11, 'M' : 12, 'N' : 13, 'O' : 14, 'P' : 15,
-        'Q' : 16, 'R' : 17, 'S' : 18, 'T' : 19, 'U' : 20, 'V' : 21, 'W' : 22, 'X' : 23,
-        'Y' : 24, 'Z' : 25,
+        'A' : 0,
+        'B' : 1,
+        'C' : 2,
+        'D' : 3,
+        'E' : 4,
+        'F' : 5,
+        'G' : 6,
+        'H' : 7,
+        'I' : 8,
+        'J' : 9,
+        'K' : 10,
+        'L' : 11,
+        'M' : 12,
+        'N' : 13,
+        'O' : 14,
+        'P' : 15,
+        'Q' : 16,
+        'R' : 17,
+        'S' : 18,
+        'T' : 19,
+        'U' : 20,
+        'V' : 21,
+        'W' : 22,
+        'X' : 23,
+        'Y' : 24,
+        'Z' : 25,
 
-        'a' : 26, 'b' : 27, 'c' : 28, 'd' : 29, 'e' : 30, 'f' : 31, 'g' : 32, 'h' : 33,
-        'i' : 34, 'j' : 35, 'k' : 36, 'l' : 37, 'm' : 38, 'n' : 39, 'o' : 40, 'p' : 41,
-        'q' : 42, 'r' : 43, 's' : 44, 't' : 45, 'u' : 46, 'v' : 47, 'w' : 48, 'x' : 49,
-        'y' : 50, 'z' : 51,
+        'a' : 26,
+        'b' : 27,
+        'c' : 28,
+        'd' : 29,
+        'e' : 30,
+        'f' : 31,
+        'g' : 32,
+        'h' : 33,
+        'i' : 34,
+        'j' : 35,
+        'k' : 36,
+        'l' : 37,
+        'm' : 38,
+        'n' : 39,
+        'o' : 40,
+        'p' : 41,
+        'q' : 42,
+        'r' : 43,
+        's' : 44,
+        't' : 45,
+        'u' : 46,
+        'v' : 47,
+        'w' : 48,
+        'x' : 49,
+        'y' : 50,
+        'z' : 51,
 
-        '_' : 99, '-' : 98
+        '_' : 99,
+        '-' : 98
     };
 
-    var out is string = "";
 
-    for (var char in splitIntoCharacters(input))
+    var out is string =
+        "";
+
+
+    for (
+        var char
+        in splitIntoCharacters(
+            input
+        )
+    )
     {
-        var res = match(char, REGEX_NUMBER);
+        var res =
+            match(
+                char,
+                REGEX_NUMBER
+            );
 
-        if (res.hasMatch)
+
+        if (
+            res.hasMatch
+        )
         {
-            out = out ~ toString(res.captures[0]);
+            out =
+                out
+                ~
+                toString(
+                    res.captures[0]
+                );
         }
         else
         {
-            out = out ~ toString(chrMap[char]);
+            out =
+                out
+                ~
+                toString(
+                    chrMap[
+                        char
+                    ]
+                );
         }
     }
 
-    return stringToNumber(out) % 100000;
+
+    return stringToNumber(
+        out
+    )
+    %
+    100000;
 }
 
 
-
-function lcprng(seed is number)
+function lcprng(
+    seed is number)
 returns function
 {
-    const a = 1103515245;
-    const c = 12345;
-    const m = 2^31;
+    const a =
+        1103515245;
 
-    var state = new box(seed);
+
+    const c =
+        12345;
+
+
+    const m =
+        2^31;
+
+
+    var state =
+        new box(
+            seed
+        );
+
 
     return function()
     {
-        state[] = (a * state[] + c) % m;
+        state[] =
+            (
+                a
+                *
+                state[]
+                +
+                c
+            )
+            %
+            m;
+
+
         return state[];
     };
 }
