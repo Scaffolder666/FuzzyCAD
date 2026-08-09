@@ -1393,12 +1393,12 @@ function drawDimensionArrow(
             max(
                 distanceMm
                 *
-                0.09,
+                0.12,
 
-                1.0
+                2.5
             ),
 
-            3.5
+            7
         )
         *
         millimeter;
@@ -1408,9 +1408,9 @@ function drawDimensionArrow(
         min(
             distanceMm
             *
-            0.45,
+            0.5,
 
-            12
+            24
         )
         *
         millimeter;
@@ -1419,7 +1419,7 @@ function drawDimensionArrow(
     const headWidth =
         shaftWidth
         *
-        4;
+        4.5;
 
 
     const arrowSketch =

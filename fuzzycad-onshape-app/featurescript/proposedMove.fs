@@ -752,30 +752,30 @@ function drawAxisArrow(
     // headWidth   = total width of arrow head
     //////////////////////////////////////////////////////////////////
 
-    // Bumped up from v8 (shaftWidth 0.4-1.5mm, headLength cap 6mm,
-    // headWidth = shaftWidth*3) per explicit feedback that the arrows
-    // read too thin/small next to the sketchy body outline.
+    // Bumped up again (shaftWidth 1.0-3.5mm -> 2.5-7mm, headLength cap
+    // 12mm -> 24mm, headWidth = shaftWidth*4 -> *4.5) per explicit
+    // feedback: "I want people to see at a glance where this moved to."
     const shaftWidth =
         min(
             max(
-                distanceMm * 0.09,
-                1.0
+                distanceMm * 0.12,
+                2.5
             ),
-            3.5
+            7
         )
         * millimeter;
 
 
     const headLength =
         min(
-            distanceMm * 0.45,
-            12
+            distanceMm * 0.5,
+            24
         )
         * millimeter;
 
 
     const headWidth =
-        shaftWidth * 4;
+        shaftWidth * 4.5;
 
 
 

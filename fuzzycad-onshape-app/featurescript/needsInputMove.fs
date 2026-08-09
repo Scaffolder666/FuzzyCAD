@@ -542,9 +542,9 @@ function drawAxisArrow(
     const planeNormal = normalize(cross(direction, reference));
     const arrowPlane = plane(start, planeNormal, direction);
 
-    const shaftWidth = min(max(distanceMm * 0.09, 1.0), 3.5) * millimeter;
-    const headLength = min(distanceMm * 0.45, 12) * millimeter;
-    const headWidth = shaftWidth * 4;
+    const shaftWidth = min(max(distanceMm * 0.12, 2.5), 7) * millimeter;
+    const headLength = min(distanceMm * 0.5, 24) * millimeter;
+    const headWidth = shaftWidth * 4.5;
 
     const arrowSketch = newSketchOnPlane(context, id + "arrowSketch", { "sketchPlane" : arrowPlane });
 
