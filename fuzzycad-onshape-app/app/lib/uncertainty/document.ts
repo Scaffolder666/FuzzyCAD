@@ -321,12 +321,23 @@ export type FeatureParameterValueType =
   | "BTMParameterEnum"
   | "BTMParameterString";
 
+/**
+ * Which candidate a comment is about -- only meaningful on a
+ * fuzzycadCompareAlternatives card's discussion thread (see
+ * CustomFeatureProposalUncertaintyAnnotation). Optional and undefined
+ * everywhere else, including on every other customFeatureProposal/
+ * featureParameterQuestion comment, which stay untagged/"general".
+ */
+export type CommentOptionTag = "current" | "alternativeA" | "alternativeB" | "general";
+
 /** One entry in a FeatureParameterQuestion's discussion -- unlike the single shared `comment` field every annotation type has, this supports multiple back-and-forth replies. */
 export type FeatureParameterComment = {
   id: string;
   author?: string;
   text: string;
   createdAt: string;
+  /** Set only on fuzzycadCompareAlternatives cards -- which candidate this comment is about. */
+  optionTag?: CommentOptionTag;
 };
 
 /** A part's appearance as it was before we overrode it to show "uncertain" -- captured so we can restore it exactly, persisted in the document (not just in-memory) so it survives a reload or a different browser resolving/rejecting the mark. */
@@ -2379,12 +2390,13 @@ export function upsertCustomFeatureProposal(
   };
 }
 
-/** Appends one reply to a custom-feature proposal's discussion thread. */
+/** Appends one reply to a custom-feature proposal's discussion thread. `optionTag` is only meaningful for fuzzycadCompareAlternatives cards -- omitted (untagged/"general") for every other customFeatureProposal. */
 export function addCustomFeatureProposalComment(
   document: FuzzyCADUncertaintyDocument,
   annotationId: string,
   text: string,
   author?: string,
+  optionTag?: CommentOptionTag,
 ): FuzzyCADUncertaintyDocument {
   if (!text.trim()) {
     return document;
@@ -2396,6 +2408,7 @@ export function addCustomFeatureProposalComment(
     author,
     text: text.trim(),
     createdAt: now,
+    ...(optionTag ? { optionTag } : {}),
   };
 
   return {
