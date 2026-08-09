@@ -354,6 +354,20 @@ defineFeature(function(
 
 
         //////////////////////////////////////////////////////////////////
+        // VERY FAINT GHOST OUTLINE
+        //
+        // Keeps the sparse Needs Input body legible while preserving the
+        // visual difference from the more coherent Proposed geometry.
+        //////////////////////////////////////////////////////////////////
+
+        drawVeryLightGhostOutline(
+            context,
+            id + "ghostOutline",
+            proposedBody
+        );
+
+
+        //////////////////////////////////////////////////////////////////
         //
         // FIND A LARGE, VISIBLE RADIUS FOR THE ROTATION GESTURE
         //
@@ -541,9 +555,9 @@ defineFeature(function(
 
             const dimensionColor =
                 color(
-                    0,
-                    0,
-                    0,
+                    0.88,
+                    0.16,
+                    0.12,
                     1.0
                 );
 
@@ -562,7 +576,7 @@ defineFeature(function(
                 definition.angleNeedsInput
             )
             {
-                drawFuzzyAngleGesture(
+                drawEngineeringCurvedArrow(
                     context,
 
                     id + "angleGesture",
@@ -577,7 +591,9 @@ defineFeature(function(
 
                     arcRadius,
 
-                    "?°",
+                    55 * degree,
+
+                    "θ = ?",
 
                     dimensionColor
                 );
@@ -592,7 +608,7 @@ defineFeature(function(
 
             else
             {
-                drawAngleArc(
+                drawEngineeringCurvedArrow(
                     context,
 
                     id + "angleArc",
@@ -609,7 +625,7 @@ defineFeature(function(
 
                     definition.angle,
 
-                    toString(
+                    "θ = " ~ toString(
                         round(
                             definition.angle
                             /
@@ -630,14 +646,14 @@ defineFeature(function(
             //
             // ANGLE MANIPULATOR
             //
-            // LIVE-FIXED: rotationOrigin moved from arcCenter (the axis
-            // point) to arcCenter + perpVec * arcRadius (the actual arc
-            // edge, where the drag handle visually sits), and the
-            // angularManipulator's own map now also seeds "angle" (its
-            // initial value, mirroring linearManipulator's "offset")
-            // plus "primaryParameterId" : "angle" so Onshape's dialog
-            // auto-focuses the angle field while dragging, matching the
-            // linear manipulators used elsewhere in this codebase.
+            // angularManipulator's constructor fields (axisOrigin,
+            // axisDirection, rotationOrigin) are forum-confirmed; the
+            // readback field name on newManipulators (used in
+            // fuzzycadNeedsInputRotateManipulatorChange below) is
+            // "angle" per Onshape's own uispec.html doc, the same
+            // source that confirmed "offset" for the linear
+            // manipulators used elsewhere in this codebase -- not yet
+            // independently live-verified.
             //
             //////////////////////////////////////////////////////////////////
 
@@ -648,18 +664,33 @@ defineFeature(function(
                     "angleManipulator" :
                         angularManipulator(
                             {
+                                // Point on the actual rotation axis.
                                 "axisOrigin" :
                                     arcCenter,
 
+                                // Direction extracted from the selected
+                                // line / circle / arc / cylinder / mate connector.
                                 "axisDirection" :
                                     axisDirection,
 
+                                // IMPORTANT:
+                                // This must NOT be on the axis.
+                                // It is the point at the tip/start radius of
+                                // the angular manipulator.
                                 "rotationOrigin" :
-                                    arcCenter + perpVec * arcRadius,
+                                    arcCenter
+                                    +
+                                    perpVec
+                                    *
+                                    arcRadius,
 
+                                // IMPORTANT:
+                                // angularManipulator requires its current angle.
                                 "angle" :
                                     definition.angle,
 
+                                // Keep native dialog focus synchronized with
+                                // the Angle parameter when dragging.
                                 "primaryParameterId" :
                                     "angle"
                             }
@@ -725,7 +756,7 @@ returns map
 //
 //////////////////////////////////////////////////////////////////////
 
-function drawAngleArc(
+function drawEngineeringCurvedArrow(
     context is Context,
     id is Id,
     center is Vector,
@@ -737,277 +768,173 @@ function drawAngleArc(
     labelText is string,
     arcColor is map)
 {
-    const dashCount =
-        24;
+    const dashCount = 24;
+    const dashRatio = 0.68;
+    const bandOffset = min(max(radius * 0.025, 0.8 * millimeter), 2.3 * millimeter);
+    const trackOffsets = [-bandOffset, 0 * meter, bandOffset];
 
+    var allArcBodies = qNothing();
 
-    const dashRatio =
-        0.6;
-
-
-    var allDashes =
-        qNothing();
-
-
-    for (
-        var d = 0;
-        d < dashCount;
-        d += 1
-    )
+    // Three parallel arc tracks make a thin 3D annotation band rather
+    // than a single planar curve, so rotation direction stays readable
+    // when the arc plane approaches edge-on to the camera.
+    for (var band = 0; band < 3; band += 1)
     {
-        const t0 =
-            d
-            /
-            dashCount;
-
-
-        const t1 =
-            t0
-            +
-            dashRatio
-            /
-            dashCount;
-
-
-        var pts =
-            makeArray(
-                4,
-                undefined
-            );
-
-
-        for (
-            var j = 0;
-            j < 4;
-            j += 1
-        )
+        for (var d = 0; d < dashCount; d += 1)
         {
-            const tt =
-                t0
-                +
-                (
-                    t1
-                    -
-                    t0
-                )
-                *
-                (
-                    j
-                    /
-                    3
-                );
+            const t0 = d / dashCount;
+            const t1 = t0 + dashRatio / dashCount;
+            var pts = makeArray(4, undefined);
 
-
-            const ang =
-                angle
-                *
-                tt;
-
-
-            const dir =
-                startDir
-                *
-                cos(
-                    ang
-                )
-                +
-                otherDir
-                *
-                sin(
-                    ang
-                );
-
-
-            pts[j] =
-                center
-                +
-                dir
-                *
-                radius;
-        }
-
-
-        const dashId =
-            id
-            +
-            "dash"
-            +
-            toString(
-                d
-            );
-
-
-        opFitSpline(
-            context,
-            dashId,
+            for (var j = 0; j < 4; j += 1)
             {
-                "points" :
-                    pts
+                const tt = t0 + (t1 - t0) * (j / 3);
+                const ang = angle * tt;
+                const dir = startDir * cos(ang) + otherDir * sin(ang);
+                pts[j] = center + dir * radius + axisDirection * trackOffsets[band];
             }
-        );
 
-
-        allDashes =
-            qUnion(
-                allDashes,
-
-                qCreatedBy(
-                    dashId,
-                    EntityType.BODY
-                )
-            );
+            const dashId = id + ("band" ~ toString(band) ~ "dash" ~ toString(d));
+            opFitSpline(context, dashId, { "points" : pts });
+            allArcBodies = qUnion(allArcBodies, qCreatedBy(dashId, EntityType.BODY));
+        }
     }
 
-
-    if (
-        !isQueryEmpty(
-            context,
-            allDashes
-        )
-    )
+    if (!isQueryEmpty(context, allArcBodies))
     {
-        opCreateCompositePart(
-            context,
-            id + "composite",
-            {
-                "bodies" :
-                    allDashes,
-
-                "closed" :
-                    false
-            }
-        );
-
-
-        setProperty(
-            context,
-            {
-                "entities" :
-                    qCreatedBy(
-                        id + "composite",
-                        EntityType.BODY
-                    ),
-
-                "propertyType" :
-                    PropertyType.APPEARANCE,
-
-                "value" :
-                    arcColor
-            }
-        );
+        opCreateCompositePart(context, id + "arcComposite", {
+                "bodies" : allArcBodies,
+                "closed" : false
+        });
+        setProperty(context, {
+                "entities" : qCreatedBy(id + "arcComposite", EntityType.BODY),
+                "propertyType" : PropertyType.APPEARANCE,
+                "value" : arcColor
+        });
     }
 
+    const tipDir = normalize(startDir * cos(angle) + otherDir * sin(angle));
+    const tipPt = center + tipDir * radius;
+    const tangentAtTip = normalize(-startDir * sin(angle) + otherDir * cos(angle));
+    const headLength = min(max(radius * 0.18, 7 * millimeter), 16 * millimeter);
+    const headWidth = min(max(radius * 0.11, 4 * millimeter), 9 * millimeter);
+    const headBase = tipPt - tangentAtTip * headLength;
 
-    //////////////////////////////////////////////////////////////////
-    // LABEL AT ARC MIDPOINT
-    //////////////////////////////////////////////////////////////////
+    // The tangent is the arrow direction; tipDir and axisDirection span
+    // its perpendicular cross-section. Eight wings form a 3D wire cone.
+    const diag1 = normalize(tipDir + axisDirection);
+    const diag2 = normalize(tipDir - axisDirection);
+    const headDirs = [tipDir, -tipDir, axisDirection, -axisDirection, diag1, -diag1, diag2, -diag2];
+    var headBodies = qNothing();
 
-    const midAng =
-        angle
-        *
-        0.5;
+    for (var h = 0; h < 8; h += 1)
+    {
+        const headId = id + ("arrowHead" ~ toString(h));
+        opFitSpline(context, headId, { "points" : [tipPt, headBase + headDirs[h] * headWidth] });
+        headBodies = qUnion(headBodies, qCreatedBy(headId, EntityType.BODY));
+    }
 
+    opCreateCompositePart(context, id + "headComposite", {
+            "bodies" : headBodies,
+            "closed" : false
+    });
+    setProperty(context, {
+            "entities" : qCreatedBy(id + "headComposite", EntityType.BODY),
+            "propertyType" : PropertyType.APPEARANCE,
+            "value" : arcColor
+    });
 
-    const midDir =
-        startDir
-        *
-        cos(
-            midAng
-        )
-        +
-        otherDir
-        *
-        sin(
-            midAng
-        );
+    // Engineering witness lines from the pivot to the start/end angular
+    // positions. They make the angle read like an MBD/drawing callout.
+    const startPt = center + startDir * radius;
+    const endPt = center + tipDir * radius;
+    opFitSpline(context, id + "witnessStart", { "points" : [center, startPt] });
+    opFitSpline(context, id + "witnessEnd", { "points" : [center, endPt] });
 
+    // Center/pivot marker and axis centerline.
+    const markerSize = min(max(radius * 0.06, 3 * millimeter), 7 * millimeter);
+    opFitSpline(context, id + "pivot1", { "points" : [center - startDir * markerSize, center + startDir * markerSize] });
+    opFitSpline(context, id + "pivot2", { "points" : [center - otherDir * markerSize, center + otherDir * markerSize] });
 
-    const midPt =
-        center
-        +
-        midDir
-        *
-        radius;
-
-
-    const eps =
-        0.01
-        *
-        millimeter;
-
-
-    const labelPlane =
-        plane(
-            midPt
-            +
-            axisDirection
-            *
-            eps,
-
-            axisDirection
-        );
-
-
-    const labelSketch =
-        newSketchOnPlane(
-            context,
-            id + "labelSketch",
-            {
-                "sketchPlane" :
-                    labelPlane
-            }
-        );
-
-
-    const labelUv =
-        worldToPlane(
-            labelPlane,
-            midPt
-        );
-
-
-    const textSize =
-        3 * millimeter;
-
-
-    skText(
-        labelSketch,
-        "labelText",
-        {
-            "text" :
-                labelText,
-
-            "fontName" :
-                "OpenSans-Regular.ttf",
-
-            "firstCorner" :
-                vector(
-                    labelUv[0]
-                    -
-                    textSize,
-
-                    labelUv[1]
-                    -
-                    textSize
-                ),
-
-            "secondCorner" :
-                vector(
-                    labelUv[0]
-                    +
-                    textSize,
-
-                    labelUv[1]
-                    +
-                    textSize
-                )
-        }
+    const axisHalfLength = min(max(radius * 0.32, 12 * millimeter), 35 * millimeter);
+    drawDashedEngineeringLine(
+        context,
+        id + "axisCenterline",
+        center - axisDirection * axisHalfLength,
+        center + axisDirection * axisHalfLength,
+        color(0.18, 0.18, 0.18, 0.78)
     );
 
+    var witnessBodies = qNothing();
+    witnessBodies = qUnion(witnessBodies, qCreatedBy(id + "witnessStart", EntityType.BODY));
+    witnessBodies = qUnion(witnessBodies, qCreatedBy(id + "witnessEnd", EntityType.BODY));
+    witnessBodies = qUnion(witnessBodies, qCreatedBy(id + "pivot1", EntityType.BODY));
+    witnessBodies = qUnion(witnessBodies, qCreatedBy(id + "pivot2", EntityType.BODY));
 
-    skSolve(
-        labelSketch
-    );
+    opCreateCompositePart(context, id + "witnessComposite", {
+            "bodies" : witnessBodies,
+            "closed" : false
+    });
+    setProperty(context, {
+            "entities" : qCreatedBy(id + "witnessComposite", EntityType.BODY),
+            "propertyType" : PropertyType.APPEARANCE,
+            "value" : color(0.18, 0.18, 0.18, 0.82)
+    });
+
+    // Angle label placed outside the arc, in the rotation plane.
+    const midAng = angle * 0.5;
+    const midDir = normalize(startDir * cos(midAng) + otherDir * sin(midAng));
+    const midPt = center + midDir * (radius * 1.08);
+    const eps = 0.02 * millimeter;
+    const labelPlane = plane(midPt + axisDirection * eps, axisDirection);
+    const labelSketch = newSketchOnPlane(context, id + "labelSketch", { "sketchPlane" : labelPlane });
+    const labelUv = worldToPlane(labelPlane, midPt);
+    const textSize = 4.2 * millimeter;
+
+    skText(labelSketch, "labelText", {
+            "text" : labelText,
+            "fontName" : "OpenSans-Regular.ttf",
+            "firstCorner" : vector(labelUv[0] - 1.8 * textSize, labelUv[1] - textSize),
+            "secondCorner" : vector(labelUv[0] + 1.8 * textSize, labelUv[1] + textSize)
+    });
+    skSolve(labelSketch);
+}
+
+function drawDashedEngineeringLine(
+    context is Context,
+    id is Id,
+    startPoint is Vector,
+    endPoint is Vector,
+    lineColor is map)
+{
+    const total = endPoint - startPoint;
+    const dashCount = 9;
+    const dashRatio = 0.58;
+    var bodies = qNothing();
+
+    for (var i = 0; i < dashCount; i += 1)
+    {
+        const t0 = i / dashCount;
+        const t1 = t0 + dashRatio / dashCount;
+        const segId = id + ("dash" ~ toString(i));
+        opFitSpline(context, segId, {
+                "points" : [startPoint + total * t0, startPoint + total * t1]
+        });
+        bodies = qUnion(bodies, qCreatedBy(segId, EntityType.BODY));
+    }
+
+    if (!isQueryEmpty(context, bodies))
+    {
+        opCreateCompositePart(context, id + "composite", {
+                "bodies" : bodies,
+                "closed" : false
+        });
+        setProperty(context, {
+                "entities" : qCreatedBy(id + "composite", EntityType.BODY),
+                "propertyType" : PropertyType.APPEARANCE,
+                "value" : lineColor
+        });
+    }
 }
 
 
@@ -1028,601 +955,9 @@ function drawAngleArc(
 //
 //////////////////////////////////////////////////////////////////////
 
-function drawFuzzyAngleGesture(
-    context is Context,
-    id is Id,
-    center is Vector,
-    axisDirection is Vector,
-    startDir is Vector,
-    otherDir is Vector,
-    radius is ValueWithUnits,
-    labelText is string,
-    gestureColor is map)
-{
-    //////////////////////////////////////////////////////////////////
-    // Nominal visualization only.
-    //////////////////////////////////////////////////////////////////
+// Old random angle gesture removed. Engineering curved arrow handles both known and unknown angles.
 
-    const nominalAngle =
-        55 * degree;
 
-
-    //////////////////////////////////////////////////////////////////
-    // Slightly fewer/larger dashes than the precise arc.
-    //////////////////////////////////////////////////////////////////
-
-    const dashCount =
-        16;
-
-
-    const dashRatio =
-        0.62;
-
-
-    var rnd =
-        RandomNumberFunctionWithSalt(
-            id,
-            "gesture"
-        );
-
-
-    var allDashes =
-        qNothing();
-
-
-    //////////////////////////////////////////////////////////////////
-    // FUZZY ARC
-    //////////////////////////////////////////////////////////////////
-
-    for (
-        var d = 0;
-        d < dashCount;
-        d += 1
-    )
-    {
-        const t0 =
-            d
-            /
-            dashCount;
-
-
-        const t1 =
-            t0
-            +
-            dashRatio
-            /
-            dashCount;
-
-
-        var pts =
-            makeArray(
-                5,
-                undefined
-            );
-
-
-        //////////////////////////////////////////////////////////////////
-        // Each dash gets slightly different radius.
-        //////////////////////////////////////////////////////////////////
-
-        const s1 =
-            rnd();
-
-
-        const radiusJitter =
-            1.0
-            +
-            (
-                (
-                    (
-                        s1
-                        +
-                        d * 23
-                    )
-                    %
-                    100
-                )
-                /
-                100.0
-                -
-                0.5
-            )
-            *
-            0.16;
-
-
-        const dashRadius =
-            radius
-            *
-            radiusJitter;
-
-
-        for (
-            var j = 0;
-            j < 5;
-            j += 1
-        )
-        {
-            const tt =
-                t0
-                +
-                (
-                    t1
-                    -
-                    t0
-                )
-                *
-                (
-                    j
-                    /
-                    4
-                );
-
-
-            const ang =
-                nominalAngle
-                *
-                tt;
-
-
-            const dir =
-                startDir
-                *
-                cos(
-                    ang
-                )
-                +
-                otherDir
-                *
-                sin(
-                    ang
-                );
-
-
-            //////////////////////////////////////////////////////////////////
-            // Small axis-direction wobble removes the mechanically perfect
-            // "CAD arc" appearance.
-            //////////////////////////////////////////////////////////////////
-
-            const noise =
-                (
-                    (
-                        (
-                            rnd()
-                            +
-                            d * 31
-                            +
-                            j * 17
-                        )
-                        %
-                        100
-                    )
-                    /
-                    100.0
-                    -
-                    0.5
-                )
-                *
-                0.7
-                *
-                millimeter;
-
-
-            pts[j] =
-                center
-                +
-                dir
-                *
-                dashRadius
-                +
-                axisDirection
-                *
-                noise;
-        }
-
-
-        const dashId =
-            id
-            +
-            "dash"
-            +
-            toString(
-                d
-            );
-
-
-        opFitSpline(
-            context,
-            dashId,
-            {
-                "points" :
-                    pts
-            }
-        );
-
-
-        allDashes =
-            qUnion(
-                allDashes,
-
-                qCreatedBy(
-                    dashId,
-                    EntityType.BODY
-                )
-            );
-    }
-
-
-    //////////////////////////////////////////////////////////////////
-    // ADD A BIG HAND-DRAWN ARROWHEAD
-    //
-    // Makes the rotation direction immediately readable.
-    //////////////////////////////////////////////////////////////////
-
-    const tipDir =
-        startDir
-        *
-        cos(
-            nominalAngle
-        )
-        +
-        otherDir
-        *
-        sin(
-            nominalAngle
-        );
-
-
-    const tipPt =
-        center
-        +
-        tipDir
-        *
-        radius;
-
-
-    //////////////////////////////////////////////////////////////////
-    // Tangent direction of the circular motion at the arrow tip.
-    //////////////////////////////////////////////////////////////////
-
-    const tangentAtTip =
-        normalize(
-            -startDir
-            *
-            sin(
-                nominalAngle
-            )
-            +
-            otherDir
-            *
-            cos(
-                nominalAngle
-            )
-        );
-
-
-    const headLength =
-        min(
-            radius * 0.18,
-            12 * millimeter
-        );
-
-
-    const headWidth =
-        min(
-            radius * 0.12,
-            8 * millimeter
-        );
-
-
-    const headBack =
-        tipPt
-        -
-        tangentAtTip
-        *
-        headLength;
-
-
-    const headLeft =
-        headBack
-        +
-        tipDir
-        *
-        headWidth;
-
-
-    const headRight =
-        headBack
-        -
-        tipDir
-        *
-        headWidth;
-
-
-    //////////////////////////////////////////////////////////////////
-    // LEFT SIDE OF ARROWHEAD
-    //////////////////////////////////////////////////////////////////
-
-    var leftPts =
-        [
-            headLeft,
-            headLeft
-            +
-            (
-                tipPt
-                -
-                headLeft
-            )
-            *
-            0.33
-            +
-            axisDirection
-            *
-            0.25
-            *
-            millimeter,
-
-            headLeft
-            +
-            (
-                tipPt
-                -
-                headLeft
-            )
-            *
-            0.66
-            -
-            axisDirection
-            *
-            0.20
-            *
-            millimeter,
-
-            tipPt
-        ];
-
-
-    opFitSpline(
-        context,
-        id + "arrowHeadLeft",
-        {
-            "points" :
-                leftPts
-        }
-    );
-
-
-    allDashes =
-        qUnion(
-            allDashes,
-
-            qCreatedBy(
-                id + "arrowHeadLeft",
-                EntityType.BODY
-            )
-        );
-
-
-    //////////////////////////////////////////////////////////////////
-    // RIGHT SIDE OF ARROWHEAD
-    //////////////////////////////////////////////////////////////////
-
-    var rightPts =
-        [
-            headRight,
-            headRight
-            +
-            (
-                tipPt
-                -
-                headRight
-            )
-            *
-            0.33
-            -
-            axisDirection
-            *
-            0.22
-            *
-            millimeter,
-
-            headRight
-            +
-            (
-                tipPt
-                -
-                headRight
-            )
-            *
-            0.66
-            +
-            axisDirection
-            *
-            0.18
-            *
-            millimeter,
-
-            tipPt
-        ];
-
-
-    opFitSpline(
-        context,
-        id + "arrowHeadRight",
-        {
-            "points" :
-                rightPts
-        }
-    );
-
-
-    allDashes =
-        qUnion(
-            allDashes,
-
-            qCreatedBy(
-                id + "arrowHeadRight",
-                EntityType.BODY
-            )
-        );
-
-
-    //////////////////////////////////////////////////////////////////
-    // COMBINE AND STYLE GESTURE
-    //////////////////////////////////////////////////////////////////
-
-    if (
-        !isQueryEmpty(
-            context,
-            allDashes
-        )
-    )
-    {
-        opCreateCompositePart(
-            context,
-            id + "composite",
-            {
-                "bodies" :
-                    allDashes,
-
-                "closed" :
-                    false
-            }
-        );
-
-
-        setProperty(
-            context,
-            {
-                "entities" :
-                    qCreatedBy(
-                        id + "composite",
-                        EntityType.BODY
-                    ),
-
-                "propertyType" :
-                    PropertyType.APPEARANCE,
-
-                "value" :
-                    gestureColor
-            }
-        );
-    }
-
-
-    //////////////////////////////////////////////////////////////////
-    // LARGE ?° LABEL
-    //////////////////////////////////////////////////////////////////
-
-    const labelAngle =
-        nominalAngle
-        *
-        0.55;
-
-
-    const labelDir =
-        startDir
-        *
-        cos(
-            labelAngle
-        )
-        +
-        otherDir
-        *
-        sin(
-            labelAngle
-        );
-
-
-    const labelPt =
-        center
-        +
-        labelDir
-        *
-        (
-            radius
-            *
-            1.08
-        );
-
-
-    const eps =
-        0.01 * millimeter;
-
-
-    const labelPlane =
-        plane(
-            labelPt
-            +
-            axisDirection
-            *
-            eps,
-
-            axisDirection
-        );
-
-
-    const labelSketch =
-        newSketchOnPlane(
-            context,
-            id + "labelSketch",
-            {
-                "sketchPlane" :
-                    labelPlane
-            }
-        );
-
-
-    const labelUv =
-        worldToPlane(
-            labelPlane,
-            labelPt
-        );
-
-
-    const textSize =
-        4.2 * millimeter;
-
-
-    skText(
-        labelSketch,
-        "labelText",
-        {
-            "text" :
-                labelText,
-
-            "fontName" :
-                "OpenSans-Regular.ttf",
-
-            "firstCorner" :
-                vector(
-                    labelUv[0]
-                    -
-                    textSize,
-
-                    labelUv[1]
-                    -
-                    textSize
-                ),
-
-            "secondCorner" :
-                vector(
-                    labelUv[0]
-                    +
-                    textSize,
-
-                    labelUv[1]
-                    +
-                    textSize
-                )
-        }
-    );
-
-
-    skSolve(
-        labelSketch
-    );
-}
 
 
 //////////////////////////////////////////////////////////////////////
@@ -1650,605 +985,204 @@ function drawSketchyFaceFill(
     id is Id,
     body is Query)
 {
-    const chordLength =
-        3 * millimeter;
+    // NEEDS INPUT visual language:
+    // fewer guides, more irregular coverage, partial strokes.
+    // The engineering annotations remain clean elsewhere in the feature.
+    const chordLength = 4.5 * millimeter;
+    const variance = 0.55 * millimeter;
 
+    var rnd = RandomNumberFunctionWithSalt(id, "sparseNeedsInputFill");
+    var allStrokes = qNothing();
 
-    const variance =
-        0.4 * millimeter;
+    const faces = qOwnedByBody(
+        qEverything(EntityType.FACE),
+        body
+    );
 
+    var faceIndex = 0;
 
-    var rnd =
-        RandomNumberFunctionWithSalt(
-            id,
-            "faceFill"
-        );
-
-
-    var allStrokes =
-        qNothing();
-
-
-    const faces =
-        qOwnedByBody(
-            qEverything(
-                EntityType.FACE
-            ),
-
-            body
-        );
-
-
-    var faceIndex =
-        0;
-
-
-    for (
-        var faceQuery
-        in evaluateQuery(
-            context,
-            faces
-        )
-    )
+    for (var faceQuery in evaluateQuery(context, faces))
     {
-        const faceId =
-            id
-            +
-            (
-                "face"
-                ~
-                toString(
-                    faceIndex
-                )
-            );
+        const faceId = id + ("face" ~ toString(faceIndex));
 
+        //////////////////////////////////////////////////////////////
+        // PRIMARY FIELD
+        //
+        // Previous Needs Input versions used ~30-50 curves per face.
+        // This intentionally drops to 12-18, then discards many of them.
+        //////////////////////////////////////////////////////////////
 
-        //////////////////////////////////////////////////////////////////
-        // PRIMARY FACE GUIDES
-        //////////////////////////////////////////////////////////////////
+        const primaryCount = 12 + (rnd() % 7);
+        var primaryNames = makeArray(primaryCount, "");
 
-        const primaryCount =
-            31
-            +
-            (
-                rnd()
-                %
-                5
-            );
-
-
-        var primaryNames =
-            makeArray(
-                primaryCount,
-                ""
-            );
-
-
-        for (
-            var n = 0;
-            n < primaryCount;
-            n += 1
-        )
+        for (var n = 0; n < primaryCount; n += 1)
         {
-            primaryNames[n] =
-                "primary"
-                ~
-                toString(
-                    n
-                );
+            primaryNames[n] = "primary" ~ toString(n);
         }
 
-
-        const primaryGuideId =
-            faceId
-            +
-            "primaryGuides";
-
-
-        //////////////////////////////////////////////////////////////////
-        // IMPORTANT:
-        //
-        // Correct map-style opCreateCurvesOnFace call.
-        //////////////////////////////////////////////////////////////////
+        const primaryGuideId = faceId + "primaryGuides";
 
         opCreateCurvesOnFace(
             context,
             primaryGuideId,
             {
-                "curveDefinition" :
-                    [
-                        curveOnFaceDefinition(
-                            faceQuery,
-
-                            FaceCurveCreationType
-                                .DIR1_AUTO_SPACED_ISO,
-
-                            primaryNames,
-
-                            primaryCount
-                        )
-                    ],
-
-                "showCurves" :
-                    false,
-
-                "skipTrim" :
-                    false
-            }
-        );
-
-
-        const primaryGuides =
-            qCreatedBy(
-                primaryGuideId,
-                EntityType.EDGE
-            );
-
-
-        var primaryIndex =
-            0;
-
-
-        for (
-            var guideEdge
-            in evaluateQuery(
-                context,
-                primaryGuides
-            )
-        )
-        {
-            const isEndpoint =
-                (
-                    primaryIndex
-                    ==
-                    0
-                )
-                ||
-                (
-                    primaryIndex
-                    ==
-                    primaryCount
-                    -
-                    1
-                );
-
-
-            const distFromEdge =
-                min(
-                    primaryIndex,
-
-                    primaryCount
-                    -
-                    1
-                    -
-                    primaryIndex
-                );
-
-
-            const centerProximity =
-                min(
-                    distFromEdge
-                    /
-                    (
+                "curveDefinition" : [
+                    curveOnFaceDefinition(
+                        faceQuery,
+                        FaceCurveCreationType.DIR1_AUTO_SPACED_ISO,
+                        primaryNames,
                         primaryCount
-                        /
-                        2.0
-                    ),
-
-                    1.0
-                );
-
-
-            const keepProbability =
-                isEndpoint
-                ?
-                1.0
-                :
-                (
-                    0.18
-                    +
-                    0.82
-                    *
-                    centerProximity
-                );
-
-
-            if (
-                isEndpoint
-                ||
-                (
-                    (
-                        (
-                            rnd()
-                            %
-                            100
-                        )
-                        /
-                        100.0
                     )
-                    <
-                    keepProbability
-                )
-            )
-            {
-                const r =
-                    min(
-                        0.03
-                        +
-                        (
-                            (
-                                rnd()
-                                %
-                                24
-                            )
-                            /
-                            100.0
-                        )
-                        *
-                        0.25,
-
-                        1
-                    );
-
-
-                const g =
-                    min(
-                        0.03
-                        +
-                        (
-                            (
-                                rnd()
-                                %
-                                29
-                            )
-                            /
-                            100.0
-                        )
-                        *
-                        0.25,
-
-                        1
-                    );
-
-
-                const b =
-                    min(
-                        0.03
-                        +
-                        (
-                            (
-                                rnd()
-                                %
-                                25
-                            )
-                            /
-                            100.0
-                        )
-                        *
-                        0.25,
-
-                        1
-                    );
-
-
-                //////////////////////////////////////////////////////////////////
-                // More variance near face boundaries weakens the hard B-rep
-                // edge appearance.
-                //////////////////////////////////////////////////////////////////
-
-                const strokeVariance =
-                    isEndpoint
-                    ?
-                    variance
-                    *
-                    2.5
-                    :
-                    variance;
-
-
-                const strokes =
-                    handDrawScribbleGuide(
-                        context,
-
-                        faceId
-                        +
-                        (
-                            "primaryStroke"
-                            ~
-                            toString(
-                                primaryIndex
-                            )
-                        ),
-
-                        chordLength,
-
-                        strokeVariance,
-
-                        rnd,
-
-                        guideEdge,
-
-                        r,
-                        g,
-                        b,
-
-                        0.55,
-
-                        false,
-
-                        0.06
-                    );
-
-
-                allStrokes =
-                    qUnion(
-                        allStrokes,
-                        strokes
-                    );
-            }
-
-
-            primaryIndex +=
-                1;
-        }
-
-
-        opDeleteBodies(
-            context,
-            faceId + "deletePrimaryGuides",
-            {
-                "entities" :
-                    qCreatedBy(
-                        primaryGuideId,
-                        EntityType.BODY
-                    )
+                ],
+                "showCurves" : false,
+                "skipTrim" : false
             }
         );
 
+        const primaryGuides = qCreatedBy(primaryGuideId, EntityType.EDGE);
+        var primaryIndex = 0;
 
-        //////////////////////////////////////////////////////////////////
-        // SECONDARY FACE GUIDES
-        //////////////////////////////////////////////////////////////////
-
-        const secondaryCount =
-            5
-            +
-            (
-                rnd()
-                %
-                3
-            );
-
-
-        var secondaryNames =
-            makeArray(
-                secondaryCount,
-                ""
-            );
-
-
-        for (
-            var m = 0;
-            m < secondaryCount;
-            m += 1
-        )
+        for (var guideEdge in evaluateQuery(context, primaryGuides))
         {
-            secondaryNames[m] =
-                "secondary"
-                ~
-                toString(
-                    m
+            const isBoundaryGuide =
+                (primaryIndex == 0) ||
+                (primaryIndex == primaryCount - 1);
+
+            // Boundary guides are deliberately less likely to survive.
+            // This prevents Needs Input from reading like a crisp CAD shell.
+            const keepProbability = isBoundaryGuide
+                ? 0.18
+                : 0.46 + ((rnd() % 20) / 100.0);
+
+            if (((rnd() % 100) / 100.0) < keepProbability)
+            {
+                const grey = 0.05 + ((rnd() % 18) / 100.0);
+                const alpha = 0.26 + ((rnd() % 30) / 100.0);
+
+                // Each kept guide gets substantially different wobble.
+                const strokeVariance =
+                    variance *
+                    (1.25 + ((rnd() % 175) / 100.0));
+
+                const strokes = handDrawScribbleGuide(
+                    context,
+                    faceId + ("primaryStroke" ~ toString(primaryIndex)),
+                    chordLength,
+                    strokeVariance,
+                    rnd,
+                    guideEdge,
+                    grey,
+                    grey,
+                    grey,
+                    alpha,
+                    false,
+                    0.14
                 );
+
+                allStrokes = qUnion(allStrokes, strokes);
+            }
+
+            primaryIndex += 1;
         }
 
+        const primaryGuideBodies = qCreatedBy(primaryGuideId, EntityType.BODY);
+        if (!isQueryEmpty(context, primaryGuideBodies))
+        {
+            opDeleteBodies(
+                context,
+                faceId + "deletePrimaryGuides",
+                { "entities" : primaryGuideBodies }
+            );
+        }
 
-        const secondaryGuideId =
-            faceId
-            +
-            "secondaryGuides";
+        //////////////////////////////////////////////////////////////
+        // SECONDARY FIELD
+        //
+        // Only 3-5 candidates, and most are dropped.
+        //////////////////////////////////////////////////////////////
 
+        const secondaryCount = 3 + (rnd() % 3);
+        var secondaryNames = makeArray(secondaryCount, "");
+
+        for (var m = 0; m < secondaryCount; m += 1)
+        {
+            secondaryNames[m] = "secondary" ~ toString(m);
+        }
+
+        const secondaryGuideId = faceId + "secondaryGuides";
 
         opCreateCurvesOnFace(
             context,
             secondaryGuideId,
             {
-                "curveDefinition" :
-                    [
-                        curveOnFaceDefinition(
-                            faceQuery,
-
-                            FaceCurveCreationType
-                                .DIR2_AUTO_SPACED_ISO,
-
-                            secondaryNames,
-
-                            secondaryCount
-                        )
-                    ],
-
-                "showCurves" :
-                    false,
-
-                "skipTrim" :
-                    false
+                "curveDefinition" : [
+                    curveOnFaceDefinition(
+                        faceQuery,
+                        FaceCurveCreationType.DIR2_AUTO_SPACED_ISO,
+                        secondaryNames,
+                        secondaryCount
+                    )
+                ],
+                "showCurves" : false,
+                "skipTrim" : false
             }
         );
 
+        const secondaryGuides = qCreatedBy(secondaryGuideId, EntityType.EDGE);
+        var secondaryIndex = 0;
 
-        const secondaryGuides =
-            qCreatedBy(
-                secondaryGuideId,
-                EntityType.EDGE
-            );
-
-
-        var secondaryIndex =
-            0;
-
-
-        for (
-            var guideEdge2
-            in evaluateQuery(
-                context,
-                secondaryGuides
-            )
-        )
+        for (var guideEdge2 in evaluateQuery(context, secondaryGuides))
         {
-            if (
-                (
-                    (
-                        rnd()
-                        %
-                        100
-                    )
-                    /
-                    100.0
-                )
-                <
-                0.45
-            )
+            if ((rnd() % 100) < 34)
             {
-                const r2 =
-                    min(
-                        0.10
-                        +
-                        (
-                            (
-                                rnd()
-                                %
-                                20
-                            )
-                            /
-                            100.0
-                        )
-                        *
-                        0.3,
+                const grey2 = 0.10 + ((rnd() % 18) / 100.0);
+                const alpha2 = 0.22 + ((rnd() % 24) / 100.0);
+                const secondaryVariance =
+                    variance *
+                    (1.6 + ((rnd() % 190) / 100.0));
 
-                        1
-                    );
+                const strokes2 = handDrawScribbleGuide(
+                    context,
+                    faceId + ("secondaryStroke" ~ toString(secondaryIndex)),
+                    chordLength * 1.15,
+                    secondaryVariance,
+                    rnd,
+                    guideEdge2,
+                    grey2,
+                    grey2,
+                    grey2,
+                    alpha2,
+                    true,
+                    0.18
+                );
 
-
-                const g2 =
-                    min(
-                        0.10
-                        +
-                        (
-                            (
-                                rnd()
-                                %
-                                22
-                            )
-                            /
-                            100.0
-                        )
-                        *
-                        0.3,
-
-                        1
-                    );
-
-
-                const b2 =
-                    min(
-                        0.10
-                        +
-                        (
-                            (
-                                rnd()
-                                %
-                                22
-                            )
-                            /
-                            100.0
-                        )
-                        *
-                        0.3,
-
-                        1
-                    );
-
-
-                const strokes2 =
-                    handDrawScribbleGuide(
-                        context,
-
-                        faceId
-                        +
-                        (
-                            "secondaryStroke"
-                            ~
-                            toString(
-                                secondaryIndex
-                            )
-                        ),
-
-                        chordLength,
-
-                        variance,
-
-                        rnd,
-
-                        guideEdge2,
-
-                        r2,
-                        g2,
-                        b2,
-
-                        0.4,
-
-                        true,
-
-                        0.10
-                    );
-
-
-                allStrokes =
-                    qUnion(
-                        allStrokes,
-                        strokes2
-                    );
+                allStrokes = qUnion(allStrokes, strokes2);
             }
 
-
-            secondaryIndex +=
-                1;
+            secondaryIndex += 1;
         }
 
+        const secondaryGuideBodies = qCreatedBy(secondaryGuideId, EntityType.BODY);
+        if (!isQueryEmpty(context, secondaryGuideBodies))
+        {
+            opDeleteBodies(
+                context,
+                faceId + "deleteSecondaryGuides",
+                { "entities" : secondaryGuideBodies }
+            );
+        }
 
-        opDeleteBodies(
-            context,
-            faceId + "deleteSecondaryGuides",
-            {
-                "entities" :
-                    qCreatedBy(
-                        secondaryGuideId,
-                        EntityType.BODY
-                    )
-            }
-        );
-
-
-        faceIndex +=
-            1;
+        faceIndex += 1;
     }
 
-
-    if (
-        !isQueryEmpty(
-            context,
-            allStrokes
-        )
-    )
+    if (!isQueryEmpty(context, allStrokes))
     {
         opCreateCompositePart(
             context,
             id + "faceFillComposite",
             {
-                "bodies" :
-                    allStrokes,
-
-                "closed" :
-                    false
+                "bodies" : allStrokes,
+                "closed" : false
             }
         );
     }
@@ -2257,7 +1191,11 @@ function drawSketchyFaceFill(
 
 //////////////////////////////////////////////////////////////////////
 //
-// SINGLE HAND-DRAWN FACE GUIDE
+// PARTIAL / IRREGULAR SCRIBBLE GUIDE
+//
+// Key difference from Proposed:
+// each Needs Input stroke intentionally covers only PART of its guide.
+// That creates visual incompleteness without adding more ink.
 //
 //////////////////////////////////////////////////////////////////////
 
@@ -2275,354 +1213,141 @@ function handDrawScribbleGuide(
     singlePass is boolean,
     mistakeChance is number)
 {
-    var edgeLength =
-        evLength(
-            context,
-            {
-                "entities" :
-                    edgeQuery
-            }
-        );
+    const edgeLength = evLength(
+        context,
+        { "entities" : edgeQuery }
+    );
 
+    // Needs Input is intentionally sparse:
+    // normally one stroke, occasionally a second pass.
+    const numStrokes = singlePass
+        ? 1
+        : (((rnd() % 100) < 78) ? 1 : 2);
 
-    var pointCount =
-        ceil(
-            max(
-                edgeLength
-                /
-                chordLength,
+    var strokesQuery = qNothing();
 
-                5
-            )
-        );
-
-
-    var tangents =
-        @evEdgeTangentLines(
-            context,
-            {
-                "edge" :
-                    edgeQuery,
-
-                "parameters" :
-                    range(
-                        0.0,
-                        1.0,
-                        pointCount
-                    )
-            }
-        );
-
-
-    var rawRandom =
-        rnd()
-        %
-        100;
-
-
-    var numStrokes =
-        singlePass
-        ?
-        1
-        :
-        (
-            1
-            +
-            floor(
-                rawRandom
-                /
-                34
-            )
-        );
-
-
-    var strokesQuery =
-        qNothing();
-
-
-    for (
-        var strokeIndex = 0;
-        strokeIndex < numStrokes;
-        strokeIndex += 1
-    )
+    for (var strokeIndex = 0; strokeIndex < numStrokes; strokeIndex += 1)
     {
-        var newPoints =
-            makeArray(
-                pointCount,
-                undefined
-            );
+        //////////////////////////////////////////////////////////////
+        // RANDOM PARTIAL COVERAGE
+        //
+        // Instead of always drawing parameter 0 -> 1, each stroke begins
+        // and ends at different locations on the guide.
+        //////////////////////////////////////////////////////////////
 
+        const startParameter =
+            0.03 + ((rnd() % 28) / 100.0);
 
-        for (
-            var i = 0;
-            i < pointCount;
-            i += 1
-        )
+        const endParameter =
+            0.67 + ((rnd() % 30) / 100.0);
+
+        const coverage = endParameter - startParameter;
+
+        const pointCount = ceil(
+            max(
+                (edgeLength * coverage) / chordLength,
+                4
+            )
+        );
+
+        const tangents = @evEdgeTangentLines(
+            context,
+            {
+                "edge" : edgeQuery,
+                "parameters" : range(
+                    startParameter,
+                    endParameter,
+                    pointCount
+                )
+            }
+        );
+
+        var newPoints = makeArray(pointCount, undefined);
+
+        for (var i = 0; i < pointCount; i += 1)
         {
-            var basePt =
-                tangents[i].origin
-                as Vector;
+            var basePt = tangents[i].origin as Vector;
 
+            const s1 = rnd();
+            const s2 = rnd();
 
-            var s1 =
-                rnd();
+            const jitterFactor =
+                0.65 + ((s2 % 100) / 100.0) * 0.85;
 
+            const isMistake =
+                (((rnd() % 100) / 100.0) < mistakeChance);
 
-            var s2 =
-                rnd();
+            const mistakeFactor = isMistake
+                ? 1.45 + ((rnd() % 100) / 100.0) * 1.55
+                : 1.0;
 
+            // Slightly more distortion toward the ends makes strokes feel
+            // less like uniformly perturbed CAD isocurves.
+            const normalizedIndex =
+                pointCount > 1
+                ? i / (pointCount - 1)
+                : 0.5;
 
-            var jitterFactor =
-                0.5
-                +
-                (
-                    (
-                        s2
-                        %
-                        100
-                    )
-                    /
-                    100.0
-                )
-                *
-                0.5;
+            const endLooseness =
+                1.0 +
+                abs(normalizedIndex - 0.5) * 0.9;
 
+            const offsetX =
+                2 *
+                (((((s1 + i * 17 + strokeIndex * 29) % 100) / 100.0) - 0.5)) *
+                variance * jitterFactor * mistakeFactor * endLooseness;
 
-            var isMistake =
-                (
-                    (
-                        (
-                            rnd()
-                            %
-                            100
-                        )
-                        /
-                        100.0
-                    )
-                    <
-                    mistakeChance
-                );
+            const offsetY =
+                2 *
+                (((((s1 + i * 31 + strokeIndex * 43) % 100) / 100.0) - 0.5)) *
+                variance * jitterFactor * mistakeFactor * endLooseness;
 
+            const offsetZ =
+                2 *
+                (((((s1 + i * 47 + strokeIndex * 61) % 100) / 100.0) - 0.5)) *
+                variance * jitterFactor * mistakeFactor * endLooseness;
 
-            var mistakeFactor =
-                isMistake
-                ?
-                (
-                    1.30
-                    +
-                    (
-                        (
-                            rnd()
-                            %
-                            100
-                        )
-                        /
-                        100.0
-                    )
-                    *
-                    1.11
-                )
-                :
-                1.0;
+            var perturbed = basePt;
+            perturbed[0] += offsetX;
+            perturbed[1] += offsetY;
+            perturbed[2] += offsetZ;
 
-
-            var offsetX =
-                2
-                *
-                (
-                    (
-                        (
-                            (
-                                s1
-                                +
-                                i * 17
-                                +
-                                strokeIndex * 29
-                            )
-                            %
-                            100
-                        )
-                        /
-                        100.0
-                    )
-                    -
-                    0.5
-                )
-                *
-                variance
-                *
-                jitterFactor
-                *
-                mistakeFactor;
-
-
-            var offsetY =
-                2
-                *
-                (
-                    (
-                        (
-                            (
-                                s1
-                                +
-                                i * 31
-                                +
-                                strokeIndex * 43
-                            )
-                            %
-                            100
-                        )
-                        /
-                        100.0
-                    )
-                    -
-                    0.5
-                )
-                *
-                variance
-                *
-                jitterFactor
-                *
-                mistakeFactor;
-
-
-            var offsetZ =
-                2
-                *
-                (
-                    (
-                        (
-                            (
-                                s1
-                                +
-                                i * 47
-                                +
-                                strokeIndex * 61
-                            )
-                            %
-                            100
-                        )
-                        /
-                        100.0
-                    )
-                    -
-                    0.5
-                )
-                *
-                variance
-                *
-                jitterFactor
-                *
-                mistakeFactor;
-
-
-            var perturbed =
-                basePt;
-
-
-            perturbed[0] +=
-                offsetX;
-
-
-            perturbed[1] +=
-                offsetY;
-
-
-            perturbed[2] +=
-                offsetZ;
-
-
-            newPoints[i] =
-                perturbed;
+            newPoints[i] = perturbed;
         }
 
-
-        const strokeId =
-            id
-            +
-            (
-                "_stroke"
-                ~
-                toString(
-                    strokeIndex
-                )
-            );
-
+        const strokeId = id + ("_stroke" ~ toString(strokeIndex));
 
         opFitSpline(
             context,
             strokeId,
-            {
-                "points" :
-                    newPoints
-            }
+            { "points" : newPoints }
         );
 
+        const strokeBody = qCreatedBy(strokeId, EntityType.BODY);
 
-        const strokeBody =
-            qCreatedBy(
-                strokeId,
-                EntityType.BODY
-            );
-
-
-        const colorJitter =
-            (
-                rnd()
-                %
-                100
-            )
-            /
-            100.0;
-
+        // Per-stroke opacity remains intentionally uneven.
+        const alphaJitter =
+            (((rnd() % 100) / 100.0) - 0.5) * 0.18;
 
         const strokeAlpha =
-            min(
-                max(
-                    alpha
-                    +
-                    (
-                        colorJitter
-                        -
-                        0.5
-                    )
-                    *
-                    0.2,
-
-                    0.1
-                ),
-
-                1.0
-            );
-
+            min(max(alpha + alphaJitter, 0.14), 0.72);
 
         setProperty(
             context,
             {
-                "entities" :
-                    strokeBody,
-
-                "propertyType" :
-                    PropertyType.APPEARANCE,
-
-                "value" :
-                    color(
-                        red,
-                        green,
-                        blue,
-                        strokeAlpha
-                    )
+                "entities" : strokeBody,
+                "propertyType" : PropertyType.APPEARANCE,
+                "value" : color(
+                    red,
+                    green,
+                    blue,
+                    strokeAlpha
+                )
             }
         );
 
-
-        strokesQuery =
-            qUnion(
-                strokesQuery,
-                strokeBody
-            );
+        strokesQuery = qUnion(strokesQuery, strokeBody);
     }
-
 
     return strokesQuery;
 }
@@ -2630,9 +1355,92 @@ function handDrawScribbleGuide(
 
 //////////////////////////////////////////////////////////////////////
 //
-// DETERMINISTIC RANDOM
+// VERY LIGHT GHOST OUTLINE
+//
+// Needs Input uses sparse / incomplete / random interior strokes, but a
+// completely missing boundary can make the candidate geometry hard to
+// read from some camera angles. This adds ONE very faint, clean outline
+// over the temporary proposed body before that exact body is deleted.
+//
+// Important visual hierarchy:
+//   sparse random strokes = uncertainty / incompleteness
+//   faint outline         = only enough structure to read the shape
+//   red annotation        = action / engineering direction
+//
+// The outline is deliberately low opacity and has no random jitter.
+// We stop edge sampling just before parameter 1.0 to avoid feeding an
+// identical first/last point into opFitSpline on closed circular edges.
 //
 //////////////////////////////////////////////////////////////////////
+
+function drawVeryLightGhostOutline(
+    context is Context,
+    id is Id,
+    body is Query)
+{
+    const outlineColor = color(0.38, 0.38, 0.38, 0.14);
+    const sampleSpacing = 5 * millimeter;
+
+    const bodyEdges = evaluateQuery(
+        context,
+        qOwnedByBody(
+            qEverything(EntityType.EDGE),
+            body
+        )
+    );
+
+    var outlineBodies = qNothing();
+
+    for (var edgeIndex = 0; edgeIndex < size(bodyEdges); edgeIndex += 1)
+    {
+        const edgeQuery = bodyEdges[edgeIndex];
+        const edgeLength = evLength(context, { "entities" : edgeQuery });
+        const pointCount = ceil(max(edgeLength / sampleSpacing, 5));
+
+        const tangents = @evEdgeTangentLines(
+            context,
+            {
+                "edge" : edgeQuery,
+                "parameters" : range(0.0, 0.995, pointCount)
+            }
+        );
+
+        var points = makeArray(pointCount, undefined);
+
+        for (var p = 0; p < pointCount; p += 1)
+        {
+            points[p] = tangents[p].origin as Vector;
+        }
+
+        const outlineId = id + ("edge" ~ toString(edgeIndex));
+        opFitSpline(context, outlineId, { "points" : points });
+
+        const outlineBody = qCreatedBy(outlineId, EntityType.BODY);
+
+        setProperty(
+            context,
+            {
+                "entities" : outlineBody,
+                "propertyType" : PropertyType.APPEARANCE,
+                "value" : outlineColor
+            }
+        );
+
+        outlineBodies = qUnion(outlineBodies, outlineBody);
+    }
+
+    if (!isQueryEmpty(context, outlineBodies))
+    {
+        opCreateCompositePart(
+            context,
+            id + "outlineComposite",
+            {
+                "bodies" : outlineBodies,
+                "closed" : false
+            }
+        );
+    }
+}
 
 function RandomNumberFunctionWithSalt(
     id,

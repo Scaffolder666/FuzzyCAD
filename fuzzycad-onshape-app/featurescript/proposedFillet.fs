@@ -1,3 +1,7 @@
+FeatureScript 3044;
+import(path : "onshape/std/common.fs", version : "3044.0");
+
+
 // FuzzyCAD "Proposed Fillet" custom feature -- reworked to match
 // needsInputFillet.fs's rebuilt architecture (live-tested by the user):
 //
@@ -36,8 +40,7 @@
 // instance fillet the REAL edges on the REAL body instead of a
 // throwaway copy.
 
-FeatureScript 3044;
-import(path : "onshape/std/common.fs", version : "3044.0");
+
 
 annotation { "Feature Type Name" : "FuzzyCAD Proposed Fillet" }
 export const fuzzycadProposedFillet = defineFeature(function(context is Context, id is Id, definition is map)
@@ -164,14 +167,14 @@ export const fuzzycadProposedFillet = defineFeature(function(context is Context,
 
             const perpReference = (abs(tangentDir[2]) < 0.9) ? vector(0, 0, 1) : vector(0, 1, 0);
             const radiusDir = normalize(cross(tangentDir, perpReference));
-            const dimensionColor = color(0.05, 0.55, 1.0, 1.0);
+            const dimensionColor = color(0.88, 0.16, 0.12, 1.0);
 
             drawDimensionArrow(
                     context,
                     id + "radiusArrow",
                     midpoint,
                     radiusDir * definition.radius,
-                    "R: " ~ toString(round(definition.radius / millimeter, 1)) ~ " mm",
+                    "R = " ~ toString(round(definition.radius / millimeter, 1)) ~ " mm",
                     dimensionColor
             );
         }

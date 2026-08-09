@@ -1,36 +1,9 @@
-// FuzzyCAD "Proposed Extrude" custom feature.
-//
-// Design intent (matches the FuzzyCAD right panel's Extrude mark flow):
-//   - "entities": the same face/sketch-region query the *original* Extrude
-//     feature already uses for its own "entities" parameter. The right panel
-//     will copy that query verbatim when it inserts an instance of this
-//     feature, so this custom feature never has to re-derive "which profile."
-//   - "depth" / "oppositeDirection": the proposed values a reviewer is
-//     editing in the right panel. Every edit re-patches this feature's
-//     parameters in place (see partstudio-update-feature).
-//   - operationType NEW: this must produce an independent new body, not merge
-//     into whatever solid the profile face happens to sit on.
-//
-// "accepted" (hidden, same mechanism as every other Proposed* type now):
-// while false, this feature only ever previews -- a throwaway body gets
-// extruded just to sample its edges for the hand-drawn wireframe below,
-// then gets deleted, so nothing solid is left in the tree. The right
-// panel patches this to true on Accept, which makes this SAME feature
-// instance extrude the REAL solid body instead.
-//
-// This used to rely on the right panel's REST-based part-appearance
-// opacity toggle instead of self-styling (unlike every other Proposed*
-// type, which duplicates-and-fades an EXISTING body it can point the
-// REST call at) -- Extrude has no pre-existing body to fade, it only
-// ever adds material, so there was nothing for that mechanism to act on
-// besides the extrude's own output, and toggling that output's opacity
-// directly is exactly what self-styling now does more consistently with
-// every other tool: sketchy wireframe while pending, real solid once
-// accepted. Switched over so Extrude no longer needs different right
-// panel handling than the rest of Proposed*.
+FeatureScript 3044;
+import(path : "onshape/std/common.fs", version : "3044.0");
 
-FeatureScript 3029;
-import(path : "onshape/std/common.fs", version : "3029.0");
+// Proposed Extrude
+// Exact proposed depth, coherent blue candidate geometry,
+// large clean red direction arrow.
 
 annotation { "Feature Type Name" : "FuzzyCAD Proposed Extrude" }
 export const fuzzycadProposedExtrude = defineFeature(function(context is Context, id is Id, definition is map)
@@ -45,8 +18,6 @@ export const fuzzycadProposedExtrude = defineFeature(function(context is Context
         annotation { "Name" : "Opposite direction", "Default" : false }
         definition.oppositeDirection is boolean;
 
-        // Controlled internally by the FuzzyCAD right panel.
-        // The normal Feature dialog will not show this parameter.
         annotation {
             "Name" : "Accepted",
             "Default" : false,
@@ -55,95 +26,59 @@ export const fuzzycadProposedExtrude = defineFeature(function(context is Context
         definition.accepted is boolean;
     }
     {
-        // evOwnerSketchPlane requires the entity to trace back to an owning
-        // sketch FEATURE and throws CANNOT_RESOLVE_PLANE for a selection that
-        // doesn't (e.g. a face on an existing solid) -- confirmed live.
-        // evFaceTangentPlane instead reads the normal directly off the face
-        // geometry itself, so it works uniformly whether "entities" is a
-        // sketch region or a solid face.
-        const facesToExtrude = evaluateQuery(context, definition.entities);
-        const tangentPlane = evFaceTangentPlane(context, {
-                "face" : facesToExtrude[0],
-                "parameter" : vector(0.5, 0.5)
-            });
+        if (isQueryEmpty(context, definition.entities))
+        {
+            return;
+        }
+
+        const faces = evaluateQuery(context, definition.entities);
+
+        const tangentPlane =
+            evFaceTangentPlane(
+                context,
+                {
+                    "face" : faces[0],
+                    "parameter" : vector(0.5, 0.5)
+                }
+            );
+
         var direction = tangentPlane.normal;
+
         if (definition.oppositeDirection)
         {
             direction = -direction;
         }
 
-        // ACCEPTED STATE: extrude the real solid body directly, then stop.
         if (definition.accepted)
         {
             opExtrude(context, id + "acceptedExtrude", {
                     "entities" : definition.entities,
                     "direction" : direction,
                     "endBound" : BoundingType.BLIND,
-                    "endDepth" : definition.depth,
-                    "operationType" : NewBodyOperationType.NEW
+                    "endDepth" : definition.depth
             });
-
             return;
         }
 
-        // PENDING STATE: extrude into a throwaway body just to sample its
-        // edges, build the hand-drawn sketchy wireframe from those, then
-        // delete the throwaway solid -- same treatment as every other
-        // Proposed* tool.
-        opExtrude(context, id + "duplicate", {
+        opExtrude(context, id + "previewExtrude", {
                 "entities" : definition.entities,
                 "direction" : direction,
                 "endBound" : BoundingType.BLIND,
-                "endDepth" : definition.depth,
-                "operationType" : NewBodyOperationType.NEW
+                "endDepth" : definition.depth
         });
 
-        const proposedBody = qCreatedBy(id + "duplicate", EntityType.BODY);
+        const proposedBody =
+            qCreatedBy(id + "previewExtrude", EntityType.BODY);
 
-        const chordLength = 3 * millimeter;
-        const variance = 0.5 * millimeter;
+        drawProposedSketch(context, id + "proposalSketch", proposedBody);
 
-        var rnd = RandomNumberFunction(id);
-        var allSketchyStrokes = qNothing();
-        var edgeIndex = 0;
-
-        for (var edgeQuery in evaluateQuery(context, qOwnedByBody(qEverything(EntityType.EDGE), proposedBody)))
-        {
-            const strokes = handDrawEdgeSketchy(
-                    context,
-                    id + ("sketchyEdge" ~ toString(edgeIndex)),
-                    chordLength,
-                    variance,
-                    rnd,
-                    edgeQuery
-            );
-            allSketchyStrokes = qUnion(allSketchyStrokes, strokes);
-            edgeIndex += 1;
-        }
-
-        if (!isQueryEmpty(context, allSketchyStrokes))
-        {
-            opCreateCompositePart(context, id + "sketchyComposite", {
-                    "bodies" : allSketchyStrokes,
-                    "closed" : false
-            });
-
-            setProperty(context, {
-                    "entities" : qCreatedBy(id + "sketchyComposite", EntityType.BODY),
-                    "propertyType" : PropertyType.APPEARANCE,
-                    "value" : color(0.05, 0.55, 1.0, 1.0)
-            });
-        }
-
-        const dimensionColor = color(0.05, 0.55, 1.0, 1.0);
-
-        drawDimensionArrow(
-                context,
-                id + "depthArrow",
-                tangentPlane.origin,
-                direction * definition.depth,
-                "Depth: " ~ toString(round(definition.depth / millimeter, 1)) ~ " mm",
-                dimensionColor
+        drawEngineeringLinearArrow(
+            context,
+            id + "extrudeArrow",
+            tangentPlane.origin,
+            tangentPlane.origin + direction * definition.depth,
+            "EXTRUDE  Δ = " ~ toString(round(definition.depth / millimeter, 1)) ~ " mm",
+            true
         );
 
         opDeleteBodies(context, id + "deleteTemporaryProposal", {
@@ -151,192 +86,386 @@ export const fuzzycadProposedExtrude = defineFeature(function(context is Context
         });
     });
 
+
 //////////////////////////////////////////////////////////////////////
-//
-// FILLED DIMENSION ARROW (copied verbatim from needsInputHole.fs)
-//
+// COHERENT PROPOSED GEOMETRY
 //////////////////////////////////////////////////////////////////////
 
-function drawDimensionArrow(
+function drawProposedSketch(
     context is Context,
     id is Id,
-    start is Vector,
-    axisOffset is Vector,
-    labelText is string,
-    arrowColor is map)
+    body is Query)
 {
-    const distance = norm(axisOffset);
-    const distanceMm = distance / millimeter;
+    const chordLength = 3.2 * millimeter;
+    const variance = 0.38 * millimeter;
+    const proposedColor = color(0.20, 0.52, 0.95, 0.92);
 
-    if (distanceMm < 0.001)
+    var rnd = RandomNumberFunction(id);
+    var allStrokes = qNothing();
+
+    const edges = qOwnedByBody(qEverything(EntityType.EDGE), body);
+    var edgeIndex = 0;
+
+    for (var edgeQuery in evaluateQuery(context, edges))
     {
-        return;
+        const strokes = handDrawProposedEdge(
+            context,
+            id + ("edge" ~ toString(edgeIndex)),
+            chordLength,
+            variance,
+            rnd,
+            edgeQuery
+        );
+
+        allStrokes = qUnion(allStrokes, strokes);
+        edgeIndex += 1;
     }
 
-    const direction = normalize(axisOffset);
+    if (!isQueryEmpty(context, allStrokes))
+    {
+        opCreateCompositePart(
+            context,
+            id + "composite",
+            {
+                "bodies" : allStrokes,
+                "closed" : false
+            }
+        );
 
-    const reference = (abs(direction[2]) < 0.9) ? vector(0, 0, 1) : vector(0, 1, 0);
-    const planeNormal = normalize(cross(direction, reference));
-    const arrowPlane = plane(start, planeNormal, direction);
-
-    const shaftWidth = min(max(distanceMm * 0.12, 2.5), 7) * millimeter;
-    const headLength = min(distanceMm * 0.5, 24) * millimeter;
-    const headWidth = shaftWidth * 4.5;
-
-    const arrowSketch = newSketchOnPlane(context, id + "arrowSketch", { "sketchPlane" : arrowPlane });
-
-    skLineSegment(arrowSketch, "headUpper", {
-            "start" : vector(distance, 0 * meter),
-            "end" : vector(distance - headLength, headWidth / 2)
-    });
-    skLineSegment(arrowSketch, "headLower", {
-            "start" : vector(distance, 0 * meter),
-            "end" : vector(distance - headLength, -headWidth / 2)
-    });
-    skLineSegment(arrowSketch, "headUpperTransition", {
-            "start" : vector(distance - headLength, headWidth / 2),
-            "end" : vector(distance - headLength, shaftWidth / 2)
-    });
-    skLineSegment(arrowSketch, "headLowerTransition", {
-            "start" : vector(distance - headLength, -headWidth / 2),
-            "end" : vector(distance - headLength, -shaftWidth / 2)
-    });
-    skLineSegment(arrowSketch, "shaftUpper", {
-            "start" : vector(distance - headLength, shaftWidth / 2),
-            "end" : vector(0 * meter, shaftWidth / 2)
-    });
-    skLineSegment(arrowSketch, "shaftLower", {
-            "start" : vector(distance - headLength, -shaftWidth / 2),
-            "end" : vector(0 * meter, -shaftWidth / 2)
-    });
-    skLineSegment(arrowSketch, "shaftBack", {
-            "start" : vector(0 * meter, shaftWidth / 2),
-            "end" : vector(0 * meter, -shaftWidth / 2)
-    });
-
-    skSolve(arrowSketch);
-
-    opExtractSurface(context, id + "arrowSurface", {
-            "faces" : qSketchRegion(id + "arrowSketch"),
-            "offset" : 0 * meter,
-            "useFacesAroundToTrimOffset" : false
-    });
-
-    opDeleteBodies(context, id + "deleteArrowSketch", {
-            "entities" : qCreatedBy(id + "arrowSketch")
-    });
-
-    setProperty(context, {
-            "entities" : qCreatedBy(id + "arrowSurface", EntityType.BODY),
-            "propertyType" : PropertyType.APPEARANCE,
-            "value" : arrowColor
-    });
-
-    const midPoint = start + axisOffset / 2;
-    const labelSketch = newSketchOnPlane(context, id + "labelSketch", { "sketchPlane" : arrowPlane });
-    const labelUv = worldToPlane(arrowPlane, midPoint);
-    const labelOffset = headWidth / 2 + 1.5 * millimeter;
-    const textHeight = 2.5 * millimeter;
-
-    skText(labelSketch, "labelText", {
-            "text" : labelText,
-            "fontName" : "OpenSans-Regular.ttf",
-            "firstCorner" : vector(labelUv[0] - textHeight * 1.5, labelUv[1] + labelOffset),
-            "secondCorner" : vector(labelUv[0] + textHeight * 1.5, labelUv[1] + labelOffset + textHeight)
-    });
-
-    skSolve(labelSketch);
+        setProperty(
+            context,
+            {
+                "entities" : qCreatedBy(id + "composite", EntityType.BODY),
+                "propertyType" : PropertyType.APPEARANCE,
+                "value" : proposedColor
+            }
+        );
+    }
 }
 
-//////////////////////////////////////////////////////////////////////
-//
-// HAND-DRAWN EDGE (copied verbatim from proposedMove.fs)
-//
-//////////////////////////////////////////////////////////////////////
-
-function handDrawEdgeSketchy(
+function handDrawProposedEdge(
     context is Context,
     id is Id,
     chordLength is ValueWithUnits,
     variance is ValueWithUnits,
     rnd is function,
     edgeQuery is Query)
+returns Query
 {
-    var edgeLength = evLength(context, { "entities" : edgeQuery });
-    var pointCount = ceil(max(edgeLength / chordLength, 5));
+    const edgeLength = evLength(context, { "entities" : edgeQuery });
+    const pointCount = ceil(max(edgeLength / chordLength, 5));
 
-    var tangents = @evEdgeTangentLines(context, {
+    const tangents = @evEdgeTangentLines(
+        context,
+        {
             "edge" : edgeQuery,
-            "parameters" : range(0.0, 1.0, pointCount)
-    });
+            "parameters" : range(0.0, 0.995, pointCount)
+        }
+    );
 
-    var rawRandom = rnd() % 100;
-    var numStrokes = 2 + floor(rawRandom / 33);
+    var result = qNothing();
 
-    var strokesQuery = qNothing();
-
-    for (var strokeIndex = 0; strokeIndex < numStrokes; strokeIndex += 1)
+    // Proposed is coherent: always 2 passes, low jitter, full coverage.
+    for (var strokeIndex = 0; strokeIndex < 2; strokeIndex += 1)
     {
-        var newPoints = makeArray(pointCount, undefined);
+        var pts = makeArray(pointCount, undefined);
 
         for (var i = 0; i < pointCount; i += 1)
         {
-            // .origin already carries length units -- do NOT multiply by meter.
-            var basePt = tangents[i].origin as Vector;
+            var p = tangents[i].origin as Vector;
+            const s = rnd();
+            const factor = 0.55 + ((rnd() % 100) / 100.0) * 0.35;
 
-            var s1 = rnd();
-            var s2 = rnd();
+            p[0] += 2 * (((s + i * 17 + strokeIndex * 29) % 100) / 100.0 - 0.5) * variance * factor;
+            p[1] += 2 * (((s + i * 23 + strokeIndex * 37) % 100) / 100.0 - 0.5) * variance * factor;
+            p[2] += 2 * (((s + i * 31 + strokeIndex * 41) % 100) / 100.0 - 0.5) * variance * factor;
 
-            var jitterFactor = 0.5 + ((s2 % 100) / 100.0) * 0.5;
-
-            var offsetX = 2 * ((((s1 + i * 17 + strokeIndex * 29) % 100) / 100.0) - 0.5) * variance * jitterFactor;
-            var offsetY = 2 * ((((s1 + i * 23 + strokeIndex * 37) % 100) / 100.0) - 0.5) * variance * jitterFactor;
-            var offsetZ = 2 * ((((s1 + i * 31 + strokeIndex * 41) % 100) / 100.0) - 0.5) * variance * jitterFactor;
-
-            var perturbed = basePt;
-            perturbed[0] += offsetX;
-            perturbed[1] += offsetY;
-            perturbed[2] += offsetZ;
-
-            newPoints[i] = perturbed;
+            pts[i] = p;
         }
 
-        const strokeId = id + ("_stroke" ~ toString(strokeIndex));
-        opFitSpline(context, strokeId, { "points" : newPoints });
-        strokesQuery = qUnion(strokesQuery, qCreatedBy(strokeId, EntityType.BODY));
+        const strokeId = id + ("stroke" ~ toString(strokeIndex));
+        opFitSpline(context, strokeId, { "points" : pts });
+        result = qUnion(result, qCreatedBy(strokeId, EntityType.BODY));
     }
 
-    return strokesQuery;
+    return result;
 }
 
+
 //////////////////////////////////////////////////////////////////////
-//
-// RANDOM NUMBER GENERATOR (copied verbatim from proposedMove.fs)
-//
+// CLEAN ENGINEERING ANNOTATIONS
 //////////////////////////////////////////////////////////////////////
 
-function RandomNumberFunction(id) returns function
+function drawEngineeringLinearArrow(
+    context is Context,
+    id is Id,
+    startPoint is Vector,
+    endPoint is Vector,
+    labelText is string,
+    showTargetMarker is boolean)
+{
+    const offset = endPoint - startPoint;
+    const distance = norm(offset);
+
+    if (distance / millimeter < 0.001)
+    {
+        return;
+    }
+
+    const direction = normalize(offset);
+    const ref = (abs(direction[2]) < 0.9) ? vector(0, 0, 1) : vector(0, 1, 0);
+    const side = normalize(cross(direction, ref));
+    const side2 = normalize(cross(direction, side));
+
+    const arrowColor = color(0.88, 0.16, 0.12, 1.0);
+    const markerColor = color(0.16, 0.16, 0.16, 0.82);
+
+    const shaftSpread =
+        min(max(distance * 0.022, 0.65 * millimeter), 2.0 * millimeter);
+
+    const headLength =
+        min(max(distance * 0.20, 6 * millimeter), 16 * millimeter);
+
+    const headWidth =
+        min(max(distance * 0.10, 3.5 * millimeter), 8 * millimeter);
+
+    const markerSize =
+        min(max(distance * 0.06, 2.5 * millimeter), 6 * millimeter);
+
+    var arrowBodies = qNothing();
+
+    const shaftOffsets = [
+        vector(0, 0, 0) * meter,
+        side * shaftSpread,
+        -side * shaftSpread,
+        side2 * shaftSpread,
+        -side2 * shaftSpread
+    ];
+
+    for (var s = 0; s < 5; s += 1)
+    {
+        const shaftId = id + ("shaft" ~ toString(s));
+        opFitSpline(
+            context,
+            shaftId,
+            {
+                "points" : [
+                    startPoint + shaftOffsets[s],
+                    endPoint + shaftOffsets[s]
+                ]
+            }
+        );
+
+        arrowBodies = qUnion(
+            arrowBodies,
+            qCreatedBy(shaftId, EntityType.BODY)
+        );
+    }
+
+    const headBase = endPoint - direction * headLength;
+    const diag1 = normalize(side + side2);
+    const diag2 = normalize(side - side2);
+    const headDirs = [
+        side, -side,
+        side2, -side2,
+        diag1, -diag1,
+        diag2, -diag2
+    ];
+
+    for (var h = 0; h < 8; h += 1)
+    {
+        const wingId = id + ("headWing" ~ toString(h));
+        opFitSpline(
+            context,
+            wingId,
+            {
+                "points" : [
+                    endPoint,
+                    headBase + headDirs[h] * headWidth
+                ]
+            }
+        );
+
+        arrowBodies = qUnion(
+            arrowBodies,
+            qCreatedBy(wingId, EntityType.BODY)
+        );
+    }
+
+    if (!isQueryEmpty(context, arrowBodies))
+    {
+        opCreateCompositePart(
+            context,
+            id + "arrowComposite",
+            {
+                "bodies" : arrowBodies,
+                "closed" : false
+            }
+        );
+
+        setProperty(
+            context,
+            {
+                "entities" :
+                    qCreatedBy(id + "arrowComposite", EntityType.BODY),
+                "propertyType" : PropertyType.APPEARANCE,
+                "value" : arrowColor
+            }
+        );
+    }
+
+    // Start cross.
+    var markerBodies = qNothing();
+
+    opFitSpline(
+        context,
+        id + "startCross1",
+        {
+            "points" : [
+                startPoint - side * markerSize,
+                startPoint + side * markerSize
+            ]
+        }
+    );
+
+    opFitSpline(
+        context,
+        id + "startCross2",
+        {
+            "points" : [
+                startPoint - side2 * markerSize,
+                startPoint + side2 * markerSize
+            ]
+        }
+    );
+
+    markerBodies = qUnion(
+        markerBodies,
+        qCreatedBy(id + "startCross1", EntityType.BODY)
+    );
+
+    markerBodies = qUnion(
+        markerBodies,
+        qCreatedBy(id + "startCross2", EntityType.BODY)
+    );
+
+    if (showTargetMarker)
+    {
+        const d1 = endPoint + side * markerSize;
+        const d2 = endPoint + side2 * markerSize;
+        const d3 = endPoint - side * markerSize;
+        const d4 = endPoint - side2 * markerSize;
+
+        opFitSpline(context, id + "target1", { "points" : [d1, d2] });
+        opFitSpline(context, id + "target2", { "points" : [d2, d3] });
+        opFitSpline(context, id + "target3", { "points" : [d3, d4] });
+        opFitSpline(context, id + "target4", { "points" : [d4, d1] });
+        opFitSpline(context, id + "targetCross1", { "points" : [d1, d3] });
+        opFitSpline(context, id + "targetCross2", { "points" : [d2, d4] });
+
+        markerBodies = qUnion(markerBodies, qCreatedBy(id + "target1", EntityType.BODY));
+        markerBodies = qUnion(markerBodies, qCreatedBy(id + "target2", EntityType.BODY));
+        markerBodies = qUnion(markerBodies, qCreatedBy(id + "target3", EntityType.BODY));
+        markerBodies = qUnion(markerBodies, qCreatedBy(id + "target4", EntityType.BODY));
+        markerBodies = qUnion(markerBodies, qCreatedBy(id + "targetCross1", EntityType.BODY));
+        markerBodies = qUnion(markerBodies, qCreatedBy(id + "targetCross2", EntityType.BODY));
+    }
+
+    if (!isQueryEmpty(context, markerBodies))
+    {
+        opCreateCompositePart(
+            context,
+            id + "markerComposite",
+            {
+                "bodies" : markerBodies,
+                "closed" : false
+            }
+        );
+
+        setProperty(
+            context,
+            {
+                "entities" :
+                    qCreatedBy(id + "markerComposite", EntityType.BODY),
+                "propertyType" : PropertyType.APPEARANCE,
+                "value" : markerColor
+            }
+        );
+    }
+
+    // Label.
+    const labelPoint =
+        startPoint +
+        offset * 0.52 +
+        side2 * min(max(distance * 0.10, 5 * millimeter), 10 * millimeter);
+
+    const labelPlane =
+        plane(
+            labelPoint + side * (0.02 * millimeter),
+            side
+        );
+
+    const labelUv =
+        worldToPlane(labelPlane, labelPoint);
+
+    const labelSketch =
+        newSketchOnPlane(
+            context,
+            id + "labelSketch",
+            { "sketchPlane" : labelPlane }
+        );
+
+    const textSize = 4.0 * millimeter;
+
+    skText(
+        labelSketch,
+        "label",
+        {
+            "text" : labelText,
+            "fontName" : "OpenSans-Regular.ttf",
+            "firstCorner" :
+                vector(
+                    labelUv[0] - 2.7 * textSize,
+                    labelUv[1] - textSize
+                ),
+            "secondCorner" :
+                vector(
+                    labelUv[0] + 2.7 * textSize,
+                    labelUv[1] + textSize
+                )
+        }
+    );
+
+    skSolve(labelSketch);
+}
+function RandomNumberFunction(id)
+returns function
 {
     return lcprng(idToNum(id[0]));
 }
 
-function idToNum(input is string) returns number
+function idToNum(input is string)
+returns number
 {
-    const chrMap = {
-            'A' : 0, 'B' : 1, 'C' : 2, 'D' : 3, 'E' : 4, 'F' : 5, 'G' : 6,
-            'H' : 7, 'I' : 8, 'J' : 9, 'K' : 10, 'L' : 11, 'M' : 12, 'N' : 13,
-            'O' : 14, 'P' : 15, 'Q' : 16, 'R' : 17, 'S' : 18, 'T' : 19, 'U' : 20,
-            'V' : 21, 'W' : 22, 'X' : 23, 'Y' : 24, 'Z' : 25,
-            'a' : 26, 'b' : 27, 'c' : 28, 'd' : 29, 'e' : 30, 'f' : 31, 'g' : 32,
-            'h' : 33, 'i' : 34, 'j' : 35, 'k' : 36, 'l' : 37, 'm' : 38, 'n' : 39,
-            'o' : 40, 'p' : 41, 'q' : 42, 'r' : 43, 's' : 44, 't' : 45, 'u' : 46,
-            'v' : 47, 'w' : 48, 'x' : 49, 'y' : 50, 'z' : 51,
-            '_' : 99, '-' : 98
+    const chrMap =
+    {
+        'A' : 0, 'B' : 1, 'C' : 2, 'D' : 3, 'E' : 4, 'F' : 5, 'G' : 6, 'H' : 7,
+        'I' : 8, 'J' : 9, 'K' : 10, 'L' : 11, 'M' : 12, 'N' : 13, 'O' : 14, 'P' : 15,
+        'Q' : 16, 'R' : 17, 'S' : 18, 'T' : 19, 'U' : 20, 'V' : 21, 'W' : 22, 'X' : 23,
+        'Y' : 24, 'Z' : 25,
+        'a' : 26, 'b' : 27, 'c' : 28, 'd' : 29, 'e' : 30, 'f' : 31, 'g' : 32, 'h' : 33,
+        'i' : 34, 'j' : 35, 'k' : 36, 'l' : 37, 'm' : 38, 'n' : 39, 'o' : 40, 'p' : 41,
+        'q' : 42, 'r' : 43, 's' : 44, 't' : 45, 'u' : 46, 'v' : 47, 'w' : 48, 'x' : 49,
+        'y' : 50, 'z' : 51,
+        '_' : 99, '-' : 98
     };
+
     var out is string = "";
+
     for (var char in splitIntoCharacters(input))
     {
         var res = match(char, REGEX_NUMBER);
+
         if (res.hasMatch)
         {
             out = out ~ toString(res.captures[0]);
@@ -346,18 +475,23 @@ function idToNum(input is string) returns number
             out = out ~ toString(chrMap[char]);
         }
     }
+
     return stringToNumber(out) % 100000;
 }
 
-function lcprng(seed is number) returns function
+function lcprng(seed is number)
+returns function
 {
     const a = 1103515245;
     const c = 12345;
     const m = 2^31;
+
     var state = new box(seed);
+
     return function()
     {
         state[] = (a * state[] + c) % m;
         return state[];
     };
 }
+

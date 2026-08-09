@@ -1,41 +1,9 @@
-// FuzzyCAD "Proposed Chamfer" custom feature -- near-identical to
-// proposedFillet.fs, swapping opFillet for opChamfer. Every OTHER piece
-// (opPattern duplication, evEdgeTangentLine + qClosestTo edge matching,
-// setProperty appearance styling, the known REST-override limitation) is
-// already confirmed live for Fillet and reused verbatim here -- the only
-// new, unconfirmed piece is opChamfer's own parameter shape.
-//
-// UNCONFIRMED: opChamfer(context, id, {"entities": ..., "width": ...}) --
-// guessed by analogy with opFillet's confirmed {"entities": ...,
-// "radius": ...} shape, using "width" (Onshape's own Chamfer feature UI
-// calls its equal-distance parameter "Width") instead of "radius". If
-// "width" isn't the real key, expect a similarly-shaped compiler error to
-// what opFillet would give for a wrong key name -- paste it back and
-// I'll adjust.
-//
-// "accepted" (hidden, same mechanism as proposedMove.fs/proposedFillet.fs):
-// while false, this feature only ever previews -- the original body is
-// untouched, a duplicate gets the chamfer instead. The right panel
-// patches this to true on Accept, which makes this SAME feature
-// instance chamfer the REAL edge on the REAL body instead of a
-// throwaway copy.
-//
-// Pending-state preview matches proposedFillet.fs's hand-drawn
-// sketchy-wireframe treatment: the duplicate gets chamfered first (so
-// the new edges are captured via qOwnedByBody reading its CURRENT
-// edges post-chamfer), a 2-4-stroke hand-drawn overlay is built from
-// those, then the duplicate is deleted -- only the sketchy strokes
-// remain. handDrawEdgeSketchy/RandomNumberFunction/idToNum/lcprng below
-// are copied verbatim from proposedMove.fs's confirmed-working helpers.
-//
-// Width dimension arrow: same drawDimensionArrow() as proposedFillet.fs,
-// same honest caveat -- its direction is an arbitrary-but-deterministic
-// perpendicular to the edge's own tangent, NOT the true chamfer
-// bisector (that would need adjacent-face normals via an unconfirmed
-// qAdjacent(edge, ..., EntityType.FACE) shape).
+FeatureScript 3044;
+import(path : "onshape/std/common.fs", version : "3044.0");
 
-FeatureScript 3029;
-import(path : "onshape/std/common.fs", version : "3029.0");
+// Proposed Chamfer
+// Geometry stays coherent/provisional in blue.
+// Engineering callout is clean red and points back to the edited edge.
 
 annotation { "Feature Type Name" : "FuzzyCAD Proposed Chamfer" }
 export const fuzzycadProposedChamfer = defineFeature(function(context is Context, id is Id, definition is map)
@@ -48,10 +16,8 @@ export const fuzzycadProposedChamfer = defineFeature(function(context is Context
         definition.edge is Query;
 
         annotation { "Name" : "Width" }
-        isLength(definition.width, LENGTH_BOUNDS);
+        isLength(definition.width, BLEND_BOUNDS);
 
-        // Controlled internally by the FuzzyCAD right panel.
-        // The normal Feature dialog will not show this parameter.
         annotation {
             "Name" : "Accepted",
             "Default" : false,
@@ -60,21 +26,31 @@ export const fuzzycadProposedChamfer = defineFeature(function(context is Context
         definition.accepted is boolean;
     }
     {
-        const originalBody = definition.body;
+        if (isQueryEmpty(context, definition.body) || isQueryEmpty(context, definition.edge))
+        {
+            return;
+        }
 
-        // ACCEPTED STATE: chamfer the real edge on the real body
-        // directly, no duplicate/preview machinery at all, then stop.
+        const originalBody = definition.body;
+        const edgeLine = evEdgeTangentLine(context, {
+                "edge" : definition.edge,
+                "parameter" : 0.5
+        });
+        const midpoint = edgeLine.origin;
+        const tangentDir = edgeLine.direction;
+
         if (definition.accepted)
         {
             opChamfer(context, id + "acceptedChamfer", {
                     "entities" : definition.edge,
-                    "width" : definition.width
+                    "chamferType" : ChamferType.EQUAL_OFFSETS,
+                    "width" : definition.width,
+                    "tangentPropagation" : true
             });
-
             return;
         }
 
-        // PENDING STATE below (unchanged).
+        const trackedSelection = startTracking(context, definition.edge);
 
         opPattern(context, id + "duplicate", {
                 "entities" : originalBody,
@@ -82,20 +58,25 @@ export const fuzzycadProposedChamfer = defineFeature(function(context is Context
                 "instanceNames" : ["proposed"]
         });
 
-        const proposedBody = qCreatedBy(id + "duplicate", EntityType.BODY);
+        const proposedBody =
+            qPatternInstances(id + "duplicate", "proposed", EntityType.BODY);
 
-        const edgeMidLine = evEdgeTangentLine(context, {
-                "edge" : definition.edge,
-                "parameter" : 0.5
-        });
-        const midpoint = edgeMidLine.origin;
+        const copiedSelection =
+            qOwnedByBody(trackedSelection, proposedBody);
 
-        const copiedEdges = qCreatedBy(id + "duplicate", EntityType.EDGE);
-        const matchedEdge = qClosestTo(copiedEdges, midpoint);
+        if (isQueryEmpty(context, copiedSelection))
+        {
+            throw regenError(
+                "Could not track the selected chamfer edge onto the proposal copy.",
+                definition.edge
+            );
+        }
 
-        opChamfer(context, id + "chamfer", {
-                "entities" : matchedEdge,
-                "width" : definition.width
+        opChamfer(context, id + "previewChamfer", {
+                "entities" : copiedSelection,
+                "chamferType" : ChamferType.EQUAL_OFFSETS,
+                "width" : definition.width,
+                "tangentPropagation" : true
         });
 
         setProperty(context, {
@@ -104,53 +85,26 @@ export const fuzzycadProposedChamfer = defineFeature(function(context is Context
                 "value" : color(0.75, 0.75, 0.75, 0.08)
         });
 
-        const chordLength = 3 * millimeter;
-        const variance = 0.5 * millimeter;
+        drawProposedSketch(context, id + "proposalSketch", proposedBody);
 
-        var rnd = RandomNumberFunction(id);
-        var allSketchyStrokes = qNothing();
-        var edgeIndex = 0;
+        const ref =
+            (abs(tangentDir[2]) < 0.9)
+            ? vector(0, 0, 1)
+            : vector(0, 1, 0);
 
-        for (var edgeQuery in evaluateQuery(context, qOwnedByBody(qEverything(EntityType.EDGE), proposedBody)))
-        {
-            const strokes = handDrawEdgeSketchy(
-                    context,
-                    id + ("sketchyEdge" ~ toString(edgeIndex)),
-                    chordLength,
-                    variance,
-                    rnd,
-                    edgeQuery
-            );
-            allSketchyStrokes = qUnion(allSketchyStrokes, strokes);
-            edgeIndex += 1;
-        }
+        const calloutDir =
+            normalize(cross(tangentDir, ref));
 
-        if (!isQueryEmpty(context, allSketchyStrokes))
-        {
-            opCreateCompositePart(context, id + "sketchyComposite", {
-                    "bodies" : allSketchyStrokes,
-                    "closed" : false
-            });
+        const leaderLength =
+            max(definition.width * 5, 22 * millimeter);
 
-            setProperty(context, {
-                    "entities" : qCreatedBy(id + "sketchyComposite", EntityType.BODY),
-                    "propertyType" : PropertyType.APPEARANCE,
-                    "value" : color(0.05, 0.55, 1.0, 1.0)
-            });
-        }
-
-        const tangentDir = edgeMidLine.direction;
-        const perpReference = (abs(tangentDir[2]) < 0.9) ? vector(0, 0, 1) : vector(0, 1, 0);
-        const widthDir = normalize(cross(tangentDir, perpReference));
-        const dimensionColor = color(0.05, 0.55, 1.0, 1.0);
-
-        drawDimensionArrow(
-                context,
-                id + "widthArrow",
-                midpoint,
-                widthDir * definition.width,
-                "W: " ~ toString(round(definition.width / millimeter, 1)) ~ " mm",
-                dimensionColor
+        drawEngineeringLeader(
+            context,
+            id + "chamferLeader",
+            midpoint,
+            calloutDir,
+            leaderLength,
+            "C = " ~ toString(round(definition.width / millimeter, 1)) ~ " mm"
         );
 
         opDeleteBodies(context, id + "deleteTemporaryProposal", {
@@ -158,195 +112,253 @@ export const fuzzycadProposedChamfer = defineFeature(function(context is Context
         });
     });
 
+
 //////////////////////////////////////////////////////////////////////
-//
-// FILLED DIMENSION ARROW (proposedMove.fs's drawAxisArrow, generalized
-// to take a prebuilt label string instead of an axis name + auto-built
-// "X: N mm" text -- everything else, including the STILL-UNCONFIRMED-
-// LIVE filled-2D-arrow-via-opExtractSurface construction, is unchanged)
-//
+// COHERENT PROPOSED GEOMETRY
 //////////////////////////////////////////////////////////////////////
 
-function drawDimensionArrow(
+function drawProposedSketch(
     context is Context,
     id is Id,
-    start is Vector,
-    axisOffset is Vector,
-    labelText is string,
-    arrowColor is map)
+    body is Query)
 {
-    const distance = norm(axisOffset);
-    const distanceMm = distance / millimeter;
+    const chordLength = 3.2 * millimeter;
+    const variance = 0.38 * millimeter;
+    const proposedColor = color(0.20, 0.52, 0.95, 0.92);
 
-    if (distanceMm < 0.001)
+    var rnd = RandomNumberFunction(id);
+    var allStrokes = qNothing();
+
+    const edges = qOwnedByBody(qEverything(EntityType.EDGE), body);
+    var edgeIndex = 0;
+
+    for (var edgeQuery in evaluateQuery(context, edges))
     {
-        return;
+        const strokes = handDrawProposedEdge(
+            context,
+            id + ("edge" ~ toString(edgeIndex)),
+            chordLength,
+            variance,
+            rnd,
+            edgeQuery
+        );
+
+        allStrokes = qUnion(allStrokes, strokes);
+        edgeIndex += 1;
     }
 
-    const direction = normalize(axisOffset);
+    if (!isQueryEmpty(context, allStrokes))
+    {
+        opCreateCompositePart(
+            context,
+            id + "composite",
+            {
+                "bodies" : allStrokes,
+                "closed" : false
+            }
+        );
 
-    const reference = (abs(direction[2]) < 0.9) ? vector(0, 0, 1) : vector(0, 1, 0);
-    const planeNormal = normalize(cross(direction, reference));
-    const arrowPlane = plane(start, planeNormal, direction);
-
-    const shaftWidth = min(max(distanceMm * 0.12, 2.5), 7) * millimeter;
-    const headLength = min(distanceMm * 0.5, 24) * millimeter;
-    const headWidth = shaftWidth * 4.5;
-
-    const arrowSketch = newSketchOnPlane(context, id + "arrowSketch", { "sketchPlane" : arrowPlane });
-
-    skLineSegment(arrowSketch, "headUpper", {
-            "start" : vector(distance, 0 * meter),
-            "end" : vector(distance - headLength, headWidth / 2)
-    });
-    skLineSegment(arrowSketch, "headLower", {
-            "start" : vector(distance, 0 * meter),
-            "end" : vector(distance - headLength, -headWidth / 2)
-    });
-    skLineSegment(arrowSketch, "headUpperTransition", {
-            "start" : vector(distance - headLength, headWidth / 2),
-            "end" : vector(distance - headLength, shaftWidth / 2)
-    });
-    skLineSegment(arrowSketch, "headLowerTransition", {
-            "start" : vector(distance - headLength, -headWidth / 2),
-            "end" : vector(distance - headLength, -shaftWidth / 2)
-    });
-    skLineSegment(arrowSketch, "shaftUpper", {
-            "start" : vector(distance - headLength, shaftWidth / 2),
-            "end" : vector(0 * meter, shaftWidth / 2)
-    });
-    skLineSegment(arrowSketch, "shaftLower", {
-            "start" : vector(distance - headLength, -shaftWidth / 2),
-            "end" : vector(0 * meter, -shaftWidth / 2)
-    });
-    skLineSegment(arrowSketch, "shaftBack", {
-            "start" : vector(0 * meter, shaftWidth / 2),
-            "end" : vector(0 * meter, -shaftWidth / 2)
-    });
-
-    skSolve(arrowSketch);
-
-    opExtractSurface(context, id + "arrowSurface", {
-            "faces" : qSketchRegion(id + "arrowSketch"),
-            "offset" : 0 * meter,
-            "useFacesAroundToTrimOffset" : false
-    });
-
-    opDeleteBodies(context, id + "deleteArrowSketch", {
-            "entities" : qCreatedBy(id + "arrowSketch")
-    });
-
-    setProperty(context, {
-            "entities" : qCreatedBy(id + "arrowSurface", EntityType.BODY),
-            "propertyType" : PropertyType.APPEARANCE,
-            "value" : arrowColor
-    });
-
-    const midPoint = start + axisOffset / 2;
-    const labelSketch = newSketchOnPlane(context, id + "labelSketch", { "sketchPlane" : arrowPlane });
-    const labelUv = worldToPlane(arrowPlane, midPoint);
-    const labelOffset = headWidth / 2 + 1.5 * millimeter;
-    const textHeight = 2.5 * millimeter;
-
-    skText(labelSketch, "labelText", {
-            "text" : labelText,
-            "fontName" : "OpenSans-Regular.ttf",
-            "firstCorner" : vector(labelUv[0] - textHeight * 1.5, labelUv[1] + labelOffset),
-            "secondCorner" : vector(labelUv[0] + textHeight * 1.5, labelUv[1] + labelOffset + textHeight)
-    });
-
-    skSolve(labelSketch);
+        setProperty(
+            context,
+            {
+                "entities" : qCreatedBy(id + "composite", EntityType.BODY),
+                "propertyType" : PropertyType.APPEARANCE,
+                "value" : proposedColor
+            }
+        );
+    }
 }
 
-//////////////////////////////////////////////////////////////////////
-//
-// HAND-DRAWN EDGE (copied verbatim from proposedMove.fs)
-//
-//////////////////////////////////////////////////////////////////////
-
-function handDrawEdgeSketchy(
+function handDrawProposedEdge(
     context is Context,
     id is Id,
     chordLength is ValueWithUnits,
     variance is ValueWithUnits,
     rnd is function,
     edgeQuery is Query)
+returns Query
 {
-    var edgeLength = evLength(context, { "entities" : edgeQuery });
-    var pointCount = ceil(max(edgeLength / chordLength, 5));
+    const edgeLength = evLength(context, { "entities" : edgeQuery });
+    const pointCount = ceil(max(edgeLength / chordLength, 5));
 
-    var tangents = @evEdgeTangentLines(context, {
+    const tangents = @evEdgeTangentLines(
+        context,
+        {
             "edge" : edgeQuery,
-            "parameters" : range(0.0, 1.0, pointCount)
-    });
+            "parameters" : range(0.0, 0.995, pointCount)
+        }
+    );
 
-    var rawRandom = rnd() % 100;
-    var numStrokes = 2 + floor(rawRandom / 33);
+    var result = qNothing();
 
-    var strokesQuery = qNothing();
-
-    for (var strokeIndex = 0; strokeIndex < numStrokes; strokeIndex += 1)
+    // Proposed is coherent: always 2 passes, low jitter, full coverage.
+    for (var strokeIndex = 0; strokeIndex < 2; strokeIndex += 1)
     {
-        var newPoints = makeArray(pointCount, undefined);
+        var pts = makeArray(pointCount, undefined);
 
         for (var i = 0; i < pointCount; i += 1)
         {
-            // .origin already carries length units -- do NOT multiply by meter.
-            var basePt = tangents[i].origin as Vector;
+            var p = tangents[i].origin as Vector;
+            const s = rnd();
+            const factor = 0.55 + ((rnd() % 100) / 100.0) * 0.35;
 
-            var s1 = rnd();
-            var s2 = rnd();
+            p[0] += 2 * (((s + i * 17 + strokeIndex * 29) % 100) / 100.0 - 0.5) * variance * factor;
+            p[1] += 2 * (((s + i * 23 + strokeIndex * 37) % 100) / 100.0 - 0.5) * variance * factor;
+            p[2] += 2 * (((s + i * 31 + strokeIndex * 41) % 100) / 100.0 - 0.5) * variance * factor;
 
-            var jitterFactor = 0.5 + ((s2 % 100) / 100.0) * 0.5;
-
-            var offsetX = 2 * ((((s1 + i * 17 + strokeIndex * 29) % 100) / 100.0) - 0.5) * variance * jitterFactor;
-            var offsetY = 2 * ((((s1 + i * 23 + strokeIndex * 37) % 100) / 100.0) - 0.5) * variance * jitterFactor;
-            var offsetZ = 2 * ((((s1 + i * 31 + strokeIndex * 41) % 100) / 100.0) - 0.5) * variance * jitterFactor;
-
-            var perturbed = basePt;
-            perturbed[0] += offsetX;
-            perturbed[1] += offsetY;
-            perturbed[2] += offsetZ;
-
-            newPoints[i] = perturbed;
+            pts[i] = p;
         }
 
-        const strokeId = id + ("_stroke" ~ toString(strokeIndex));
-        opFitSpline(context, strokeId, { "points" : newPoints });
-        strokesQuery = qUnion(strokesQuery, qCreatedBy(strokeId, EntityType.BODY));
+        const strokeId = id + ("stroke" ~ toString(strokeIndex));
+        opFitSpline(context, strokeId, { "points" : pts });
+        result = qUnion(result, qCreatedBy(strokeId, EntityType.BODY));
     }
 
-    return strokesQuery;
+    return result;
 }
+function drawEngineeringLeader(
+    context is Context,
+    id is Id,
+    anchorPoint is Vector,
+    direction is Vector,
+    leaderLength is ValueWithUnits,
+    labelText is string)
+{
+    if (leaderLength / millimeter < 0.001)
+    {
+        return;
+    }
 
-//////////////////////////////////////////////////////////////////////
-//
-// RANDOM NUMBER GENERATOR (copied verbatim from proposedMove.fs)
-//
-//////////////////////////////////////////////////////////////////////
+    const dir = normalize(direction);
+    const ref = (abs(dir[2]) < 0.9) ? vector(0, 0, 1) : vector(0, 1, 0);
+    const side = normalize(cross(dir, ref));
+    const side2 = normalize(cross(dir, side));
 
-function RandomNumberFunction(id) returns function
+    // Arrow points TO the edited edge/feature.
+    const labelPoint = anchorPoint + dir * leaderLength;
+    const arrowColor = color(0.88, 0.16, 0.12, 1.0);
+    const headLength = min(max(leaderLength * 0.20, 4 * millimeter), 10 * millimeter);
+    const headWidth = min(max(leaderLength * 0.09, 2.5 * millimeter), 6 * millimeter);
+
+    var bodies = qNothing();
+
+    opFitSpline(
+        context,
+        id + "leader",
+        { "points" : [labelPoint, anchorPoint] }
+    );
+
+    bodies = qUnion(
+        bodies,
+        qCreatedBy(id + "leader", EntityType.BODY)
+    );
+
+    const headBase = anchorPoint + dir * headLength;
+    const dirs = [side, -side, side2, -side2];
+
+    for (var i = 0; i < 4; i += 1)
+    {
+        const wingId = id + ("wing" ~ toString(i));
+        opFitSpline(
+            context,
+            wingId,
+            {
+                "points" : [
+                    anchorPoint,
+                    headBase + dirs[i] * headWidth
+                ]
+            }
+        );
+        bodies = qUnion(
+            bodies,
+            qCreatedBy(wingId, EntityType.BODY)
+        );
+    }
+
+    opCreateCompositePart(
+        context,
+        id + "composite",
+        {
+            "bodies" : bodies,
+            "closed" : false
+        }
+    );
+
+    setProperty(
+        context,
+        {
+            "entities" : qCreatedBy(id + "composite", EntityType.BODY),
+            "propertyType" : PropertyType.APPEARANCE,
+            "value" : arrowColor
+        }
+    );
+
+    const textPoint = labelPoint + side2 * (4 * millimeter);
+    const textPlane =
+        plane(
+            textPoint + side * (0.02 * millimeter),
+            side
+        );
+
+    const textUv = worldToPlane(textPlane, textPoint);
+    const textSketch =
+        newSketchOnPlane(
+            context,
+            id + "labelSketch",
+            { "sketchPlane" : textPlane }
+        );
+
+    const textSize = 3.6 * millimeter;
+
+    skText(
+        textSketch,
+        "label",
+        {
+            "text" : labelText,
+            "fontName" : "OpenSans-Regular.ttf",
+            "firstCorner" :
+                vector(
+                    textUv[0] - 2.2 * textSize,
+                    textUv[1] - textSize
+                ),
+            "secondCorner" :
+                vector(
+                    textUv[0] + 2.2 * textSize,
+                    textUv[1] + textSize
+                )
+        }
+    );
+
+    skSolve(textSketch);
+}
+function RandomNumberFunction(id)
+returns function
 {
     return lcprng(idToNum(id[0]));
 }
 
-function idToNum(input is string) returns number
+function idToNum(input is string)
+returns number
 {
-    const chrMap = {
-            'A' : 0, 'B' : 1, 'C' : 2, 'D' : 3, 'E' : 4, 'F' : 5, 'G' : 6,
-            'H' : 7, 'I' : 8, 'J' : 9, 'K' : 10, 'L' : 11, 'M' : 12, 'N' : 13,
-            'O' : 14, 'P' : 15, 'Q' : 16, 'R' : 17, 'S' : 18, 'T' : 19, 'U' : 20,
-            'V' : 21, 'W' : 22, 'X' : 23, 'Y' : 24, 'Z' : 25,
-            'a' : 26, 'b' : 27, 'c' : 28, 'd' : 29, 'e' : 30, 'f' : 31, 'g' : 32,
-            'h' : 33, 'i' : 34, 'j' : 35, 'k' : 36, 'l' : 37, 'm' : 38, 'n' : 39,
-            'o' : 40, 'p' : 41, 'q' : 42, 'r' : 43, 's' : 44, 't' : 45, 'u' : 46,
-            'v' : 47, 'w' : 48, 'x' : 49, 'y' : 50, 'z' : 51,
-            '_' : 99, '-' : 98
+    const chrMap =
+    {
+        'A' : 0, 'B' : 1, 'C' : 2, 'D' : 3, 'E' : 4, 'F' : 5, 'G' : 6, 'H' : 7,
+        'I' : 8, 'J' : 9, 'K' : 10, 'L' : 11, 'M' : 12, 'N' : 13, 'O' : 14, 'P' : 15,
+        'Q' : 16, 'R' : 17, 'S' : 18, 'T' : 19, 'U' : 20, 'V' : 21, 'W' : 22, 'X' : 23,
+        'Y' : 24, 'Z' : 25,
+        'a' : 26, 'b' : 27, 'c' : 28, 'd' : 29, 'e' : 30, 'f' : 31, 'g' : 32, 'h' : 33,
+        'i' : 34, 'j' : 35, 'k' : 36, 'l' : 37, 'm' : 38, 'n' : 39, 'o' : 40, 'p' : 41,
+        'q' : 42, 'r' : 43, 's' : 44, 't' : 45, 'u' : 46, 'v' : 47, 'w' : 48, 'x' : 49,
+        'y' : 50, 'z' : 51,
+        '_' : 99, '-' : 98
     };
+
     var out is string = "";
+
     for (var char in splitIntoCharacters(input))
     {
         var res = match(char, REGEX_NUMBER);
+
         if (res.hasMatch)
         {
             out = out ~ toString(res.captures[0]);
@@ -356,18 +368,23 @@ function idToNum(input is string) returns number
             out = out ~ toString(chrMap[char]);
         }
     }
+
     return stringToNumber(out) % 100000;
 }
 
-function lcprng(seed is number) returns function
+function lcprng(seed is number)
+returns function
 {
     const a = 1103515245;
     const c = 12345;
     const m = 2^31;
+
     var state = new box(seed);
+
     return function()
     {
         state[] = (a * state[] + c) % m;
         return state[];
     };
 }
+
