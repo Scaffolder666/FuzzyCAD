@@ -324,7 +324,14 @@ export async function updatePartStudioFeatureSuppressed(
   body: {
     featureId: string;
     suppressed?: boolean;
-    parameterUpdates?: { parameterId: string; expression?: string; value?: boolean }[];
+    // The underlying route (partstudio-update-feature) is generic -- it
+    // just merges whatever `value`/`expression` you send into the raw
+    // parameter JSON, regardless of BTMParameter* type. `value` was
+    // boolean-only here because every caller so far only ever patched
+    // the shared "accepted" flag; fuzzycadCompareAlternatives's
+    // "activeOption" (a plain string parameter, see compareAlternatives.fs)
+    // needs a string value through this exact same path.
+    parameterUpdates?: { parameterId: string; expression?: string; value?: boolean | string | number }[];
   },
 ): Promise<ApiResult> {
   const res = await fetch(`/api/onshape/partstudio-update-feature`, {

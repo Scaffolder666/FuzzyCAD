@@ -14,6 +14,7 @@ import {
   resolveUncertaintyAnnotation,
   ungroupProposals,
   upsertCustomFeatureProposal,
+  type CommentOptionTag,
   type CustomFeatureProposalUncertaintyAnnotation,
   type FuzzyCADUncertaintyDocument,
   type ProposalGroup,
@@ -106,6 +107,7 @@ const COSMO_FEATURE_TYPES = new Set([
   "fuzzycadNeedsInputRotate",
   "fuzzycadNeedsInputScale",
   "fuzzycadNeedsInputHole",
+  "fuzzycadCompareAlternatives",
 ]);
 
 /**
@@ -142,7 +144,26 @@ const SELF_STYLING_COSMO_FEATURE_TYPES = new Set([
   "fuzzycadNeedsInputRotate",
   "fuzzycadNeedsInputScale",
   "fuzzycadNeedsInputHole",
+  // fuzzycadCompareAlternatives fades Current component / faded-out
+  // non-active alternatives via its own setProperty calls, same as
+  // every other type in this set -- see compareAlternatives.fs.
+  "fuzzycadCompareAlternatives",
 ]);
+
+/**
+ * Cosmo Feature types representing "multiple concrete, already-exact
+ * candidates competing for the same slot" (see compareAlternatives.fs's
+ * header) -- a third interaction distinct from both Proposed* ("I know
+ * the exact solution") and Needs Input* ("I know an operation is needed,
+ * not the value"). Gets its own dedicated card renderer
+ * (renderAlternativeComparisonCard) instead of the generic numeric-
+ * parameter list every other Cosmo Feature type uses: switching the
+ * active candidate is a hidden "activeOption" string parameter, not
+ * something to expose as an editable field, and there's deliberately no
+ * "Proposed by ..." framing -- this represents a disagreement between
+ * concrete options, not one person's proposal.
+ */
+const ALTERNATIVE_COMPARISON_COSMO_FEATURE_TYPES = new Set(["fuzzycadCompareAlternatives"]);
 
 /**
  * Cosmo Feature types that represent an open question (operation known,
@@ -201,6 +222,11 @@ const ACCEPT_VIA_HIDDEN_PARAMETER_COSMO_FEATURE_TYPES = new Set([
   "fuzzycadNeedsInputRotate",
   "fuzzycadNeedsInputScale",
   "fuzzycadNeedsInputHole",
+  // fuzzycadCompareAlternatives: "Accept selected" patches accepted=true,
+  // which makes the SAME feature instance commit whichever candidate
+  // "activeOption" currently points at and discard the others -- see
+  // compareAlternatives.fs's ACCEPTED STATE branch.
+  "fuzzycadCompareAlternatives",
 ]);
 
 function isValidUncertaintyDocument(value: unknown): value is FuzzyCADUncertaintyDocument {
@@ -630,11 +656,25 @@ function ParameterMarkPanelInner() {
       ? (paramsData.valueParameters as ValueParameterEntry[]).filter(
           (entry) =>
             COSMO_FEATURE_TYPES.has(entry.featureType) &&
-            (entry.typeName === "BTMParameterQuantity" || entry.typeName === "BTMParameterBoolean") &&
+            // BTMParameterString added for fuzzycadCompareAlternatives's
+            // "activeOption" (see compareAlternatives.fs) -- no other
+            // registered Cosmo Feature type currently has a String
+            // parameter, so this is a no-op for the other 14 types.
+            (entry.typeName === "BTMParameterQuantity" ||
+              entry.typeName === "BTMParameterBoolean" ||
+              entry.typeName === "BTMParameterString") &&
             // "accepted" (see ACCEPT_VIA_HIDDEN_PARAMETER_COSMO_FEATURE_TYPES)
             // is an internal control flag driven by Accept/Reopen below, not
             // something to show as an editable checkbox alongside moveX/Y/Z.
             !(ACCEPT_VIA_HIDDEN_PARAMETER_COSMO_FEATURE_TYPES.has(entry.featureType) && entry.parameterId === "accepted"),
+            // Note: "activeOption" (fuzzycadCompareAlternatives) is
+            // deliberately NOT excluded here, unlike "accepted" above --
+            // renderAlternativeComparisonCard reads its current value
+            // straight out of group.parameters to know which candidate
+            // button to highlight. It just never gets routed through the
+            // generic ParamValueRow the way ordinary Quantity params are,
+            // because that card uses its own dedicated render path
+            // instead of group.parameters.map(ParamValueRow).
         )
       : [];
     setParameters(cosmoOnly);
@@ -1053,6 +1093,58 @@ function ParameterMarkPanelInner() {
   }
 
   /**
+   * fuzzycadCompareAlternatives only: switches which candidate is shown
+   * by patching "activeOption" (a plain BTMParameterString, see
+   * compareAlternatives.fs) through the same generic parameterUpdates
+   * path livePreviewValue uses above -- no dedicated route needed, since
+   * partstudio-update-feature already merges any value into any
+   * parameter regardless of type (confirmed by reading that route
+   * directly -- see onshapeClient.ts's updatePartStudioFeatureSuppressed
+   * for the exact note). A full loadEverything() follows so the card
+   * re-reads the new activeOption AND the viewport reflects the
+   * regenerated feature -- there is no cheaper local patch here the way
+   * livePreviewValue has, because switching candidates changes which
+   * body's appearance is faded, not just a number on one row.
+   */
+  async function setActiveOption(
+    group: FeatureGroup,
+    option: "CURRENT" | "ALTERNATIVE_A" | "ALTERNATIVE_B",
+  ) {
+    if (!context) return;
+
+    window.parent.postMessage(
+      {
+        documentId: context.documentId,
+        workspaceId: context.workspaceId,
+        elementId: context.elementId,
+        messageName: "closeFeatureDialog",
+        accept: false,
+      },
+      context.server,
+    );
+
+    const updateRes = await updatePartStudioFeatureSuppressed(
+      {
+        documentId: context.documentId,
+        workspaceId: context.workspaceId,
+        partStudioElementId: context.elementId,
+        server: context.server,
+      },
+      {
+        featureId: group.featureId,
+        parameterUpdates: [{ parameterId: "activeOption", value: option }],
+      },
+    );
+
+    if (!updateRes.ok) {
+      setStatus(`failed to switch "${group.featureName}" to ${option} (HTTP ${updateRes.status})`);
+      return;
+    }
+
+    await loadEverything();
+  }
+
+  /**
    * Accept: confirms the proposal is final and restores its output
    * parts' normal appearance. Does not write into any other feature --
    * reconciling the tree (e.g. suppressing whatever this is meant to
@@ -1070,9 +1162,11 @@ function ParameterMarkPanelInner() {
    */
   async function resolveMark(group: FeatureGroup) {
     if (!context) return;
-    const confirmMessage = NEEDS_INPUT_COSMO_FEATURE_TYPES.has(group.featureType)
-      ? `Mark "${group.featureName}" as answered?`
-      : `Accept "${group.featureName}"? Its geometry stays in the model as final -- this can't be edited again without reopening.`;
+    const confirmMessage = ALTERNATIVE_COMPARISON_COSMO_FEATURE_TYPES.has(group.featureType)
+      ? `Accept the currently selected candidate for "${group.featureName}"? It becomes the final geometry -- the other alternatives are discarded. This can't be edited again without reopening.`
+      : NEEDS_INPUT_COSMO_FEATURE_TYPES.has(group.featureType)
+        ? `Mark "${group.featureName}" as answered?`
+        : `Accept "${group.featureName}"? Its geometry stays in the model as final -- this can't be edited again without reopening.`;
     const confirmed = window.confirm(confirmMessage);
     if (!confirmed) return;
 
@@ -1103,9 +1197,11 @@ function ParameterMarkPanelInner() {
   /** Reject: deletes the Cosmo Feature outright, discarding its proposed geometry entirely. */
   async function rejectMark(group: FeatureGroup) {
     if (!context) return;
-    const confirmMessage = NEEDS_INPUT_COSMO_FEATURE_TYPES.has(group.featureType)
-      ? `Remove the question "${group.featureName}"? Its comments will be lost.`
-      : `Delete "${group.featureName}"? Its proposed geometry and comments will be lost.`;
+    const confirmMessage = ALTERNATIVE_COMPARISON_COSMO_FEATURE_TYPES.has(group.featureType)
+      ? `Reject the comparison for "${group.featureName}"? Current component is kept as is, both alternatives and all comments are lost.`
+      : NEEDS_INPUT_COSMO_FEATURE_TYPES.has(group.featureType)
+        ? `Remove the question "${group.featureName}"? Its comments will be lost.`
+        : `Delete "${group.featureName}"? Its proposed geometry and comments will be lost.`;
     const confirmed = window.confirm(confirmMessage);
     if (!confirmed) return;
 
@@ -1280,6 +1376,168 @@ function ParameterMarkPanelInner() {
     );
   }
 
+  /**
+   * Dedicated card for fuzzycadCompareAlternatives -- deliberately NOT
+   * the generic numeric-parameter list renderProposalCard renders for
+   * every other Cosmo Feature type. This represents "multiple concrete
+   * candidates competing for the same design decision," not one
+   * person's proposal, so:
+   *   - no "Proposed by ..." framing anywhere in this card
+   *   - a Current/Alternative A/Alternative B toggle row instead of an
+   *     editable value field (switching writes the hidden "activeOption"
+   *     string parameter via setActiveOption above)
+   *   - "Accept selected" instead of "Accept", since which candidate
+   *     gets committed depends on whatever's currently toggled on
+   *   - comments can optionally be tagged to a specific candidate (see
+   *     AlternativeDiscussionThread below) so trade-off discussion stays
+   *     attached to the option it's actually about
+   */
+  function renderAlternativeComparisonCard(group: FeatureGroup, options?: { insideGroup?: boolean }) {
+    const annotation = findAnnotation(group.featureId);
+    const resolved = annotation?.status === "resolved";
+    const isSelected = selectedFeatureIds.has(group.featureId);
+    const isCheckedForGrouping = groupSelectionIds.has(group.featureId);
+
+    const activeOptionEntry = group.parameters.find((entry) => entry.parameterId === "activeOption");
+    const activeOptionRaw = activeOptionEntry?.message?.value;
+    const activeOption: "CURRENT" | "ALTERNATIVE_A" | "ALTERNATIVE_B" =
+      activeOptionRaw === "ALTERNATIVE_A" || activeOptionRaw === "ALTERNATIVE_B" ? activeOptionRaw : "CURRENT";
+
+    const hasAlternativeBEntry = group.parameters.find((entry) => entry.parameterId === "hasAlternativeB");
+    const hasAlternativeB = hasAlternativeBEntry?.message?.value === true;
+
+    const optionButton = (value: "CURRENT" | "ALTERNATIVE_A" | "ALTERNATIVE_B", label: string) => (
+      <button
+        key={value}
+        type="button"
+        className={
+          activeOption === value
+            ? `${styles.altOptionButton} ${styles.altOptionButtonActive}`
+            : styles.altOptionButton
+        }
+        disabled={resolved || saving}
+        onClick={(event) => {
+          event.stopPropagation();
+          void setActiveOption(group, value);
+        }}
+      >
+        {label}
+      </button>
+    );
+
+    return (
+      <div
+        key={group.featureId}
+        ref={(node) => {
+          if (node) {
+            cardNodesRef.current.set(group.featureId, node);
+          } else {
+            cardNodesRef.current.delete(group.featureId);
+          }
+        }}
+        className={isSelected ? `${styles.proposalCard} ${styles.proposalCardSelected}` : styles.proposalCard}
+      >
+        <div
+          className={styles.proposalHeader}
+          onClick={() => openFeatureDialog(group.featureId)}
+          title="Click to highlight this feature in Onshape"
+        >
+          {groupSelectMode ? (
+            <input
+              type="checkbox"
+              checked={isCheckedForGrouping}
+              onClick={(event) => event.stopPropagation()}
+              onChange={() => toggleGroupSelectionMember(group.featureId)}
+              style={{ marginRight: 6 }}
+            />
+          ) : null}
+          <span className={styles.cardTitle}>{group.featureName}</span>
+          <span className={styles.cardTypeTag}>(Compare Alternatives)</span>
+        </div>
+
+        <div className={styles.altStatusRow}>
+          {resolved ? "Committed" : "Under comparison"}
+        </div>
+
+        <div className={styles.altOptionRow}>
+          {optionButton("CURRENT", "Current")}
+          {optionButton("ALTERNATIVE_A", "Alternative A")}
+          {hasAlternativeB ? optionButton("ALTERNATIVE_B", "Alternative B") : null}
+        </div>
+
+        <div className={styles.rowActions}>
+          {resolved ? (
+            <>
+              <span className={styles.tagAnswered}>Committed</span>
+              <button
+                type="button"
+                className={styles.secondaryButton}
+                disabled={saving}
+                onClick={() => reopenMark(group)}
+              >
+                Reopen
+              </button>
+            </>
+          ) : (
+            <>
+              <span className={styles.tagProposed}>Comparing</span>
+              <button
+                type="button"
+                className={styles.acceptButton}
+                disabled={saving}
+                onClick={() => void resolveMark(group)}
+              >
+                Accept selected
+              </button>
+              <button
+                type="button"
+                className={styles.rejectButton}
+                disabled={saving}
+                onClick={() => void rejectMark(group)}
+              >
+                Reject
+              </button>
+            </>
+          )}
+          {options?.insideGroup ? (
+            <button
+              type="button"
+              className={styles.secondaryButton}
+              disabled={saving}
+              onClick={() => void handleRemoveFromGroup(group.featureId)}
+            >
+              Remove from group
+            </button>
+          ) : null}
+        </div>
+
+        <div className={styles.discussionDivider} />
+
+        {annotation ? (
+          <AlternativeDiscussionThread
+            annotation={annotation}
+            saving={saving}
+            hasAlternativeB={hasAlternativeB}
+            onAddComment={(text, optionTag) =>
+              withSavedDocument((doc) =>
+                addCustomFeatureProposalComment(doc, annotationIdFor(group.featureId), text, undefined, optionTag),
+              )
+            }
+          />
+        ) : (
+          <div className={styles.commentEmpty}>Registering this comparison...</div>
+        )}
+      </div>
+    );
+  }
+
+  /** Dispatches to the right card renderer -- the only place that needs to know this card kind exists besides the classification sets at the top of the file. */
+  function renderCard(group: FeatureGroup, options?: { insideGroup?: boolean }) {
+    return ALTERNATIVE_COMPARISON_COSMO_FEATURE_TYPES.has(group.featureType)
+      ? renderAlternativeComparisonCard(group, options)
+      : renderProposalCard(group, options);
+  }
+
   if (!context) {
     return (
       <div className={styles.page}>
@@ -1386,7 +1644,7 @@ function ParameterMarkPanelInner() {
         <div className={styles.proposalList}>
           {cardRenderBlocks.map((block) =>
             block.kind === "single" ? (
-              renderProposalCard(block.group)
+              renderCard(block.group)
             ) : (
               <div key={block.proposalGroup.id} className={styles.proposalGroupCluster}>
                 <div className={styles.proposalGroupHeader}>
@@ -1410,7 +1668,7 @@ function ParameterMarkPanelInner() {
                   </button>
                 </div>
                 <div className={styles.proposalGroupMembers}>
-                  {block.members.map((member) => renderProposalCard(member, { insideGroup: true }))}
+                  {block.members.map((member) => renderCard(member, { insideGroup: true }))}
                 </div>
               </div>
             ),
@@ -1465,6 +1723,89 @@ function DiscussionThread({
       >
         Post comment
       </button>
+    </div>
+  );
+}
+
+const ALT_OPTION_TAG_LABELS: Record<CommentOptionTag, string> = {
+  general: "General",
+  current: "Current",
+  alternativeA: "Alternative A",
+  alternativeB: "Alternative B",
+};
+
+/**
+ * Same shape as DiscussionThread, for fuzzycadCompareAlternatives cards
+ * only -- each comment can optionally be tagged to the specific
+ * candidate it's about (Current / Alternative A / Alternative B), or
+ * left "General", since the whole point of this card is supporting
+ * trade-off discussion between options ("Alternative A: stronger
+ * mounting plate, but adds height"). Reuses the exact same
+ * addCustomFeatureProposalComment mutation DiscussionThread does -- only
+ * the extra optionTag argument and the tag picker/badge UI differ.
+ */
+function AlternativeDiscussionThread({
+  annotation,
+  saving,
+  hasAlternativeB,
+  onAddComment,
+}: {
+  annotation: CustomFeatureProposalUncertaintyAnnotation;
+  saving: boolean;
+  hasAlternativeB: boolean;
+  onAddComment: (text: string, optionTag: CommentOptionTag) => void;
+}) {
+  const [commentDraft, setCommentDraft] = useState("");
+  const [optionTag, setOptionTag] = useState<CommentOptionTag>("general");
+
+  return (
+    <div className={styles.commentThread}>
+      {annotation.commentThread.length === 0 ? (
+        <div className={styles.commentEmpty}>No comments yet.</div>
+      ) : (
+        annotation.commentThread.map((comment) => (
+          <div key={comment.id} className={styles.comment}>
+            <div className={styles.commentMeta}>
+              {comment.author ?? "someone"} &middot; {new Date(comment.createdAt).toLocaleString()}
+              {comment.optionTag && comment.optionTag !== "general" ? (
+                <span className={styles.commentOptionBadge}>{ALT_OPTION_TAG_LABELS[comment.optionTag]}</span>
+              ) : null}
+            </div>
+            <div className={styles.commentText}>{comment.text}</div>
+          </div>
+        ))
+      )}
+      <textarea
+        className={styles.commentInput}
+        rows={2}
+        placeholder="Add a comment..."
+        value={commentDraft}
+        onChange={(event) => setCommentDraft(event.target.value)}
+      />
+      <div className={styles.altCommentRow}>
+        <select
+          className={styles.altOptionSelect}
+          value={optionTag}
+          onChange={(event) => setOptionTag(event.target.value as CommentOptionTag)}
+        >
+          <option value="general">General</option>
+          <option value="current">Current</option>
+          <option value="alternativeA">Alternative A</option>
+          {hasAlternativeB ? <option value="alternativeB">Alternative B</option> : null}
+        </select>
+        <button
+          type="button"
+          className={styles.secondaryButton}
+          disabled={saving || !commentDraft.trim()}
+          onClick={() => {
+            onAddComment(commentDraft.trim(), optionTag);
+            setCommentDraft("");
+            setOptionTag("general");
+          }}
+        >
+          Post comment
+        </button>
+      </div>
     </div>
   );
 }
