@@ -206,11 +206,20 @@ export const fuzzycadCompareAlternatives = defineFeature(function(context is Con
         const showingB = definition.activeOption == "ALTERNATIVE_B" && hasB;
         const showingA = !showingCurrent && !showingB;
 
-        setProperty(context, {
-                "entities" : definition.currentComponent,
-                "propertyType" : PropertyType.APPEARANCE,
-                "value" : showingCurrent ? color(1, 1, 1, 1) : color(0.75, 0.75, 0.75, 0.02)
-        });
+        // Only fade Current when it's NOT the active option -- same
+        // pattern every other Proposed*/Needs Input* feature in this
+        // directory uses (setProperty is only ever called to fade,
+        // never to force a color back). Forcing color(1,1,1,1) here
+        // when showingCurrent used to overwrite Current's real material
+        // color with solid white instead of leaving it untouched.
+        if (!showingCurrent)
+        {
+            setProperty(context, {
+                    "entities" : definition.currentComponent,
+                    "propertyType" : PropertyType.APPEARANCE,
+                    "value" : color(0.75, 0.75, 0.75, 0.02)
+            });
+        }
 
         if (showingA)
         {
