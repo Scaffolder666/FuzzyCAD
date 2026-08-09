@@ -5,11 +5,13 @@ export const runtime = "nodejs";
 
 type ParameterUpdate = {
   parameterId: string;
-  // BTMParameterQuantity uses "expression"; BTMParameterBoolean uses
-  // "value" (true/false), not an expression string -- exactly one should
-  // be set per update, matched to the target parameter's real type.
+  // BTMParameterQuantity uses "expression"; BTMParameterBoolean uses a
+  // plain boolean "value"; BTMParameterString (e.g.
+  // fuzzycadCompareAlternatives's "activeOption") uses a plain string
+  // "value" -- exactly one field should be set per update, matched to
+  // the target parameter's real type.
   expression?: string;
-  value?: boolean;
+  value?: boolean | string | number;
 };
 
 type RequestBody = {

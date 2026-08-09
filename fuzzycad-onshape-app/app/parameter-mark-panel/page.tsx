@@ -62,6 +62,27 @@ type FeatureGroup = {
 };
 
 /**
+ * A Cosmo Feature instance's existence, straight from the raw feature
+ * tree -- independent of whether partstudio-feature-parameters-debug
+ * happened to extract any recognized value parameter for it. This is
+ * the source of truth for "does a card exist"; featureGroups below
+ * attaches parameters to an already-detected feature, it never uses
+ * parameter presence to decide whether the feature itself exists.
+ * fuzzycadCompareAlternatives is the case that exposed the bug: its
+ * currentComponent/alternativeA/alternativeB parameters are Query/
+ * PartStudioData references, deliberately excluded from
+ * VALUE_TYPE_NAMES -- coupling card existence to "has at least one
+ * recognized value parameter" made the card's appearance depend on
+ * exactly which parameters this feature type happens to expose, which
+ * is the wrong dependency regardless of how many it currently has.
+ */
+type DetectedCosmoFeature = {
+  featureId: string;
+  featureName: string;
+  featureType: string;
+};
+
+/**
  * One item in the rendered card list: either a standalone card, or a
  * cluster of cards sharing a ProposalGroup label. Not to be confused
  * with FeatureGroup above (one Cosmo Feature's own parameters) -- this
@@ -262,6 +283,10 @@ function ParameterMarkPanelInner() {
   const [context, setContext] = useState<SharedOnshapeContext | null>(null);
   const [status, setStatus] = useState("waiting for Onshape context...");
   const [parameters, setParameters] = useState<ValueParameterEntry[] | null>(null);
+  // Source of truth for "which Cosmo Feature cards exist" -- see
+  // DetectedCosmoFeature's comment. Populated straight from the raw
+  // feature tree in loadEverything, independent of `parameters` above.
+  const [detectedFeatures, setDetectedFeatures] = useState<DetectedCosmoFeature[]>([]);
   const [uncertaintyDoc, setUncertaintyDoc] = useState<FuzzyCADUncertaintyDocument | null>(null);
   const [saving, setSaving] = useState(false);
   // Whether the last data load hit a 401 -- the right panel used to be
@@ -402,11 +427,9 @@ function ParameterMarkPanelInner() {
   }
 
   /** Every Cosmo Feature instance found in a raw features-list dump, however it got there -- always inserted directly in Onshape's own UI, never by this panel. */
-  function extractCosmoFeatures(
-    rawFeatures: unknown,
-  ): { featureId: string; featureName: string; featureType: string }[] {
+  function extractCosmoFeatures(rawFeatures: unknown): DetectedCosmoFeature[] {
     if (!Array.isArray(rawFeatures)) return [];
-    const found: { featureId: string; featureName: string; featureType: string }[] = [];
+    const found: DetectedCosmoFeature[] = [];
     for (const entry of rawFeatures) {
       if (!entry || typeof entry !== "object") continue;
       const message = (entry as Record<string, unknown>).message;
@@ -696,6 +719,13 @@ function ParameterMarkPanelInner() {
     // marking IS inserting the feature in Onshape, there's no separate
     // "click Mark" step in this model.
     const detected = extractCosmoFeatures(paramsData.rawData?.features);
+    setDetectedFeatures(detected);
+    // Temporary: confirms fuzzycadCompareAlternatives (or any type) can be
+    // present in `detected` even when it has no entries in `cosmoOnly`,
+    // i.e. that card existence no longer depends on value-parameter
+    // extraction. Safe to remove once confirmed live.
+    console.debug("[FuzzyCAD] detected Cosmo features", detected);
+    console.debug("[FuzzyCAD] value parameters", cosmoOnly);
     let changed = false;
     for (const found of detected) {
       const id = makeCustomFeatureProposalAnnotationId(found.featureId);
@@ -781,25 +811,33 @@ function ParameterMarkPanelInner() {
     );
   }
 
-  /** One card per Cosmo Feature instance -- each may carry more than one editable parameter (just depth for now). */
+  /**
+   * One card per Cosmo Feature instance. `detectedFeatures` (straight
+   * from the raw feature tree) decides which cards exist; `parameters`
+   * (the filtered value-parameter list) only populates fields on a card
+   * that already exists. A feature with zero recognized value
+   * parameters -- e.g. fuzzycadCompareAlternatives before its
+   * Query/PartStudioData-only params resolve -- still gets a card, just
+   * with an empty parameters array.
+   */
   const featureGroups = useMemo<FeatureGroup[]>(() => {
-    if (!parameters) return [];
-    const byFeature = new Map<string, FeatureGroup>();
-    for (const entry of parameters) {
-      const existing = byFeature.get(entry.featureId);
+    const parametersByFeature = new Map<string, ValueParameterEntry[]>();
+    for (const entry of parameters ?? []) {
+      const existing = parametersByFeature.get(entry.featureId);
       if (existing) {
-        existing.parameters.push(entry);
+        existing.push(entry);
       } else {
-        byFeature.set(entry.featureId, {
-          featureId: entry.featureId,
-          featureName: entry.featureName,
-          featureType: entry.featureType,
-          parameters: [entry],
-        });
+        parametersByFeature.set(entry.featureId, [entry]);
       }
     }
-    return Array.from(byFeature.values());
-  }, [parameters]);
+
+    return detectedFeatures.map((feature) => ({
+      featureId: feature.featureId,
+      featureName: feature.featureName,
+      featureType: feature.featureType,
+      parameters: parametersByFeature.get(feature.featureId) ?? [],
+    }));
+  }, [detectedFeatures, parameters]);
 
   /**
    * Buckets featureGroups (one per card) into render blocks: either a
