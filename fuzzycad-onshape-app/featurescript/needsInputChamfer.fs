@@ -159,7 +159,7 @@ function drawNeedsInputSketch(
     body is Query)
 {
     const chordLength = 4.5 * millimeter;
-    const variance = 0.55 * millimeter;
+    const variance = 0.10 * millimeter;
 
     var rnd = RandomNumberFunctionWithSalt(id, "sparseNeedsInputFill");
     var allStrokes = qNothing();
@@ -214,10 +214,16 @@ function drawNeedsInputSketch(
 
             if (((rnd() % 100) / 100.0) < keepProbability)
             {
-                const grey = 0.05 + ((rnd() % 18) / 100.0);
-                const alpha = 0.26 + ((rnd() % 30) / 100.0);
+                const grey = 0.01 + ((rnd() % 18) / 100.0);
+                const alpha = 0.50 + ((rnd() % 30) / 100.0);
+
+                // Boundary guides sit right next to the face's real
+                // edge, so they get much less jitter budget than
+                // interior guides.
+                const boundaryDamping = isBoundaryGuide ? 0.35 : 1.0;
+
                 const strokeVariance =
-                    variance * (1.25 + ((rnd() % 175) / 100.0));
+                    variance * (1.25 + ((rnd() % 175) / 100.0)) * boundaryDamping;
 
                 const strokes = handDrawNeedsInputGuide(
                     context,
@@ -283,10 +289,15 @@ function drawNeedsInputSketch(
         {
             if ((rnd() % 100) < 34)
             {
+                const isBoundaryGuide2 =
+                    (secondaryIndex == 0) ||
+                    (secondaryIndex == secondaryCount - 1);
+                const boundaryDamping2 = isBoundaryGuide2 ? 0.35 : 1.0;
+
                 const grey2 = 0.10 + ((rnd() % 18) / 100.0);
                 const alpha2 = 0.22 + ((rnd() % 24) / 100.0);
                 const strokeVariance2 =
-                    variance * (1.6 + ((rnd() % 190) / 100.0));
+                    variance * (1.6 + ((rnd() % 190) / 100.0)) * boundaryDamping2;
 
                 const strokes2 = handDrawNeedsInputGuide(
                     context,
@@ -348,6 +359,11 @@ returns Query
 {
     const edgeLength = evLength(context, { "entities" : edgeQuery });
 
+    // Jitter capped to a fraction of the guide's OWN length -- a short
+    // guide on a tight fillet/small area otherwise gets the same
+    // absolute wobble as a long guide on a flat face.
+    const maxJitter = min(variance, edgeLength * 0.05);
+
     const numStrokes = singlePass
         ? 1
         : (((rnd() % 100) < 78) ? 1 : 2);
@@ -357,10 +373,10 @@ returns Query
     for (var strokeIndex = 0; strokeIndex < numStrokes; strokeIndex += 1)
     {
         const startParameter =
-            0.03 + ((rnd() % 28) / 100.0);
+            0.01 + ((rnd() % 28) / 100.0);
 
         const endParameter =
-            0.67 + ((rnd() % 30) / 100.0);
+            0.78 + ((rnd() % 30) / 100.0);
 
         const coverage = endParameter - startParameter;
 
@@ -387,7 +403,21 @@ returns Query
 
         for (var i = 0; i < pointCount; i += 1)
         {
-            var p = tangents[i].origin as Vector;
+            const p0 = tangents[i].origin as Vector;
+            const tangentDir = normalize(tangents[i].direction as Vector);
+
+            // Jitter only WITHIN the plane perpendicular to the guide's
+            // own tangent, never along it -- along-tangent jitter can
+            // push a point past its neighbor on a tightly curved guide,
+            // which made the fitted spline double back on itself.
+            const ref =
+                (abs(tangentDir[2]) < 0.9)
+                ? vector(0, 0, 1)
+                : vector(0, 1, 0);
+
+            const perp1 = normalize(cross(tangentDir, ref));
+            const perp2 = cross(tangentDir, perp1);
+
             const s1 = rnd();
             const s2 = rnd();
 
@@ -398,7 +428,7 @@ returns Query
                 (((rnd() % 100) / 100.0) < mistakeChance);
 
             const mistakeFactor = isMistake
-                ? 1.45 + ((rnd() % 100) / 100.0) * 1.55
+                ? 1.2 + ((rnd() % 100) / 100.0) * 0.6
                 : 1.0;
 
             const normalizedIndex =
@@ -407,13 +437,17 @@ returns Query
                 : 0.5;
 
             const endLooseness =
-                1.0 + abs(normalizedIndex - 0.5) * 0.9;
+                1.0 + abs(normalizedIndex - 0.5) * 0.5;
 
-            p[0] += 2 * (((s1 + i * 17 + strokeIndex * 29) % 100) / 100.0 - 0.5) * variance * jitterFactor * mistakeFactor * endLooseness;
-            p[1] += 2 * (((s1 + i * 31 + strokeIndex * 43) % 100) / 100.0 - 0.5) * variance * jitterFactor * mistakeFactor * endLooseness;
-            p[2] += 2 * (((s1 + i * 47 + strokeIndex * 61) % 100) / 100.0 - 0.5) * variance * jitterFactor * mistakeFactor * endLooseness;
+            const amount =
+                maxJitter * jitterFactor * mistakeFactor * endLooseness;
 
-            pts[i] = p;
+            const offset1 =
+                2 * (((s1 + i * 17 + strokeIndex * 29) % 100) / 100.0 - 0.5) * amount;
+            const offset2 =
+                2 * (((s1 + i * 31 + strokeIndex * 43) % 100) / 100.0 - 0.5) * amount;
+
+            pts[i] = p0 + perp1 * offset1 + perp2 * offset2;
         }
 
         const strokeId = id + ("stroke" ~ toString(strokeIndex));
