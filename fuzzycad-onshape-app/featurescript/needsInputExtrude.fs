@@ -138,7 +138,7 @@ function drawNeedsInputSketch(
     body is Query)
 {
     const chordLength = 4.5 * millimeter;
-    const variance = 0.55 * millimeter;
+    const variance = 0.10 * millimeter;
 
     var rnd = RandomNumberFunctionWithSalt(id, "sparseNeedsInputFill");
     var allStrokes = qNothing();
@@ -151,7 +151,7 @@ function drawNeedsInputSketch(
         const faceId = id + ("face" ~ toString(faceIndex));
 
         // Only 12–18 candidate guides, and many are discarded.
-        const primaryCount = 12 + (rnd() % 7);
+        const primaryCount = 20 + (rnd() % 7);
         var primaryNames = makeArray(primaryCount, "");
 
         for (var n = 0; n < primaryCount; n += 1)
@@ -193,8 +193,8 @@ function drawNeedsInputSketch(
 
             if (((rnd() % 100) / 100.0) < keepProbability)
             {
-                const grey = 0.05 + ((rnd() % 18) / 100.0);
-                const alpha = 0.26 + ((rnd() % 30) / 100.0);
+                const grey = 0.01 + ((rnd() % 18) / 100.0);
+                const alpha = 0.50 + ((rnd() % 30) / 100.0);
 
                 // Boundary guides already sit right next to the face's
                 // real edge, so they get much less jitter budget than
@@ -361,10 +361,10 @@ returns Query
     for (var strokeIndex = 0; strokeIndex < numStrokes; strokeIndex += 1)
     {
         const startParameter =
-            0.03 + ((rnd() % 28) / 100.0);
+            0.01 + ((rnd() % 28) / 100.0);
 
         const endParameter =
-            0.67 + ((rnd() % 30) / 100.0);
+            0.9 + ((rnd() % 30) / 100.0);
 
         const coverage = endParameter - startParameter;
 
@@ -848,4 +848,3 @@ returns function
         return state[];
     };
 }
-
