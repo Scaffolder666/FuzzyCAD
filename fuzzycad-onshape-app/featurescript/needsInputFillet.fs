@@ -368,6 +368,16 @@ function drawSketchyFaceFill(
         const faceDiagonal = norm(faceBox.maxCorner - faceBox.minCorner);
         const sizeFactor = min(max(faceDiagonal / referenceFaceSize, 0.15), 1.0);
 
+        // Skip curve generation on faces this small entirely -- too
+        // small to usefully show hand-drawn texture anyway, and the
+        // tiny/highly-curved corner-cap faces a fillet can produce at
+        // an intersection are exactly the ones where
+        // opCreateCurvesOnFace's auto-spaced ISO curve generation can
+        // fail outright (CURVE_FAILED), especially when asked for very
+        // few curves.
+        if (faceDiagonal > 2 * millimeter)
+        {
+
         //////////////////////////////////////////////////////////////
         // PRIMARY FIELD
         //
@@ -379,7 +389,7 @@ function drawSketchyFaceFill(
         // fixed count crammed into a small area.
         //////////////////////////////////////////////////////////////
 
-        const primaryCount = max(round((12 + (rnd() % 7)) * sizeFactor), 3);
+        const primaryCount = max(round((12 + (rnd() % 7)) * sizeFactor), 4);
         var primaryNames = makeArray(primaryCount, "");
 
         for (var n = 0; n < primaryCount; n += 1)
@@ -476,7 +486,7 @@ function drawSketchyFaceFill(
         // faces (e.g. a fillet band) for the same reason as above.
         //////////////////////////////////////////////////////////////
 
-        const secondaryCount = max(round((3 + (rnd() % 3)) * sizeFactor), 2);
+        const secondaryCount = max(round((3 + (rnd() % 3)) * sizeFactor), 3);
         var secondaryNames = makeArray(secondaryCount, "");
 
         for (var m = 0; m < secondaryCount; m += 1)
@@ -552,6 +562,8 @@ function drawSketchyFaceFill(
                 { "entities" : secondaryGuideBodies }
             );
         }
+
+        } // end faceDiagonal > 2mm guard
 
         faceIndex += 1;
     }
