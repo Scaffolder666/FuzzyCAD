@@ -108,9 +108,15 @@ export const fuzzycadNeedsInputFillet = defineFeature(function(context is Contex
                 "value" : color(0.75, 0.75, 0.75, 0.08)
         });
 
+        // The new rounded surface opFillet just created -- highlighted
+        // in drawSketchyFaceFill below so the fillet itself reads
+        // clearly instead of blending into the rest of the body's
+        // black scribble.
+        const filletFaces = qCreatedBy(id + "previewFillet", EntityType.FACE);
+
         // Whole-body hand-drawn fill -- the entire candidate object
         // reads as provisional, not just the fillet surface.
-        drawSketchyFaceFill(context, id + "faceFill", proposedBody);
+        drawSketchyFaceFill(context, id + "faceFill", proposedBody, filletFaces);
 
         // Keep a very faint complete boundary underneath the sparse random
         // Needs Input strokes. The outline is intentionally much lighter
@@ -328,8 +334,13 @@ function drawDimensionArrow(
 function drawSketchyFaceFill(
     context is Context,
     id is Id,
-    body is Query)
+    body is Query,
+    highlightFaces is Query)
 {
+    // Amber, distinct from Proposed's blue and the radius callout's
+    // red, so the fillet surface itself reads clearly against the rest
+    // of the body's plain black scribble.
+    const highlightBase = vector(0.75, 0.40, 0.05);
     // NEEDS INPUT visual language:
     // fewer guides, more irregular coverage, partial strokes.
     // The engineering annotations remain clean elsewhere in the feature.
@@ -367,6 +378,12 @@ function drawSketchyFaceFill(
         const faceBox = evBox3d(context, { "topology" : faceQuery, "tight" : true });
         const faceDiagonal = norm(faceBox.maxCorner - faceBox.minCorner);
         const sizeFactor = min(max(faceDiagonal / referenceFaceSize, 0.15), 1.0);
+
+        // qIntersection is standard FeatureScript query algebra (same
+        // family as qUnion, already used throughout this file) but not
+        // otherwise used elsewhere in this codebase -- flagging in case
+        // this specific call is the one that doesn't compile.
+        const isFilletFace = !isQueryEmpty(context, qIntersection([faceQuery, highlightFaces]));
 
         // Skip curve generation on faces this small entirely -- too
         // small to usefully show hand-drawn texture anyway, and the
@@ -436,6 +453,19 @@ function drawSketchyFaceFill(
                 const grey = 0.01 + ((rnd() % 18) / 100.0);
                 const alpha = 0.50 + ((rnd() % 30) / 100.0);
 
+                // On the fillet's own new surface, jitter each channel
+                // around the amber base instead of using plain grey, so
+                // that surface reads as a distinct highlighted color.
+                const strokeRed = isFilletFace
+                    ? min(highlightBase[0] + ((rnd() % 20) / 100.0) - 0.10, 1.0)
+                    : grey;
+                const strokeGreen = isFilletFace
+                    ? min(highlightBase[1] + ((rnd() % 20) / 100.0) - 0.10, 1.0)
+                    : grey;
+                const strokeBlue = isFilletFace
+                    ? min(highlightBase[2] + ((rnd() % 10) / 100.0), 1.0)
+                    : grey;
+
                 // Boundary guides sit right next to the face's real
                 // edge, so they get much less jitter budget than
                 // interior guides.
@@ -454,9 +484,9 @@ function drawSketchyFaceFill(
                     strokeVariance,
                     rnd,
                     guideEdge,
-                    grey,
-                    grey,
-                    grey,
+                    strokeRed,
+                    strokeGreen,
+                    strokeBlue,
                     alpha,
                     false,
                     0.14
@@ -527,6 +557,17 @@ function drawSketchyFaceFill(
 
                 const grey2 = 0.10 + ((rnd() % 18) / 100.0);
                 const alpha2 = 0.22 + ((rnd() % 24) / 100.0);
+
+                const strokeRed2 = isFilletFace
+                    ? min(highlightBase[0] + ((rnd() % 20) / 100.0) - 0.10, 1.0)
+                    : grey2;
+                const strokeGreen2 = isFilletFace
+                    ? min(highlightBase[1] + ((rnd() % 20) / 100.0) - 0.10, 1.0)
+                    : grey2;
+                const strokeBlue2 = isFilletFace
+                    ? min(highlightBase[2] + ((rnd() % 10) / 100.0), 1.0)
+                    : grey2;
+
                 const secondaryVariance =
                     variance *
                     (1.6 + ((rnd() % 190) / 100.0)) *
@@ -539,9 +580,9 @@ function drawSketchyFaceFill(
                     secondaryVariance,
                     rnd,
                     guideEdge2,
-                    grey2,
-                    grey2,
-                    grey2,
+                    strokeRed2,
+                    strokeGreen2,
+                    strokeBlue2,
                     alpha2,
                     true,
                     0.18
