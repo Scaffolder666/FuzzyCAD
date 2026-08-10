@@ -327,6 +327,15 @@ returns Query
 {
     const edgeLength = evLength(context, { "entities" : edgeQuery });
 
+    // Jitter is capped to a fraction of the guide's OWN length, not just
+    // the fixed millimeter `variance` -- a short guide on a tight fillet
+    // or small end cap used to get the same absolute wobble as a long
+    // guide on a flat face, which is many times its own size and reads
+    // as noise instead of a hand-drawn line following that curve. This
+    // was the main cause of strokes looking like they "point in random
+    // directions" in geometrically complex/small areas.
+    const maxJitter = min(variance, edgeLength * 0.05);
+
     const numStrokes = singlePass
         ? 1
         : (((rnd() % 100) < 78) ? 1 : 2);
@@ -366,7 +375,26 @@ returns Query
 
         for (var i = 0; i < pointCount; i += 1)
         {
-            var p = tangents[i].origin as Vector;
+            const p0 = tangents[i].origin as Vector;
+            const tangentDir = normalize(tangents[i].direction as Vector);
+
+            // Jitter only WITHIN the plane perpendicular to the guide's
+            // own tangent (same perpendicular-basis idiom as
+            // proposedChamfer.fs's calloutDir), never along it. Jittering
+            // along the tangent used to be able to push a point past its
+            // neighbor when consecutive sample points are close together
+            // on a tightly curved guide, so the spline fit through them
+            // afterward doubled back on itself instead of wobbling
+            // smoothly along the curve -- that self-crossing, not just
+            // the jitter size, is what read as "random directions".
+            const ref =
+                (abs(tangentDir[2]) < 0.9)
+                ? vector(0, 0, 1)
+                : vector(0, 1, 0);
+
+            const perp1 = normalize(cross(tangentDir, ref));
+            const perp2 = cross(tangentDir, perp1);
+
             const s1 = rnd();
             const s2 = rnd();
 
@@ -376,8 +404,12 @@ returns Query
             const isMistake =
                 (((rnd() % 100) / 100.0) < mistakeChance);
 
+            // Toned down from 1.45-3.0x: combined with jitterFactor and
+            // endLooseness below, the old range could stack past 6x the
+            // base amount on a single point, which was large enough on
+            // its own to make a stroke look broken rather than sketchy.
             const mistakeFactor = isMistake
-                ? 1.45 + ((rnd() % 100) / 100.0) * 1.55
+                ? 1.2 + ((rnd() % 100) / 100.0) * 0.6
                 : 1.0;
 
             const normalizedIndex =
@@ -386,13 +418,17 @@ returns Query
                 : 0.5;
 
             const endLooseness =
-                1.0 + abs(normalizedIndex - 0.5) * 0.9;
+                1.0 + abs(normalizedIndex - 0.5) * 0.5;
 
-            p[0] += 2 * (((s1 + i * 17 + strokeIndex * 29) % 100) / 100.0 - 0.5) * variance * jitterFactor * mistakeFactor * endLooseness;
-            p[1] += 2 * (((s1 + i * 31 + strokeIndex * 43) % 100) / 100.0 - 0.5) * variance * jitterFactor * mistakeFactor * endLooseness;
-            p[2] += 2 * (((s1 + i * 47 + strokeIndex * 61) % 100) / 100.0 - 0.5) * variance * jitterFactor * mistakeFactor * endLooseness;
+            const amount =
+                maxJitter * jitterFactor * mistakeFactor * endLooseness;
 
-            pts[i] = p;
+            const offset1 =
+                2 * (((s1 + i * 17 + strokeIndex * 29) % 100) / 100.0 - 0.5) * amount;
+            const offset2 =
+                2 * (((s1 + i * 31 + strokeIndex * 43) % 100) / 100.0 - 0.5) * amount;
+
+            pts[i] = p0 + perp1 * offset1 + perp2 * offset2;
         }
 
         const strokeId = id + ("stroke" ~ toString(strokeIndex));
