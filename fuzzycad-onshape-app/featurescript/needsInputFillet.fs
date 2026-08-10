@@ -108,20 +108,30 @@ export const fuzzycadNeedsInputFillet = defineFeature(function(context is Contex
                 "value" : color(0.75, 0.75, 0.75, 0.08)
         });
 
-        // The new rounded surface opFillet just created -- highlighted
-        // in drawSketchyFaceFill below so the fillet itself reads
-        // clearly instead of blending into the rest of the body's
-        // black scribble.
+        // The new rounded surface opFillet just created -- its boundary
+        // edges get a bold orange outline below instead of blending
+        // into the rest of the body's faint grey ghost outline.
         const filletFaces = qCreatedBy(id + "previewFillet", EntityType.FACE);
+        const filletBoundaryEdges = qLoopEdges(filletFaces);
 
         // Whole-body hand-drawn fill -- the entire candidate object
         // reads as provisional, not just the fillet surface.
-        drawSketchyFaceFill(context, id + "faceFill", proposedBody, filletFaces);
+        drawSketchyFaceFill(context, id + "faceFill", proposedBody);
 
         // Keep a very faint complete boundary underneath the sparse random
         // Needs Input strokes. The outline is intentionally much lighter
         // than both the sketch strokes and the red radius callout.
         drawVeryLightGhostOutline(context, id + "ghostOutline", proposedBody);
+
+        // Bold orange outline specifically on the fillet's own edges --
+        // reads clearly as "this is what's being filleted" without
+        // relying on jittery colored fill.
+        drawBoldEdgeOutline(
+                context,
+                id + "filletEdgeHighlight",
+                filletBoundaryEdges,
+                color(0.90, 0.45, 0.05, 1.0)
+        );
 
         // Find one representative original edge, only used to position
         // the radius dimension arrow -- has nothing to do with which
@@ -193,19 +203,6 @@ export const fuzzycadNeedsInputFillet = defineFeature(function(context is Contex
                             "primaryParameterId" : "radius"
                     })
             });
-
-            // Clean (no jitter) dotted reference line running along the
-            // actual edge that will be filleted, offset slightly outward
-            // in the same direction as the radius arrow -- marks exactly
-            // which edge is affected, same visual family as the arrow.
-            drawFilletEdgeDots(
-                    context,
-                    id + "edgeDots",
-                    anchorEdge,
-                    radiusDir,
-                    4 * millimeter,
-                    dimensionColor
-            );
         }
 
         // Remove the temporary filleted duplicate now that its faces
@@ -338,65 +335,80 @@ function drawDimensionArrow(
 //
 // DOTTED EDGE REFERENCE LINE
 //
-// Clean (no jitter, no randomness) short dash marks running along the
-// exact edge that will be filleted, offset slightly outward. Same
-// engineering-annotation family as drawDimensionArrow above -- marks
-// WHICH edge, where the arrow marks HOW MUCH.
+// Clean (no jitter, no randomness) bold outline traced directly over
+// the given edges -- a single opFitSpline body reads as a thin hairline
+// regardless of color, so "bold" is faked the same way
+// drawDimensionArrow fakes a thick shaft: several parallel strands
+// offset a tiny amount from the true edge, in the two directions
+// perpendicular to it.
 //
 //////////////////////////////////////////////////////////////////////
 
-function drawFilletEdgeDots(
+function drawBoldEdgeOutline(
     context is Context,
     id is Id,
     edgeQuery is Query,
-    offsetDir is Vector,
-    offsetDistance is ValueWithUnits,
-    dotColor is map)
+    outlineColor is map)
 {
-    const edgeLength = evLength(context, { "entities" : edgeQuery });
-    const dotSpacing = 3 * millimeter;
-    const dotHalfLength = 0.5 * millimeter;
+    const sampleSpacing = 2 * millimeter;
+    const strandSpread = 0.35 * millimeter;
 
-    const dotCount = ceil(max(edgeLength / dotSpacing, 2));
+    const edges = evaluateQuery(context, edgeQuery);
+    var outlineBodies = qNothing();
 
-    const tangents = @evEdgeTangentLines(
-        context,
-        {
-            "edge" : edgeQuery,
-            "parameters" : range(0.02, 0.98, dotCount)
-        }
-    );
-
-    var dotBodies = qNothing();
-
-    for (var i = 0; i < dotCount; i += 1)
+    for (var edgeIndex = 0; edgeIndex < size(edges); edgeIndex += 1)
     {
-        const center = (tangents[i].origin as Vector) + offsetDir * offsetDistance;
-        const tangentDir = normalize(tangents[i].direction as Vector);
+        const edgeQ = edges[edgeIndex];
+        const edgeLength = evLength(context, { "entities" : edgeQ });
+        const pointCount = ceil(max(edgeLength / sampleSpacing, 5));
 
-        const dotId = id + ("dot" ~ toString(i));
-
-        opFitSpline(
+        const tangents = @evEdgeTangentLines(
             context,
-            dotId,
             {
-                "points" : [
-                    center - tangentDir * dotHalfLength,
-                    center + tangentDir * dotHalfLength
-                ]
+                "edge" : edgeQ,
+                "parameters" : range(0.0, 0.995, pointCount)
             }
         );
 
-        dotBodies = qUnion(dotBodies, qCreatedBy(dotId, EntityType.BODY));
+        // Perpendicular basis from the first sample's tangent, reused
+        // for every point on this edge so the strands stay parallel
+        // instead of twisting along a curved edge.
+        const firstTangentDir = normalize(tangents[0].direction as Vector);
+        const ref = (abs(firstTangentDir[2]) < 0.9) ? vector(0, 0, 1) : vector(0, 1, 0);
+        const side = normalize(cross(firstTangentDir, ref));
+        const side2 = normalize(cross(firstTangentDir, side));
+
+        const strandOffsets = [
+            vector(0, 0, 0) * meter,
+            side * strandSpread,
+            -side * strandSpread,
+            side2 * strandSpread,
+            -side2 * strandSpread
+        ];
+
+        for (var s = 0; s < 5; s += 1)
+        {
+            var points = makeArray(pointCount, undefined);
+
+            for (var p = 0; p < pointCount; p += 1)
+            {
+                points[p] = (tangents[p].origin as Vector) + strandOffsets[s];
+            }
+
+            const strandId = id + ("edge" ~ toString(edgeIndex) ~ "strand" ~ toString(s));
+            opFitSpline(context, strandId, { "points" : points });
+
+            outlineBodies = qUnion(outlineBodies, qCreatedBy(strandId, EntityType.BODY));
+        }
     }
 
-    if (!isQueryEmpty(context, dotBodies))
+    if (!isQueryEmpty(context, outlineBodies))
     {
         opCreateCompositePart(
             context,
-            id + "dotsComposite",
+            id + "outlineComposite",
             {
-                "bodies" : dotBodies,
+                "bodies" : outlineBodies,
                 "closed" : false
             }
         );
@@ -404,9 +416,9 @@ function drawFilletEdgeDots(
         setProperty(
             context,
             {
-                "entities" : qCreatedBy(id + "dotsComposite", EntityType.BODY),
+                "entities" : qCreatedBy(id + "outlineComposite", EntityType.BODY),
                 "propertyType" : PropertyType.APPEARANCE,
-                "value" : dotColor
+                "value" : outlineColor
             }
         );
     }
@@ -425,13 +437,8 @@ function drawFilletEdgeDots(
 function drawSketchyFaceFill(
     context is Context,
     id is Id,
-    body is Query,
-    highlightFaces is Query)
+    body is Query)
 {
-    // Amber, distinct from Proposed's blue and the radius callout's
-    // red, so the fillet surface itself reads clearly against the rest
-    // of the body's plain black scribble.
-    const highlightBase = vector(0.75, 0.40, 0.05);
     // NEEDS INPUT visual language:
     // fewer guides, more irregular coverage, partial strokes.
     // The engineering annotations remain clean elsewhere in the feature.
@@ -469,12 +476,6 @@ function drawSketchyFaceFill(
         const faceBox = evBox3d(context, { "topology" : faceQuery, "tight" : true });
         const faceDiagonal = norm(faceBox.maxCorner - faceBox.minCorner);
         const sizeFactor = min(max(faceDiagonal / referenceFaceSize, 0.15), 1.0);
-
-        // qIntersection is standard FeatureScript query algebra (same
-        // family as qUnion, already used throughout this file) but not
-        // otherwise used elsewhere in this codebase -- flagging in case
-        // this specific call is the one that doesn't compile.
-        const isFilletFace = !isQueryEmpty(context, qIntersection([faceQuery, highlightFaces]));
 
         // Skip curve generation on faces this small entirely -- too
         // small to usefully show hand-drawn texture anyway, and the
@@ -544,19 +545,6 @@ function drawSketchyFaceFill(
                 const grey = 0.01 + ((rnd() % 18) / 100.0);
                 const alpha = 0.50 + ((rnd() % 30) / 100.0);
 
-                // On the fillet's own new surface, jitter each channel
-                // around the amber base instead of using plain grey, so
-                // that surface reads as a distinct highlighted color.
-                const strokeRed = isFilletFace
-                    ? min(highlightBase[0] + ((rnd() % 20) / 100.0) - 0.10, 1.0)
-                    : grey;
-                const strokeGreen = isFilletFace
-                    ? min(highlightBase[1] + ((rnd() % 20) / 100.0) - 0.10, 1.0)
-                    : grey;
-                const strokeBlue = isFilletFace
-                    ? min(highlightBase[2] + ((rnd() % 10) / 100.0), 1.0)
-                    : grey;
-
                 // Boundary guides sit right next to the face's real
                 // edge, so they get much less jitter budget than
                 // interior guides.
@@ -575,9 +563,9 @@ function drawSketchyFaceFill(
                     strokeVariance,
                     rnd,
                     guideEdge,
-                    strokeRed,
-                    strokeGreen,
-                    strokeBlue,
+                    grey,
+                    grey,
+                    grey,
                     alpha,
                     false,
                     0.14
@@ -648,17 +636,6 @@ function drawSketchyFaceFill(
 
                 const grey2 = 0.10 + ((rnd() % 18) / 100.0);
                 const alpha2 = 0.22 + ((rnd() % 24) / 100.0);
-
-                const strokeRed2 = isFilletFace
-                    ? min(highlightBase[0] + ((rnd() % 20) / 100.0) - 0.10, 1.0)
-                    : grey2;
-                const strokeGreen2 = isFilletFace
-                    ? min(highlightBase[1] + ((rnd() % 20) / 100.0) - 0.10, 1.0)
-                    : grey2;
-                const strokeBlue2 = isFilletFace
-                    ? min(highlightBase[2] + ((rnd() % 10) / 100.0), 1.0)
-                    : grey2;
-
                 const secondaryVariance =
                     variance *
                     (1.6 + ((rnd() % 190) / 100.0)) *
@@ -671,9 +648,9 @@ function drawSketchyFaceFill(
                     secondaryVariance,
                     rnd,
                     guideEdge2,
-                    strokeRed2,
-                    strokeGreen2,
-                    strokeBlue2,
+                    grey2,
+                    grey2,
+                    grey2,
                     alpha2,
                     true,
                     0.18
