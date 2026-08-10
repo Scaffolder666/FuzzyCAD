@@ -439,6 +439,12 @@ function handDrawScribbleGuide(
     var edgeLength = evLength(context, { "entities" : edgeQuery });
     var pointCount = ceil(max(edgeLength / chordLength, 5));
 
+    // Jitter capped to a fraction of the guide's OWN length -- a short
+    // guide on a tight fillet/small area otherwise gets the same
+    // absolute wobble as a long guide on a flat face, which can push a
+    // stroke past the actual silhouette of the geometry.
+    var maxJitter = min(variance, edgeLength * 0.05);
+
     var tangents = @evEdgeTangentLines(context, {
             "edge" : edgeQuery,
             "parameters" : range(0.0, 1.0, pointCount)
@@ -456,6 +462,16 @@ function handDrawScribbleGuide(
         for (var i = 0; i < pointCount; i += 1)
         {
             var basePt = tangents[i].origin as Vector;
+            var tangentDir = normalize(tangents[i].direction as Vector);
+
+            // Jitter only WITHIN the plane perpendicular to the guide's
+            // own tangent, never along it -- along-tangent jitter can
+            // push a point past its neighbor on a tightly curved guide,
+            // which made the fitted spline double back on itself instead
+            // of wobbling smoothly.
+            var ref = (abs(tangentDir[2]) < 0.9) ? vector(0, 0, 1) : vector(0, 1, 0);
+            var perp1 = normalize(cross(tangentDir, ref));
+            var perp2 = cross(tangentDir, perp1);
 
             var s1 = rnd();
             var s2 = rnd();
@@ -465,14 +481,12 @@ function handDrawScribbleGuide(
             var isMistake = (((rnd() % 100) / 100.0) < mistakeChance);
             var mistakeFactor = isMistake ? (1.30 + ((rnd() % 100) / 100.0) * 1.11) : 1.0;
 
-            var offsetX = 2 * (((s1 + i * 17 + strokeIndex * 29) % 100) / 100.0 - 0.5) * variance * jitterFactor * mistakeFactor;
-            var offsetY = 2 * (((s1 + i * 31 + strokeIndex * 43) % 100) / 100.0 - 0.5) * variance * jitterFactor * mistakeFactor;
-            var offsetZ = 2 * (((s1 + i * 47 + strokeIndex * 61) % 100) / 100.0 - 0.5) * variance * jitterFactor * mistakeFactor;
+            var amount = maxJitter * jitterFactor * mistakeFactor;
 
-            var perturbed = basePt;
-            perturbed[0] += offsetX;
-            perturbed[1] += offsetY;
-            perturbed[2] += offsetZ;
+            var offset1 = 2 * (((s1 + i * 17 + strokeIndex * 29) % 100) / 100.0 - 0.5) * amount;
+            var offset2 = 2 * (((s1 + i * 31 + strokeIndex * 43) % 100) / 100.0 - 0.5) * amount;
+
+            var perturbed = basePt + perp1 * offset1 + perp2 * offset2;
 
             newPoints[i] = perturbed;
         }

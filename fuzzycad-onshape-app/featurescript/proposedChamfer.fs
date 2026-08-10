@@ -181,6 +181,12 @@ returns Query
     const edgeLength = evLength(context, { "entities" : edgeQuery });
     const pointCount = ceil(max(edgeLength / chordLength, 5));
 
+    // Jitter capped to a fraction of the edge's OWN length -- a short
+    // edge on a small/complex area otherwise gets the same absolute
+    // wobble as a long edge on a flat face, which can push a stroke
+    // past the actual silhouette of the geometry.
+    const maxJitter = min(variance, edgeLength * 0.05);
+
     const tangents = @evEdgeTangentLines(
         context,
         {
@@ -198,15 +204,25 @@ returns Query
 
         for (var i = 0; i < pointCount; i += 1)
         {
-            var p = tangents[i].origin as Vector;
+            const p0 = tangents[i].origin as Vector;
+            const tangentDir = normalize(tangents[i].direction as Vector);
+
+            // Jitter only WITHIN the plane perpendicular to the edge's
+            // own tangent, never along it -- along-tangent jitter can
+            // push a point past its neighbor on a tightly curved edge,
+            // making the fitted spline double back on itself.
+            const ref = (abs(tangentDir[2]) < 0.9) ? vector(0, 0, 1) : vector(0, 1, 0);
+            const perp1 = normalize(cross(tangentDir, ref));
+            const perp2 = cross(tangentDir, perp1);
+
             const s = rnd();
             const factor = 0.55 + ((rnd() % 100) / 100.0) * 0.35;
+            const amount = maxJitter * factor;
 
-            p[0] += 2 * (((s + i * 17 + strokeIndex * 29) % 100) / 100.0 - 0.5) * variance * factor;
-            p[1] += 2 * (((s + i * 23 + strokeIndex * 37) % 100) / 100.0 - 0.5) * variance * factor;
-            p[2] += 2 * (((s + i * 31 + strokeIndex * 41) % 100) / 100.0 - 0.5) * variance * factor;
+            const offset1 = 2 * (((s + i * 17 + strokeIndex * 29) % 100) / 100.0 - 0.5) * amount;
+            const offset2 = 2 * (((s + i * 23 + strokeIndex * 37) % 100) / 100.0 - 0.5) * amount;
 
-            pts[i] = p;
+            pts[i] = p0 + perp1 * offset1 + perp2 * offset2;
         }
 
         const strokeId = id + ("stroke" ~ toString(strokeIndex));
