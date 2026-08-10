@@ -353,6 +353,13 @@ function drawBoldEdgeOutline(
     const sampleSpacing = 2 * millimeter;
     const strandSpread = 0.35 * millimeter;
 
+    // Refresh the perpendicular offset basis every this many sample
+    // points instead of once per whole edge or once per point --
+    // enough segments to loosely track a curved edge's overall
+    // direction trend, without recomputing (and risking a twist) at
+    // every single point on a nearly-straight edge.
+    const basisRefreshPoints = 8;
+
     const edges = evaluateQuery(context, edgeQuery);
     var outlineBodies = qNothing();
 
@@ -370,35 +377,54 @@ function drawBoldEdgeOutline(
             }
         );
 
-        // Perpendicular basis from the first sample's tangent, reused
-        // for every point on this edge so the strands stay parallel
-        // instead of twisting along a curved edge.
-        const firstTangentDir = normalize(tangents[0].direction as Vector);
-        const ref = (abs(firstTangentDir[2]) < 0.9) ? vector(0, 0, 1) : vector(0, 1, 0);
-        const side = normalize(cross(firstTangentDir, ref));
-        const side2 = normalize(cross(firstTangentDir, side));
+        const segmentCount = ceil(pointCount / basisRefreshPoints);
 
-        const strandOffsets = [
-            vector(0, 0, 0) * meter,
-            side * strandSpread,
-            -side * strandSpread,
-            side2 * strandSpread,
-            -side2 * strandSpread
-        ];
-
-        for (var s = 0; s < 5; s += 1)
+        for (var seg = 0; seg < segmentCount; seg += 1)
         {
-            var points = makeArray(pointCount, undefined);
+            const segStart = seg * basisRefreshPoints;
 
-            for (var p = 0; p < pointCount; p += 1)
+            // One point of overlap with the next segment so consecutive
+            // segments share an endpoint and the strands don't visibly
+            // gap where the basis refreshes.
+            const segEnd = min(segStart + basisRefreshPoints + 1, pointCount);
+            const segPointCount = segEnd - segStart;
+
+            if (segPointCount >= 2)
             {
-                points[p] = (tangents[p].origin as Vector) + strandOffsets[s];
+                // Perpendicular basis from this segment's own first
+                // tangent -- reused for every point in the segment, then
+                // refreshed at the next segment, so the offset direction
+                // follows the edge's overall curvature in a few steps
+                // rather than either staying fixed for the whole edge or
+                // recomputing (and risking a twist) at every point.
+                const segTangentDir = normalize(tangents[segStart].direction as Vector);
+                const ref = (abs(segTangentDir[2]) < 0.9) ? vector(0, 0, 1) : vector(0, 1, 0);
+                const side = normalize(cross(segTangentDir, ref));
+                const side2 = normalize(cross(segTangentDir, side));
+
+                const strandOffsets = [
+                    vector(0, 0, 0) * meter,
+                    side * strandSpread,
+                    -side * strandSpread,
+                    side2 * strandSpread,
+                    -side2 * strandSpread
+                ];
+
+                for (var s = 0; s < 5; s += 1)
+                {
+                    var points = makeArray(segPointCount, undefined);
+
+                    for (var p = 0; p < segPointCount; p += 1)
+                    {
+                        points[p] = (tangents[segStart + p].origin as Vector) + strandOffsets[s];
+                    }
+
+                    const strandId = id + ("edge" ~ toString(edgeIndex) ~ "seg" ~ toString(seg) ~ "strand" ~ toString(s));
+                    opFitSpline(context, strandId, { "points" : points });
+
+                    outlineBodies = qUnion(outlineBodies, qCreatedBy(strandId, EntityType.BODY));
+                }
             }
-
-            const strandId = id + ("edge" ~ toString(edgeIndex) ~ "strand" ~ toString(s));
-            opFitSpline(context, strandId, { "points" : points });
-
-            outlineBodies = qUnion(outlineBodies, qCreatedBy(strandId, EntityType.BODY));
         }
     }
 
