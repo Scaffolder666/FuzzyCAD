@@ -336,6 +336,15 @@ function drawSketchyFaceFill(
     const chordLength = 4.5 * millimeter;
     const variance = 0.10 * millimeter;
 
+    // Reference face size: guide counts below are the right density for
+    // a face around this big. A fillet's own new surface is typically a
+    // narrow strip along the blended edge -- much smaller than this --
+    // so without scaling it gets the exact same 12-18 primary + 3-5
+    // secondary candidate lines as a large flat face, packed into a much
+    // smaller area. That is what was reading as "a pile of lines" right
+    // on top of the fillet instead of a legible fillet surface.
+    const referenceFaceSize = 30 * millimeter;
+
     var rnd = RandomNumberFunctionWithSalt(id, "sparseNeedsInputFill");
     var allStrokes = qNothing();
 
@@ -350,14 +359,27 @@ function drawSketchyFaceFill(
     {
         const faceId = id + ("face" ~ toString(faceIndex));
 
+        // Bounding-box diagonal as a cheap proxy for "how big is this
+        // face". A fillet band is long in one direction but very
+        // narrow in the other, so its diagonal is still much smaller
+        // than a comparable flat face's, and sizeFactor below drops
+        // accordingly.
+        const faceBox = evBox3d(context, { "topology" : faceQuery, "tight" : true });
+        const faceDiagonal = norm(faceBox.maxCorner - faceBox.minCorner);
+        const sizeFactor = min(max(faceDiagonal / referenceFaceSize, 0.15), 1.0);
+
         //////////////////////////////////////////////////////////////
         // PRIMARY FIELD
         //
         // Previous Needs Input versions used ~30-50 curves per face.
-        // This intentionally drops to 12-18, then discards many of them.
+        // This intentionally drops to 12-18 for a reference-size face,
+        // then discards many of them -- and scales down further with
+        // sizeFactor for anything smaller than that, so a narrow fillet
+        // band gets proportionally fewer lines instead of the same
+        // fixed count crammed into a small area.
         //////////////////////////////////////////////////////////////
 
-        const primaryCount = 12 + (rnd() % 7);
+        const primaryCount = max(round((12 + (rnd() % 7)) * sizeFactor), 3);
         var primaryNames = makeArray(primaryCount, "");
 
         for (var n = 0; n < primaryCount; n += 1)
@@ -449,10 +471,12 @@ function drawSketchyFaceFill(
         //////////////////////////////////////////////////////////////
         // SECONDARY FIELD
         //
-        // Only 3-5 candidates, and most are dropped.
+        // Only 3-5 candidates on a reference-size face, and most are
+        // dropped -- scaled down by the same sizeFactor for smaller
+        // faces (e.g. a fillet band) for the same reason as above.
         //////////////////////////////////////////////////////////////
 
-        const secondaryCount = 3 + (rnd() % 3);
+        const secondaryCount = max(round((3 + (rnd() % 3)) * sizeFactor), 2);
         var secondaryNames = makeArray(secondaryCount, "");
 
         for (var m = 0; m < secondaryCount; m += 1)
