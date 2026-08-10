@@ -193,6 +193,19 @@ export const fuzzycadNeedsInputFillet = defineFeature(function(context is Contex
                             "primaryParameterId" : "radius"
                     })
             });
+
+            // Clean (no jitter) dotted reference line running along the
+            // actual edge that will be filleted, offset slightly outward
+            // in the same direction as the radius arrow -- marks exactly
+            // which edge is affected, same visual family as the arrow.
+            drawFilletEdgeDots(
+                    context,
+                    id + "edgeDots",
+                    anchorEdge,
+                    radiusDir,
+                    4 * millimeter,
+                    dimensionColor
+            );
         }
 
         // Remove the temporary filleted duplicate now that its faces
@@ -319,6 +332,84 @@ function drawDimensionArrow(
     });
 
     skSolve(labelSketch);
+}
+
+//////////////////////////////////////////////////////////////////////
+//
+// DOTTED EDGE REFERENCE LINE
+//
+// Clean (no jitter, no randomness) short dash marks running along the
+// exact edge that will be filleted, offset slightly outward. Same
+// engineering-annotation family as drawDimensionArrow above -- marks
+// WHICH edge, where the arrow marks HOW MUCH.
+//
+//////////////////////////////////////////////////////////////////////
+
+function drawFilletEdgeDots(
+    context is Context,
+    id is Id,
+    edgeQuery is Query,
+    offsetDir is Vector,
+    offsetDistance is ValueWithUnits,
+    dotColor is map)
+{
+    const edgeLength = evLength(context, { "entities" : edgeQuery });
+    const dotSpacing = 3 * millimeter;
+    const dotHalfLength = 0.5 * millimeter;
+
+    const dotCount = ceil(max(edgeLength / dotSpacing, 2));
+
+    const tangents = @evEdgeTangentLines(
+        context,
+        {
+            "edge" : edgeQuery,
+            "parameters" : range(0.02, 0.98, dotCount)
+        }
+    );
+
+    var dotBodies = qNothing();
+
+    for (var i = 0; i < dotCount; i += 1)
+    {
+        const center = (tangents[i].origin as Vector) + offsetDir * offsetDistance;
+        const tangentDir = normalize(tangents[i].direction as Vector);
+
+        const dotId = id + ("dot" ~ toString(i));
+
+        opFitSpline(
+            context,
+            dotId,
+            {
+                "points" : [
+                    center - tangentDir * dotHalfLength,
+                    center + tangentDir * dotHalfLength
+                ]
+            }
+        );
+
+        dotBodies = qUnion(dotBodies, qCreatedBy(dotId, EntityType.BODY));
+    }
+
+    if (!isQueryEmpty(context, dotBodies))
+    {
+        opCreateCompositePart(
+            context,
+            id + "dotsComposite",
+            {
+                "bodies" : dotBodies,
+                "closed" : false
+            }
+        );
+
+        setProperty(
+            context,
+            {
+                "entities" : qCreatedBy(id + "dotsComposite", EntityType.BODY),
+                "propertyType" : PropertyType.APPEARANCE,
+                "value" : dotColor
+            }
+        );
+    }
 }
 
 //////////////////////////////////////////////////////////////////////
