@@ -364,7 +364,7 @@ returns Query
             0.01 + ((rnd() % 28) / 100.0);
 
         const endParameter =
-            0.9 + ((rnd() % 30) / 100.0);
+            0.78 + ((rnd() % 30) / 100.0);
 
         const coverage = endParameter - startParameter;
 
