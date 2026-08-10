@@ -195,8 +195,16 @@ function drawNeedsInputSketch(
             {
                 const grey = 0.05 + ((rnd() % 18) / 100.0);
                 const alpha = 0.26 + ((rnd() % 30) / 100.0);
+
+                // Boundary guides already sit right next to the face's
+                // real edge, so they get much less jitter budget than
+                // interior guides -- the same wobble that looks fine in
+                // the middle of a face pokes a boundary guide past the
+                // actual silhouette of the geometry.
+                const boundaryDamping = isBoundaryGuide ? 0.35 : 1.0;
+
                 const strokeVariance =
-                    variance * (1.25 + ((rnd() % 175) / 100.0));
+                    variance * (1.25 + ((rnd() % 175) / 100.0)) * boundaryDamping;
 
                 const strokes = handDrawNeedsInputGuide(
                     context,
@@ -262,10 +270,18 @@ function drawNeedsInputSketch(
         {
             if ((rnd() % 100) < 34)
             {
+                // Same boundary damping as the primary guides above --
+                // the first and last secondary guide sit right next to
+                // the face's edge in the cross direction.
+                const isBoundaryGuide2 =
+                    (secondaryIndex == 0) ||
+                    (secondaryIndex == secondaryCount - 1);
+                const boundaryDamping2 = isBoundaryGuide2 ? 0.35 : 1.0;
+
                 const grey2 = 0.10 + ((rnd() % 18) / 100.0);
                 const alpha2 = 0.22 + ((rnd() % 24) / 100.0);
                 const strokeVariance2 =
-                    variance * (1.6 + ((rnd() % 190) / 100.0));
+                    variance * (1.6 + ((rnd() % 190) / 100.0)) * boundaryDamping2;
 
                 const strokes2 = handDrawNeedsInputGuide(
                     context,
