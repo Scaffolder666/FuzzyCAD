@@ -627,12 +627,15 @@ function drawSketchyFaceFill(
         //////////////////////////////////////////////////////////////
         // SECONDARY FIELD
         //
-        // Only 3-5 candidates on a reference-size face, and most are
-        // dropped -- scaled down by the same sizeFactor for smaller
-        // faces (e.g. a fillet band) for the same reason as above.
+        // Same candidate range as the primary field above (12-18 on a
+        // reference-size face, scaled down the same way for smaller
+        // faces) -- this used to be only 3-5, which combined with the
+        // lower keep probability below made the cross-hatch direction
+        // read as noticeably sparser than the primary direction instead
+        // of a roughly balanced two-direction hatch.
         //////////////////////////////////////////////////////////////
 
-        const secondaryCount = max(round((3 + (rnd() % 3)) * sizeFactor), 3);
+        const secondaryCount = max(round((12 + (rnd() % 7)) * sizeFactor), 4);
         var secondaryNames = makeArray(secondaryCount, "");
 
         for (var m = 0; m < secondaryCount; m += 1)
@@ -664,11 +667,22 @@ function drawSketchyFaceFill(
 
         for (var guideEdge2 in evaluateQuery(context, secondaryGuides))
         {
-            if ((rnd() % 100) < 34)
+            const isBoundaryGuide2 =
+                (secondaryIndex == 0) ||
+                (secondaryIndex == secondaryCount - 1);
+
+            // Same keep-probability shape as the primary field above
+            // (interior guides much more likely to survive than
+            // boundary ones) instead of a flat 34% -- that flat rate
+            // was the other half of why the cross-hatch direction ended
+            // up with noticeably fewer visible lines than the primary
+            // direction despite drawing from a similar candidate count.
+            const keepProbability2 = isBoundaryGuide2
+                ? 0.18
+                : 0.46 + ((rnd() % 20) / 100.0);
+
+            if (((rnd() % 100) / 100.0) < keepProbability2)
             {
-                const isBoundaryGuide2 =
-                    (secondaryIndex == 0) ||
-                    (secondaryIndex == secondaryCount - 1);
                 const boundaryDamping2 = isBoundaryGuide2 ? 0.35 : 1.0;
 
                 const grey2 = 0.10 + ((rnd() % 18) / 100.0);
