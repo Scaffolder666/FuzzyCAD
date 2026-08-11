@@ -60,12 +60,15 @@ export const fuzzycadNeedsInputMove = defineFeature(function(context is Context,
 
         const proposedBody = qCreatedBy(id + "duplicate", EntityType.BODY);
 
-        // NEEDS INPUT: sparse, incomplete, more random geometry.
+        // NEEDS INPUT visual language: the same coherent, full-coverage
+        // hand-drawn outline Proposed uses, just recolored black -- the old
+        // sparse/incomplete look is retired. Uncertainty is now signaled by
+        // the grey-faded original + red callout + warning icon instead of
+        // by the candidate geometry itself looking unfinished.
         drawSketchyFaceFill(context, id + "faceFill", proposedBody);
 
-        // Very faint boundary support: enough to read the candidate shape
-        // from difficult camera angles without making it look precise.
-        drawVeryLightGhostOutline(context, id + "ghostOutline", proposedBody);
+        // Makes the mark impossible to miss at a glance.
+        drawWarningIcon(context, id + "warningIcon", proposedBody);
 
         const bbox = evBox3d(context, { "topology" : originalBody, "tight" : true });
         const startPoint = vector(
@@ -367,211 +370,45 @@ function drawBigMoveArrow(
 }
 
 
+//////////////////////////////////////////////////////////////////////
+//
+// COHERENT BLACK OUTLINE (same structure as Proposed's own
+// drawProposedSketch/handDrawProposedEdge -- full-coverage, low-jitter,
+// 2 passes per edge -- just recolored black instead of blue. Needs
+// Input no longer looks visually "unfinished"; the mark itself is
+// signaled by the grey-faded original + red engineering callout +
+// warning icon instead of by sparse/incomplete candidate geometry.
+//
+//////////////////////////////////////////////////////////////////////
+
 function drawSketchyFaceFill(
     context is Context,
     id is Id,
     body is Query)
 {
-    // NEEDS INPUT visual language:
-    // fewer guides, more irregular coverage, partial strokes.
-    // The engineering annotations remain clean elsewhere in the feature.
-    const chordLength = 4.5 * millimeter;
-    const variance = 0.10 * millimeter;
+    const chordLength = 3.2 * millimeter;
+    const variance = 0.38 * millimeter;
+    const needsInputColor = color(0.08, 0.08, 0.08, 0.92);
 
-    var rnd = RandomNumberFunctionWithSalt(id, "sparseNeedsInputFill");
+    var rnd = RandomNumberFunctionWithSalt(id, "needsInputOutline");
     var allStrokes = qNothing();
 
-    const faces = qOwnedByBody(
-        qEverything(EntityType.FACE),
-        body
-    );
+    const edges = qOwnedByBody(qEverything(EntityType.EDGE), body);
+    var edgeIndex = 0;
 
-    var faceIndex = 0;
-
-    for (var faceQuery in evaluateQuery(context, faces))
+    for (var edgeQuery in evaluateQuery(context, edges))
     {
-        const faceId = id + ("face" ~ toString(faceIndex));
-
-        //////////////////////////////////////////////////////////////
-        // PRIMARY FIELD
-        //
-        // Previous Needs Input versions used ~30-50 curves per face.
-        // This intentionally drops to 12-18, then discards many of them.
-        //////////////////////////////////////////////////////////////
-
-        const primaryCount = 12 + (rnd() % 7);
-        var primaryNames = makeArray(primaryCount, "");
-
-        for (var n = 0; n < primaryCount; n += 1)
-        {
-            primaryNames[n] = "primary" ~ toString(n);
-        }
-
-        const primaryGuideId = faceId + "primaryGuides";
-
-        opCreateCurvesOnFace(
+        const strokes = handDrawCoherentEdge(
             context,
-            primaryGuideId,
-            {
-                "curveDefinition" : [
-                    curveOnFaceDefinition(
-                        faceQuery,
-                        FaceCurveCreationType.DIR1_AUTO_SPACED_ISO,
-                        primaryNames,
-                        primaryCount
-                    )
-                ],
-                "showCurves" : false,
-                "skipTrim" : false
-            }
+            id + ("edge" ~ toString(edgeIndex)),
+            chordLength,
+            variance,
+            rnd,
+            edgeQuery
         );
 
-        const primaryGuides = qCreatedBy(primaryGuideId, EntityType.EDGE);
-        var primaryIndex = 0;
-
-        for (var guideEdge in evaluateQuery(context, primaryGuides))
-        {
-            const isBoundaryGuide =
-                (primaryIndex == 0) ||
-                (primaryIndex == primaryCount - 1);
-
-            // Boundary guides are deliberately less likely to survive.
-            // This prevents Needs Input from reading like a crisp CAD shell.
-            const keepProbability = isBoundaryGuide
-                ? 0.18
-                : 0.46 + ((rnd() % 20) / 100.0);
-
-            if (((rnd() % 100) / 100.0) < keepProbability)
-            {
-                const grey = 0.01 + ((rnd() % 18) / 100.0);
-                const alpha = 0.50 + ((rnd() % 30) / 100.0);
-
-                // Boundary guides sit right next to the face's real
-                // edge, so they get much less jitter budget than
-                // interior guides.
-                const boundaryDamping = isBoundaryGuide ? 0.35 : 1.0;
-
-                // Each kept guide gets substantially different wobble.
-                const strokeVariance =
-                    variance *
-                    (1.25 + ((rnd() % 175) / 100.0)) *
-                    boundaryDamping;
-
-                const strokes = handDrawScribbleGuide(
-                    context,
-                    faceId + ("primaryStroke" ~ toString(primaryIndex)),
-                    chordLength,
-                    strokeVariance,
-                    rnd,
-                    guideEdge,
-                    grey,
-                    grey,
-                    grey,
-                    alpha,
-                    false,
-                    0.14
-                );
-
-                allStrokes = qUnion(allStrokes, strokes);
-            }
-
-            primaryIndex += 1;
-        }
-
-        const primaryGuideBodies = qCreatedBy(primaryGuideId, EntityType.BODY);
-        if (!isQueryEmpty(context, primaryGuideBodies))
-        {
-            opDeleteBodies(
-                context,
-                faceId + "deletePrimaryGuides",
-                { "entities" : primaryGuideBodies }
-            );
-        }
-
-        //////////////////////////////////////////////////////////////
-        // SECONDARY FIELD
-        //
-        // Only 3-5 candidates, and most are dropped.
-        //////////////////////////////////////////////////////////////
-
-        const secondaryCount = 3 + (rnd() % 3);
-        var secondaryNames = makeArray(secondaryCount, "");
-
-        for (var m = 0; m < secondaryCount; m += 1)
-        {
-            secondaryNames[m] = "secondary" ~ toString(m);
-        }
-
-        const secondaryGuideId = faceId + "secondaryGuides";
-
-        opCreateCurvesOnFace(
-            context,
-            secondaryGuideId,
-            {
-                "curveDefinition" : [
-                    curveOnFaceDefinition(
-                        faceQuery,
-                        FaceCurveCreationType.DIR2_AUTO_SPACED_ISO,
-                        secondaryNames,
-                        secondaryCount
-                    )
-                ],
-                "showCurves" : false,
-                "skipTrim" : false
-            }
-        );
-
-        const secondaryGuides = qCreatedBy(secondaryGuideId, EntityType.EDGE);
-        var secondaryIndex = 0;
-
-        for (var guideEdge2 in evaluateQuery(context, secondaryGuides))
-        {
-            if ((rnd() % 100) < 34)
-            {
-                const isBoundaryGuide2 =
-                    (secondaryIndex == 0) ||
-                    (secondaryIndex == secondaryCount - 1);
-                const boundaryDamping2 = isBoundaryGuide2 ? 0.35 : 1.0;
-
-                const grey2 = 0.10 + ((rnd() % 18) / 100.0);
-                const alpha2 = 0.22 + ((rnd() % 24) / 100.0);
-                const secondaryVariance =
-                    variance *
-                    (1.6 + ((rnd() % 190) / 100.0)) *
-                    boundaryDamping2;
-
-                const strokes2 = handDrawScribbleGuide(
-                    context,
-                    faceId + ("secondaryStroke" ~ toString(secondaryIndex)),
-                    chordLength * 1.15,
-                    secondaryVariance,
-                    rnd,
-                    guideEdge2,
-                    grey2,
-                    grey2,
-                    grey2,
-                    alpha2,
-                    true,
-                    0.18
-                );
-
-                allStrokes = qUnion(allStrokes, strokes2);
-            }
-
-            secondaryIndex += 1;
-        }
-
-        const secondaryGuideBodies = qCreatedBy(secondaryGuideId, EntityType.BODY);
-        if (!isQueryEmpty(context, secondaryGuideBodies))
-        {
-            opDeleteBodies(
-                context,
-                faceId + "deleteSecondaryGuides",
-                { "entities" : secondaryGuideBodies }
-            );
-        }
-
-        faceIndex += 1;
+        allStrokes = qUnion(allStrokes, strokes);
+        edgeIndex += 1;
     }
 
     if (!isQueryEmpty(context, allStrokes))
@@ -584,269 +421,141 @@ function drawSketchyFaceFill(
                 "closed" : false
             }
         );
+
+        setProperty(
+            context,
+            {
+                "entities" : qCreatedBy(id + "faceFillComposite", EntityType.BODY),
+                "propertyType" : PropertyType.APPEARANCE,
+                "value" : needsInputColor
+            }
+        );
     }
 }
 
-
-//////////////////////////////////////////////////////////////////////
-//
-// PARTIAL / IRREGULAR SCRIBBLE GUIDE
-//
-// Key difference from Proposed:
-// each Needs Input stroke intentionally covers only PART of its guide.
-// That creates visual incompleteness without adding more ink.
-//
-//////////////////////////////////////////////////////////////////////
-
-function handDrawScribbleGuide(
+function handDrawCoherentEdge(
     context is Context,
     id is Id,
     chordLength is ValueWithUnits,
     variance is ValueWithUnits,
     rnd is function,
-    edgeQuery is Query,
-    red is number,
-    green is number,
-    blue is number,
-    alpha is number,
-    singlePass is boolean,
-    mistakeChance is number)
+    edgeQuery is Query)
+returns Query
 {
-    const edgeLength = evLength(
+    const edgeLength = evLength(context, { "entities" : edgeQuery });
+    const pointCount = ceil(max(edgeLength / chordLength, 5));
+
+    const tangents = @evEdgeTangentLines(
         context,
-        { "entities" : edgeQuery }
+        {
+            "edge" : edgeQuery,
+            "parameters" : range(0.0, 0.995, pointCount)
+        }
     );
 
-    // Jitter capped to a fraction of the guide's OWN length -- a short
-    // guide on a tight fillet/small area otherwise gets the same
-    // absolute wobble as a long guide on a flat face.
-    const maxJitter = min(variance, edgeLength * 0.05);
+    var result = qNothing();
 
-    // Needs Input is intentionally sparse:
-    // normally one stroke, occasionally a second pass.
-    const numStrokes = singlePass
-        ? 1
-        : (((rnd() % 100) < 78) ? 1 : 2);
-
-    var strokesQuery = qNothing();
-
-    for (var strokeIndex = 0; strokeIndex < numStrokes; strokeIndex += 1)
+    // Coherent: always 2 passes, low jitter, full coverage.
+    for (var strokeIndex = 0; strokeIndex < 2; strokeIndex += 1)
     {
-        //////////////////////////////////////////////////////////////
-        // RANDOM PARTIAL COVERAGE
-        //
-        // Instead of always drawing parameter 0 -> 1, each stroke begins
-        // and ends at different locations on the guide.
-        //////////////////////////////////////////////////////////////
-
-        const startParameter =
-            0.01 + ((rnd() % 28) / 100.0);
-
-        const endParameter =
-            0.78 + ((rnd() % 30) / 100.0);
-
-        const coverage = endParameter - startParameter;
-
-        const pointCount = ceil(
-            max(
-                (edgeLength * coverage) / chordLength,
-                4
-            )
-        );
-
-        const tangents = @evEdgeTangentLines(
-            context,
-            {
-                "edge" : edgeQuery,
-                "parameters" : range(
-                    startParameter,
-                    endParameter,
-                    pointCount
-                )
-            }
-        );
-
-        var newPoints = makeArray(pointCount, undefined);
+        var pts = makeArray(pointCount, undefined);
 
         for (var i = 0; i < pointCount; i += 1)
         {
-            const basePt = tangents[i].origin as Vector;
-            const tangentDir = normalize(tangents[i].direction as Vector);
+            var p = tangents[i].origin as Vector;
+            const s = rnd();
+            const factor = 0.55 + ((rnd() % 100) / 100.0) * 0.35;
 
-            // Jitter only WITHIN the plane perpendicular to the guide's
-            // own tangent, never along it -- along-tangent jitter can
-            // push a point past its neighbor on a tightly curved guide,
-            // which made the fitted spline double back on itself.
-            const ref =
-                (abs(tangentDir[2]) < 0.9)
-                ? vector(0, 0, 1)
-                : vector(0, 1, 0);
+            p[0] += 2 * (((s + i * 17 + strokeIndex * 29) % 100) / 100.0 - 0.5) * variance * factor;
+            p[1] += 2 * (((s + i * 23 + strokeIndex * 37) % 100) / 100.0 - 0.5) * variance * factor;
+            p[2] += 2 * (((s + i * 31 + strokeIndex * 41) % 100) / 100.0 - 0.5) * variance * factor;
 
-            const perp1 = normalize(cross(tangentDir, ref));
-            const perp2 = cross(tangentDir, perp1);
-
-            const s1 = rnd();
-            const s2 = rnd();
-
-            const jitterFactor =
-                0.65 + ((s2 % 100) / 100.0) * 0.85;
-
-            const isMistake =
-                (((rnd() % 100) / 100.0) < mistakeChance);
-
-            const mistakeFactor = isMistake
-                ? 1.2 + ((rnd() % 100) / 100.0) * 0.6
-                : 1.0;
-
-            // Slightly more distortion toward the ends makes strokes feel
-            // less like uniformly perturbed CAD isocurves.
-            const normalizedIndex =
-                pointCount > 1
-                ? i / (pointCount - 1)
-                : 0.5;
-
-            const endLooseness =
-                1.0 +
-                abs(normalizedIndex - 0.5) * 0.5;
-
-            const amount =
-                maxJitter * jitterFactor * mistakeFactor * endLooseness;
-
-            const offset1 =
-                2 * (((s1 + i * 17 + strokeIndex * 29) % 100) / 100.0 - 0.5) * amount;
-            const offset2 =
-                2 * (((s1 + i * 31 + strokeIndex * 43) % 100) / 100.0 - 0.5) * amount;
-
-            const perturbed = basePt + perp1 * offset1 + perp2 * offset2;
-
-            newPoints[i] = perturbed;
+            pts[i] = p;
         }
 
-        const strokeId = id + ("_stroke" ~ toString(strokeIndex));
-
-        opFitSpline(
-            context,
-            strokeId,
-            { "points" : newPoints }
-        );
-
-        const strokeBody = qCreatedBy(strokeId, EntityType.BODY);
-
-        // Per-stroke opacity remains intentionally uneven.
-        const alphaJitter =
-            (((rnd() % 100) / 100.0) - 0.5) * 0.18;
-
-        const strokeAlpha =
-            min(max(alpha + alphaJitter, 0.14), 0.72);
-
-        setProperty(
-            context,
-            {
-                "entities" : strokeBody,
-                "propertyType" : PropertyType.APPEARANCE,
-                "value" : color(
-                    red,
-                    green,
-                    blue,
-                    strokeAlpha
-                )
-            }
-        );
-
-        strokesQuery = qUnion(strokesQuery, strokeBody);
+        const strokeId = id + ("stroke" ~ toString(strokeIndex));
+        opFitSpline(context, strokeId, { "points" : pts });
+        result = qUnion(result, qCreatedBy(strokeId, EntityType.BODY));
     }
 
-    return strokesQuery;
+    return result;
 }
 
-
 //////////////////////////////////////////////////////////////////////
 //
-// VERY LIGHT GHOST OUTLINE
+// WARNING ICON
 //
-// Needs Input uses sparse / incomplete / random interior strokes, but a
-// completely missing boundary can make the candidate geometry hard to
-// read from some camera angles. This adds ONE very faint, clean outline
-// over the temporary proposed body before that exact body is deleted.
-//
-// Important visual hierarchy:
-//   sparse random strokes = uncertainty / incompleteness
-//   faint outline         = only enough structure to read the shape
-//   red annotation        = action / engineering direction
-//
-// The outline is deliberately low opacity and has no random jitter.
-// We stop edge sampling just before parameter 1.0 to avoid feeding an
-// identical first/last point into opFitSpline on closed circular edges.
+// A filled red triangle with a "!" mark, floated above the candidate
+// body's own bounding box -- makes a Needs Input mark impossible to
+// miss at a glance, on top of (not instead of) the grey-fade + red
+// engineering callout the feature already draws.
 //
 //////////////////////////////////////////////////////////////////////
 
-function drawVeryLightGhostOutline(
+function drawWarningIcon(
     context is Context,
     id is Id,
     body is Query)
 {
-    const outlineColor = color(0.38, 0.38, 0.38, 0.14);
-    const sampleSpacing = 5 * millimeter;
+    const bbox = evBox3d(context, { "topology" : body, "tight" : true });
+    const size = min(max(norm(bbox.maxCorner - bbox.minCorner) * 0.12, 8 * millimeter), 20 * millimeter);
+    const half = size / 2;
 
-    const bodyEdges = evaluateQuery(
-        context,
-        qOwnedByBody(
-            qEverything(EntityType.EDGE),
-            body
-        )
-    );
+    const center =
+        vector(
+            (bbox.minCorner[0] + bbox.maxCorner[0]) / 2,
+            (bbox.minCorner[1] + bbox.maxCorner[1]) / 2,
+            bbox.maxCorner[2]
+        ) + vector(0, 0, 1) * (size * 0.9);
 
-    var outlineBodies = qNothing();
+    const iconColor = color(0.90, 0.10, 0.08, 1.0);
+    const iconPlane = plane(center, vector(0, 1, 0));
+    const uv = worldToPlane(iconPlane, center);
 
-    for (var edgeIndex = 0; edgeIndex < size(bodyEdges); edgeIndex += 1)
-    {
-        const edgeQuery = bodyEdges[edgeIndex];
-        const edgeLength = evLength(context, { "entities" : edgeQuery });
-        const pointCount = ceil(max(edgeLength / sampleSpacing, 5));
+    const triSketch = newSketchOnPlane(context, id + "triSketch", { "sketchPlane" : iconPlane });
 
-        const tangents = @evEdgeTangentLines(
-            context,
-            {
-                "edge" : edgeQuery,
-                "parameters" : range(0.0, 0.995, pointCount)
-            }
-        );
+    skLineSegment(triSketch, "side1", {
+            "start" : vector(uv[0], uv[1] + half),
+            "end" : vector(uv[0] - half * 0.95, uv[1] - half * 0.75)
+    });
+    skLineSegment(triSketch, "side2", {
+            "start" : vector(uv[0] - half * 0.95, uv[1] - half * 0.75),
+            "end" : vector(uv[0] + half * 0.95, uv[1] - half * 0.75)
+    });
+    skLineSegment(triSketch, "side3", {
+            "start" : vector(uv[0] + half * 0.95, uv[1] - half * 0.75),
+            "end" : vector(uv[0], uv[1] + half)
+    });
 
-        var points = makeArray(pointCount, undefined);
+    skSolve(triSketch);
 
-        for (var p = 0; p < pointCount; p += 1)
-        {
-            points[p] = tangents[p].origin as Vector;
-        }
+    opExtractSurface(context, id + "triSurface", {
+            "faces" : qSketchRegion(id + "triSketch"),
+            "offset" : 0 * meter,
+            "useFacesAroundToTrimOffset" : false
+    });
 
-        const outlineId = id + ("edge" ~ toString(edgeIndex));
-        opFitSpline(context, outlineId, { "points" : points });
+    opDeleteBodies(context, id + "deleteTriSketch", {
+            "entities" : qCreatedBy(id + "triSketch")
+    });
 
-        const outlineBody = qCreatedBy(outlineId, EntityType.BODY);
+    setProperty(context, {
+            "entities" : qCreatedBy(id + "triSurface", EntityType.BODY),
+            "propertyType" : PropertyType.APPEARANCE,
+            "value" : iconColor
+    });
 
-        setProperty(
-            context,
-            {
-                "entities" : outlineBody,
-                "propertyType" : PropertyType.APPEARANCE,
-                "value" : outlineColor
-            }
-        );
+    const textSketch = newSketchOnPlane(context, id + "iconText", { "sketchPlane" : iconPlane });
+    const textSize = size * 0.30;
 
-        outlineBodies = qUnion(outlineBodies, outlineBody);
-    }
+    skText(textSketch, "exclamation", {
+            "text" : "!",
+            "fontName" : "OpenSans-Regular.ttf",
+            "firstCorner" : vector(uv[0] - textSize * 0.3, uv[1] - half * 0.55),
+            "secondCorner" : vector(uv[0] + textSize * 0.3, uv[1] - half * 0.55 + textSize * 1.5)
+    });
 
-    if (!isQueryEmpty(context, outlineBodies))
-    {
-        opCreateCompositePart(
-            context,
-            id + "outlineComposite",
-            {
-                "bodies" : outlineBodies,
-                "closed" : false
-            }
-        );
-    }
+    skSolve(textSketch);
 }
 
 function RandomNumberFunctionWithSalt(
