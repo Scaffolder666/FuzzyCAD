@@ -1,93 +1,46 @@
 FeatureScript 3044;
-import(path : "onshape/std/common.fs", version : "3044.0");
+import(path : "onshape/std/geometry.fs", version : "3044.0");
 
-// FuzzyCAD Compare Alternatives
+// FuzzyCAD Compare Alternatives - V4
 //
-// Represents a THIRD collaboration situation, distinct from every other
-// FuzzyCAD custom feature in this directory:
+// V4 changes the model architecture:
 //
-//   Proposed*    -- someone knows the exact solution, proposes it.
-//   Needs Input* -- someone knows an operation is needed, not the value.
-//   Compare Alternatives (this file) -- multiple concrete, already-exact
-//     solutions exist for the SAME slot (e.g. two different commercial
-//     casters). Nobody is "proposing" over anybody else -- the point is
-//     to keep every candidate available, compare them side by side in
-//     the viewport one at a time, discuss trade-offs, then commit.
+//   Comparison slot / placeholder = local body in this Part Studio
+//   Current option               = PartStudioData from another Part Studio
+//   Alternative A                = PartStudioData from another Part Studio
+//   Alternative B (optional)     = PartStudioData from another Part Studio
 //
-// Because every candidate is already a real commercial part (not a
-// sketchy/uncertain shape), this feature does NOT use the hand-drawn
-// sketchy-fill visualization every Proposed*/Needs Input* feature uses.
-// Whichever option is active is shown as exact, untouched geometry --
-// the uncertainty here is BETWEEN options, not inside any one of them.
+// The three concrete candidates are now symmetric. The current Part Studio
+// only owns a temporary placeholder that marks the decision location.
 //
-// ARCHITECTURE, reusing what's already proven in this codebase:
-//   - Same hidden "accepted" boolean (UIHint.ALWAYS_HIDDEN) as every
-//     other Proposed*/Needs Input* feature -- the right panel patches it
-//     via the existing partstudio-update-feature parameterUpdates path
-//     (confirmed live, generic value merge -- see that route).
-//   - Same setProperty(PropertyType.APPEARANCE, alpha near 0) fade
-//     technique every other feature uses to hide a body it isn't
-//     currently showing, instead of trying to delete/suppress bodies
-//     that belong to OTHER features in the tree (not something this
-//     feature owns and shouldn't reach into).
-//   - "activeOption" is a plain string parameter (not a FeatureScript
-//     `enum` type -- avoids needing a second Feature Studio just to
-//     declare one, and the right panel already has a confirmed-generic
-//     way to PATCH a BTMParameterEnum-shaped value; a plain
-//     BTMParameterString is even simpler to round-trip and was chosen
-//     here for exactly that reason). Values used: "CURRENT",
-//     "ALTERNATIVE_A", "ALTERNATIVE_B".
+// IMPORTANT:
+// - Candidate references select an ENTIRE source Part Studio.
+// - This deliberately avoids the IMPORT_DERIVED_NO_PARTS failure produced by
+//   mesh-only Part Studios. Mesh support is not claimed in this V4.
+// - All BRep solid bodies in the referenced Part Studio are treated as one
+//   candidate option.
+// - No Mate Connector is required on any candidate.
+// - The source candidate origin is placed at the placeholder body's bounding-
+//   box center. Per-option XYZ translation and XYZ rotation provide manual
+//   placement adjustment.
+// - While the comparison is open, the placeholder stays in the model but is
+//   faded.
+// - Once Accept selected sets accepted=true, the chosen candidate remains
+//   instantiated and the placeholder is deleted.
 //
-// TWO THINGS IN THIS FILE ARE GENUINELY UNCONFIRMED -- READ BEFORE
-// TESTING, and see the fallback notes inline at each site:
+// UNCONFIRMED (flagging for whoever debugs a compile failure next):
+// - `PartStudioItemType.ENTIRE_PART_STUDIO` as a "Filter" value on a
+//   PartStudioData parameter -- not verified against a real compile.
+// - `source.partQuery` as a writable field on the PartStudioData map --
+//   not verified against a real compile.
+// If the Feature Studio editor rejects either of these, that is almost
+// certainly why nothing reaches the right panel: a Feature Studio that
+// doesn't compile publishes no custom feature type, so there is nothing
+// to insert and nothing for the panel to detect.
 //
-// (1) CROSS-TAB QUERY SELECTION.
-//     "Current component" / "Alternative A" / "Alternative B" are all
-//     declared as ordinary `is Query` parameters with an EntityType.BODY
-//     filter -- the exact same declaration shape every other custom
-//     feature in this directory already uses successfully. The
-//     assumption is that Onshape's own Query-parameter selection dialog
-//     lets someone click over to a DIFFERENT Part Studio tab in the same
-//     document and select a body there while "Alternative A"'s selection
-//     is active, the same way native features let you do this. This is
-//     ordinary Onshape UI behavior, not something FeatureScript code
-//     requests -- but it has not been verified against a genuinely
-//     different Part Studio tab from inside a CUSTOM feature's dialog
-//     specifically. FIRST THING TO CHECK when testing this feature: open
-//     its dialog, click "Alternative A", and try selecting a body on a
-//     different tab. If Onshape restricts the selection to the current
-//     tab only, that is the concrete signal this feature genuinely needs
-//     a PartStudioData-style cross-document reference parameter instead
-//     (BTMParameterReferencePartStudio -- the wire format for that is
-//     already live-captured in this repo's
-//     app/api/onshape/partstudio-add-derive-debug/route.ts, including
-//     the confirmed `namespace: "{documentId}::m{microversionId}"`
-//     convention and an `includeMateConnectors: true` flag -- that
-//     capture is of Onshape's native "Derive" feature, not a custom one,
-//     but proves the underlying REST wire format works; a custom
-//     feature would need the equivalent FeatureScript-level construct,
-//     which is the part genuinely unconfirmed here).
-//
-// (2) MATE-CONNECTOR-BASED ALIGNMENT.
-//     alignAlternativeToCurrent() below reads ONE owned Mate Connector
-//     off "Current component" and ONE off whichever alternative is
-//     active, then builds a Transform that maps the alternative's
-//     connector frame onto the current one's -- so switching candidates
-//     never relies on bounding-box centers or any other silently-wrong-
-//     if-the-part-changes-shape heuristic, per the explicit requirement
-//     this feature was scoped against. qMateConnectorsOfParts() and
-//     evMateConnector() are real, documented FeatureScript standard-
-//     library calls, but the exact transform-composition helper used
-//     here (mapping one CoordSystem onto another via toWorld/inverse) is
-//     assembled from general FeatureScript knowledge, not copied from
-//     anywhere already confirmed live in this codebase -- unlike, say,
-//     opFillet's tangentPropagation flag (proposedFillet.fs), which
-//     really was fixed after a live FILLET_FAILED. If this specific
-//     composition doesn't compile or doesn't align correctly, the
-//     required convention is: give "Current component" and every
-//     alternative ONE mate connector each, named/placed consistently
-//     (e.g. "Mount"), before testing again -- do not fall back to a
-//     bounding-box heuristic, per the original scoping decision.
+// Right-panel protocol stays unchanged:
+//   activeOption = "CURRENT" | "ALTERNATIVE_A" | "ALTERNATIVE_B"
+//   accepted     = boolean
 
 annotation {
     "Feature Type Name" : "FuzzyCAD Compare Alternatives"
@@ -95,20 +48,73 @@ annotation {
 export const fuzzycadCompareAlternatives = defineFeature(function(context is Context, id is Id, definition is map)
     precondition
     {
+        // Local host geometry. This is NOT one of the competing candidates.
+        // It only marks where this component decision lives in the current
+        // Part Studio.
         annotation {
-            "Name" : "Current component",
+            "Name" : "Comparison slot",
             "Filter" : EntityType.BODY,
             "MaxNumberOfPicks" : 1
         }
-        definition.currentComponent is Query;
+        definition.comparisonSlot is Query;
 
+        // CURRENT OPTION -------------------------------------------------
+        // PartStudioData is a real cross-tab reference parameter.
+        // V4 deliberately selects the ENTIRE Part Studio rather than an
+        // individual solid item. This matches the intended workflow where
+        // each candidate lives in its own source Part Studio.
         annotation {
-            "Name" : "Alternative A",
-            "Filter" : EntityType.BODY,
+            "Name" : "Current Part Studio",
+            "Filter" : PartStudioItemType.ENTIRE_PART_STUDIO,
             "MaxNumberOfPicks" : 1
         }
-        definition.alternativeA is Query;
+        definition.currentOption is PartStudioData;
 
+        annotation { "Name" : "Current - Move X" }
+        isLength(definition.currentMoveX, LENGTH_BOUNDS);
+
+        annotation { "Name" : "Current - Move Y" }
+        isLength(definition.currentMoveY, LENGTH_BOUNDS);
+
+        annotation { "Name" : "Current - Move Z" }
+        isLength(definition.currentMoveZ, LENGTH_BOUNDS);
+
+        annotation { "Name" : "Current - Rotate X" }
+        isAngle(definition.currentRotateX, ANGLE_360_BOUNDS);
+
+        annotation { "Name" : "Current - Rotate Y" }
+        isAngle(definition.currentRotateY, ANGLE_360_BOUNDS);
+
+        annotation { "Name" : "Current - Rotate Z" }
+        isAngle(definition.currentRotateZ, ANGLE_360_BOUNDS);
+
+        // ALTERNATIVE A --------------------------------------------------
+        annotation {
+            "Name" : "Alternative A Part Studio",
+            "Filter" : PartStudioItemType.ENTIRE_PART_STUDIO,
+            "MaxNumberOfPicks" : 1
+        }
+        definition.alternativeA is PartStudioData;
+
+        annotation { "Name" : "Alternative A - Move X" }
+        isLength(definition.alternativeAMoveX, LENGTH_BOUNDS);
+
+        annotation { "Name" : "Alternative A - Move Y" }
+        isLength(definition.alternativeAMoveY, LENGTH_BOUNDS);
+
+        annotation { "Name" : "Alternative A - Move Z" }
+        isLength(definition.alternativeAMoveZ, LENGTH_BOUNDS);
+
+        annotation { "Name" : "Alternative A - Rotate X" }
+        isAngle(definition.alternativeARotateX, ANGLE_360_BOUNDS);
+
+        annotation { "Name" : "Alternative A - Rotate Y" }
+        isAngle(definition.alternativeARotateY, ANGLE_360_BOUNDS);
+
+        annotation { "Name" : "Alternative A - Rotate Z" }
+        isAngle(definition.alternativeARotateZ, ANGLE_360_BOUNDS);
+
+        // OPTIONAL ALTERNATIVE B ----------------------------------------
         annotation {
             "Name" : "Include a second alternative",
             "Default" : false
@@ -118,18 +124,32 @@ export const fuzzycadCompareAlternatives = defineFeature(function(context is Con
         if (definition.hasAlternativeB)
         {
             annotation {
-                "Name" : "Alternative B",
-                "Filter" : EntityType.BODY,
+                "Name" : "Alternative B Part Studio",
+                "Filter" : PartStudioItemType.ENTIRE_PART_STUDIO,
                 "MaxNumberOfPicks" : 1
             }
-            definition.alternativeB is Query;
+            definition.alternativeB is PartStudioData;
+
+            annotation { "Name" : "Alternative B - Move X" }
+            isLength(definition.alternativeBMoveX, LENGTH_BOUNDS);
+
+            annotation { "Name" : "Alternative B - Move Y" }
+            isLength(definition.alternativeBMoveY, LENGTH_BOUNDS);
+
+            annotation { "Name" : "Alternative B - Move Z" }
+            isLength(definition.alternativeBMoveZ, LENGTH_BOUNDS);
+
+            annotation { "Name" : "Alternative B - Rotate X" }
+            isAngle(definition.alternativeBRotateX, ANGLE_360_BOUNDS);
+
+            annotation { "Name" : "Alternative B - Rotate Y" }
+            isAngle(definition.alternativeBRotateY, ANGLE_360_BOUNDS);
+
+            annotation { "Name" : "Alternative B - Rotate Z" }
+            isAngle(definition.alternativeBRotateZ, ANGLE_360_BOUNDS);
         }
 
-        // Which candidate is currently shown. Not user-editable in
-        // Onshape's own dialog -- the FuzzyCAD right panel is the only
-        // intended way to change this, via the existing generic
-        // parameterUpdates PATCH path (same mechanism every other
-        // hidden-parameter field in this directory already uses).
+        // Controlled by the FuzzyCAD right panel.
         annotation {
             "Name" : "Active option",
             "Default" : "CURRENT",
@@ -137,10 +157,6 @@ export const fuzzycadCompareAlternatives = defineFeature(function(context is Con
         }
         definition.activeOption is string;
 
-        // Same hidden-accepted architecture as every other Proposed*/
-        // Needs Input* feature: while false, this feature only ever
-        // shows a candidate for comparison. Once true, it commits
-        // whichever option was active and discards the rest.
         annotation {
             "Name" : "Accepted",
             "Default" : false,
@@ -149,149 +165,164 @@ export const fuzzycadCompareAlternatives = defineFeature(function(context is Con
         definition.accepted is boolean;
     }
     {
-        if (isQueryEmpty(context, definition.currentComponent) || isQueryEmpty(context, definition.alternativeA))
+        if (isQueryEmpty(context, definition.comparisonSlot))
         {
-            return;
+            throw regenError(
+                "Select a local placeholder body for Comparison slot.",
+                ["comparisonSlot"]
+            );
         }
 
-        const hasB = definition.hasAlternativeB && !isQueryEmpty(context, definition.alternativeB);
+        // The placeholder defines the slot location only.
+        const slotBox = evBox3d(context, {
+                "topology" : definition.comparisonSlot,
+                "tight" : true
+        });
 
-        // -----------------------------------------------------------
-        // ACCEPTED STATE
+        const slotCenter = vector(
+                (slotBox.minCorner[0] + slotBox.maxCorner[0]) / 2,
+                (slotBox.minCorner[1] + slotBox.maxCorner[1]) / 2,
+                (slotBox.minCorner[2] + slotBox.maxCorner[2]) / 2
+        );
+
+        // Pick one candidate and its independently remembered placement.
+        var source is PartStudioData = definition.currentOption;
+        var moveX = definition.currentMoveX;
+        var moveY = definition.currentMoveY;
+        var moveZ = definition.currentMoveZ;
+        var rotateX = definition.currentRotateX;
+        var rotateY = definition.currentRotateY;
+        var rotateZ = definition.currentRotateZ;
+        var instanceName = "current";
+
+        if (definition.activeOption == "ALTERNATIVE_A")
+        {
+            source = definition.alternativeA;
+            moveX = definition.alternativeAMoveX;
+            moveY = definition.alternativeAMoveY;
+            moveZ = definition.alternativeAMoveZ;
+            rotateX = definition.alternativeARotateX;
+            rotateY = definition.alternativeARotateY;
+            rotateZ = definition.alternativeARotateZ;
+            instanceName = "alternativeA";
+        }
+        else if (
+            definition.activeOption == "ALTERNATIVE_B" &&
+            definition.hasAlternativeB)
+        {
+            source = definition.alternativeB;
+            moveX = definition.alternativeBMoveX;
+            moveY = definition.alternativeBMoveY;
+            moveZ = definition.alternativeBMoveZ;
+            rotateX = definition.alternativeBRotateX;
+            rotateY = definition.alternativeBRotateY;
+            rotateZ = definition.alternativeBRotateZ;
+            instanceName = "alternativeB";
+        }
+
+        // The reference points at the entire source Part Studio. Instantiate
+        // only its BRep solid bodies. This intentionally excludes mesh-only
+        // geometry, surfaces, sketches, mate connectors, etc.
+        source.partQuery = qBodyType(source.partQuery, BodyType.SOLID);
+
+        // Official PartStudioData -> Instantiator path. Placement is
+        // applied via a SEPARATE opTransform call after instantiate(),
+        // exactly like V3 (confirmed compiling and inserting live) --
+        // V4 originally tried passing "transform" directly inside
+        // addInstance's options map, which is not a confirmed field on
+        // that map and is the most likely single cause of a compile or
+        // silent-no-placement failure. Reverted to the confirmed pattern.
+        const instantiator = newInstantiator(id + "activeCandidate");
+        const candidateQuery = addInstance(instantiator, source, {
+                "name" : instanceName
+        });
+        instantiate(context, instantiator);
+
+        if (isQueryEmpty(context, candidateQuery))
+        {
+            throw regenError(
+                "The selected candidate Part Studio has no solid bodies to instantiate.",
+                [instanceName == "current" ? "currentOption" : instanceName == "alternativeA" ? "alternativeA" : "alternativeB"]
+            );
+        }
+
+        // Candidate placement:
         //
-        // Whichever option was active when Accept happened becomes the
-        // final, committed geometry. The other candidates are removed
-        // from this feature's own output entirely -- there is nothing
-        // left to switch between once accepted.
-        // -----------------------------------------------------------
+        // 1. rotate candidate around its own source origin;
+        // 2. translate that origin to the placeholder center;
+        // 3. apply the saved XYZ offset from that slot center.
+        //
+        // This intentionally does NOT guess a mounting point from candidate
+        // geometry. The collaborator controls the final placement.
+        const sourceOrigin = vector(0, 0, 0) * meter;
+
+        const rotateAroundX = rotationAround(
+                line(sourceOrigin, X_DIRECTION),
+                rotateX
+        );
+
+        const rotateAroundY = rotationAround(
+                line(sourceOrigin, Y_DIRECTION),
+                rotateY
+        );
+
+        const rotateAroundZ = rotationAround(
+                line(sourceOrigin, Z_DIRECTION),
+                rotateZ
+        );
+
+        const moveOffset = vector(moveX, moveY, moveZ);
+        const translation = transform(slotCenter + moveOffset);
+
+        const placement =
+            translation *
+            rotateAroundZ *
+            rotateAroundY *
+            rotateAroundX;
+
+        opTransform(context, id + "placeCandidate", {
+                "bodies" : candidateQuery,
+                "transform" : placement
+        });
+
         if (definition.accepted)
         {
-            if (definition.activeOption == "CURRENT")
-            {
-                // Current component already exists upstream of this
-                // feature (created by whatever feature made it originally)
-                // -- nothing to add, nothing to remove, just leave it as
-                // is. No opDeleteBodies call here: this feature does not
-                // own "Current component" and should never delete
-                // another feature's output.
-                return;
-            }
-
-            const chosenAlternative =
-                definition.activeOption == "ALTERNATIVE_B" && hasB
-                ? definition.alternativeB
-                : definition.alternativeA;
-
-            // Hide the original -- same fade-to-near-zero technique every
-            // other Proposed*/Needs Input* feature uses instead of trying
-            // to delete a body this feature did not create.
-            setProperty(context, {
-                    "entities" : definition.currentComponent,
-                    "propertyType" : PropertyType.APPEARANCE,
-                    "value" : color(0.75, 0.75, 0.75, 0.02)
+            // Commit point: the chosen candidate is now the real geometry for
+            // this slot. Remove the local placeholder only after acceptance.
+            opDeleteBodies(context, id + "removeAcceptedSlot", {
+                    "entities" : definition.comparisonSlot
             });
-
-            placeAlignedCopy(context, id + "acceptedAlternative", definition.currentComponent, chosenAlternative);
             return;
         }
 
-        // -----------------------------------------------------------
-        // PENDING STATE: show exactly one candidate, faded/hidden
-        // originals for the rest, so only one body reads as "here" at
-        // a time even though every candidate technically still exists
-        // in the tree for as long as the comparison stays open.
-        // -----------------------------------------------------------
-
-        const showingCurrent = definition.activeOption == "CURRENT";
-        const showingB = definition.activeOption == "ALTERNATIVE_B" && hasB;
-        const showingA = !showingCurrent && !showingB;
-
-        // Only fade Current when it's NOT the active option -- same
-        // pattern every other Proposed*/Needs Input* feature in this
-        // directory uses (setProperty is only ever called to fade,
-        // never to force a color back). Forcing color(1,1,1,1) here
-        // when showingCurrent used to overwrite Current's real material
-        // color with solid white instead of leaving it untouched.
-        if (!showingCurrent)
-        {
-            setProperty(context, {
-                    "entities" : definition.currentComponent,
-                    "propertyType" : PropertyType.APPEARANCE,
-                    "value" : color(0.75, 0.75, 0.75, 0.02)
-            });
-        }
-
-        if (showingA)
-        {
-            placeAlignedCopy(context, id + "previewAlternativeA", definition.currentComponent, definition.alternativeA);
-        }
-
-        if (hasB && showingB)
-        {
-            placeAlignedCopy(context, id + "previewAlternativeB", definition.currentComponent, definition.alternativeB);
-        }
-    });
-
-//////////////////////////////////////////////////////////////////////
-//
-// MATE-CONNECTOR-ALIGNED PLACEMENT
-//
-// Duplicates `alternativeBody` (opPattern, zero-offset first) then
-// applies a Transform mapping ITS owned mate connector onto
-// `currentComponent`'s owned mate connector, so the alternative lands
-// exactly where Current sits, at Current's orientation -- not at
-// whatever raw position the alternative's own Part Studio happened to
-// place it at, and never approximated via a bounding-box center.
-//
-// Requires exactly one owned Mate Connector on each of the two bodies
-// (see the file header's item (2) for the exact convention this
-// assumes). Throws a clear regenError instead of silently placing the
-// alternative at the wrong spot if either body has zero or more than
-// one -- ambiguous which connector should be the placement reference.
-//
-//////////////////////////////////////////////////////////////////////
-
-function placeAlignedCopy(
-    context is Context,
-    id is Id,
-    currentComponent is Query,
-    alternativeBody is Query)
-{
-    const currentConnectors = evaluateQuery(context, qMateConnectorsOfParts(currentComponent));
-    const alternativeConnectors = evaluateQuery(context, qMateConnectorsOfParts(alternativeBody));
-
-    if (size(currentConnectors) != 1)
+        // Open comparison: keep the slot query alive and merely fade the
+        // placeholder. Switching Current/A/B only changes which external
+        // candidate is instantiated; the slot itself is never deleted.
+        setProperty(context, {
+                "entities" : definition.comparisonSlot,
+                "propertyType" : PropertyType.APPEARANCE,
+                "value" : color(0.75, 0.75, 0.75, 0.06)
+        });
+    },
     {
-        throw regenError(
-            "\"Current component\" needs exactly one owned Mate Connector to use as its placement reference (found "
-            ~ toString(size(currentConnectors))
-            ~ "). Add one Mate Connector to the current component before comparing alternatives.",
-            currentComponent
-        );
-    }
+        "currentMoveX" : 0 * millimeter,
+        "currentMoveY" : 0 * millimeter,
+        "currentMoveZ" : 0 * millimeter,
+        "currentRotateX" : 0 * degree,
+        "currentRotateY" : 0 * degree,
+        "currentRotateZ" : 0 * degree,
 
-    if (size(alternativeConnectors) != 1)
-    {
-        throw regenError(
-            "This alternative needs exactly one owned Mate Connector at its mounting reference (found "
-            ~ toString(size(alternativeConnectors))
-            ~ "). Add one Mate Connector to the alternative's source Part Studio, at the same mounting point Current component uses, before comparing.",
-            alternativeBody
-        );
-    }
+        "alternativeAMoveX" : 0 * millimeter,
+        "alternativeAMoveY" : 0 * millimeter,
+        "alternativeAMoveZ" : 0 * millimeter,
+        "alternativeARotateX" : 0 * degree,
+        "alternativeARotateY" : 0 * degree,
+        "alternativeARotateZ" : 0 * degree,
 
-    const currentFrame = evMateConnector(context, { "mateConnector" : currentConnectors[0] });
-    const alternativeFrame = evMateConnector(context, { "mateConnector" : alternativeConnectors[0] });
-
-    // Maps a point/direction expressed in the alternative connector's
-    // local frame into world space, then out of world space into the
-    // current connector's local frame -- net effect: the alternative's
-    // connector ends up exactly where the current connector already is.
-    const alignment = toWorld(currentFrame) * inverse(toWorld(alternativeFrame));
-
-    opPattern(context, id + "duplicate", {
-            "entities" : alternativeBody,
-            "transforms" : [alignment],
-            "instanceNames" : ["aligned"]
+        "alternativeBMoveX" : 0 * millimeter,
+        "alternativeBMoveY" : 0 * millimeter,
+        "alternativeBMoveZ" : 0 * millimeter,
+        "alternativeBRotateX" : 0 * degree,
+        "alternativeBRotateY" : 0 * degree,
+        "alternativeBRotateZ" : 0 * degree
     });
-}

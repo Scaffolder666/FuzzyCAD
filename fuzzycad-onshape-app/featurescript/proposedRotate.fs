@@ -430,6 +430,12 @@ function handDrawEdgeSketchy(
     var edgeLength = evLength(context, { "entities" : edgeQuery });
     var pointCount = ceil(max(edgeLength / chordLength, 5));
 
+    // Jitter capped to a fraction of the edge's OWN length -- a short
+    // edge on a small/complex area otherwise gets the same absolute
+    // wobble as a long edge on a flat face, which can push a stroke
+    // past the actual silhouette of the geometry.
+    var maxJitter = min(variance, edgeLength * 0.05);
+
     var tangents = @evEdgeTangentLines(context, {
             "edge" : edgeQuery,
             "parameters" : range(0.0, 1.0, pointCount)
@@ -448,20 +454,26 @@ function handDrawEdgeSketchy(
         {
             // .origin already carries length units -- do NOT multiply by meter.
             var basePt = tangents[i].origin as Vector;
+            var tangentDir = normalize(tangents[i].direction as Vector);
+
+            // Jitter only WITHIN the plane perpendicular to the edge's
+            // own tangent, never along it -- along-tangent jitter can
+            // push a point past its neighbor on a tightly curved edge,
+            // making the fitted spline double back on itself.
+            var ref = (abs(tangentDir[2]) < 0.9) ? vector(0, 0, 1) : vector(0, 1, 0);
+            var perp1 = normalize(cross(tangentDir, ref));
+            var perp2 = cross(tangentDir, perp1);
 
             var s1 = rnd();
             var s2 = rnd();
 
             var jitterFactor = 0.5 + ((s2 % 100) / 100.0) * 0.5;
+            var amount = maxJitter * jitterFactor;
 
-            var offsetX = 2 * ((((s1 + i * 17 + strokeIndex * 29) % 100) / 100.0) - 0.5) * variance * jitterFactor;
-            var offsetY = 2 * ((((s1 + i * 23 + strokeIndex * 37) % 100) / 100.0) - 0.5) * variance * jitterFactor;
-            var offsetZ = 2 * ((((s1 + i * 31 + strokeIndex * 41) % 100) / 100.0) - 0.5) * variance * jitterFactor;
+            var offset1 = 2 * ((((s1 + i * 17 + strokeIndex * 29) % 100) / 100.0) - 0.5) * amount;
+            var offset2 = 2 * ((((s1 + i * 23 + strokeIndex * 37) % 100) / 100.0) - 0.5) * amount;
 
-            var perturbed = basePt;
-            perturbed[0] += offsetX;
-            perturbed[1] += offsetY;
-            perturbed[2] += offsetZ;
+            var perturbed = basePt + perp1 * offset1 + perp2 * offset2;
 
             newPoints[i] = perturbed;
         }
