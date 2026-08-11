@@ -289,6 +289,15 @@ function ParameterMarkPanelInner() {
   const [detectedFeatures, setDetectedFeatures] = useState<DetectedCosmoFeature[]>([]);
   const [uncertaintyDoc, setUncertaintyDoc] = useState<FuzzyCADUncertaintyDocument | null>(null);
   const [saving, setSaving] = useState(false);
+  // Which specific button triggered the in-flight save, as
+  // `${featureId}:resolve` / `${featureId}:reject` -- `saving` alone
+  // disables every button on the page (correct, since withSavedDocument
+  // does a read-modify-write on one shared document and a second
+  // concurrent save could race), but gave no way to tell which action
+  // is actually running. That specific button swaps to "Saving..."/
+  // "Removing..." below; every other button just stays dimmed via
+  // `disabled={saving}` as before.
+  const [pendingAction, setPendingAction] = useState<string | null>(null);
   // Whether the last data load hit a 401 -- the right panel used to be
   // able to connect only via the main FuzzyCAD Panel tab's "Connect
   // Onshape" button (an OAuth cookie set once there works everywhere on
@@ -1208,28 +1217,33 @@ function ParameterMarkPanelInner() {
     const confirmed = window.confirm(confirmMessage);
     if (!confirmed) return;
 
-    if (ACCEPT_VIA_HIDDEN_PARAMETER_COSMO_FEATURE_TYPES.has(group.featureType)) {
-      const updateRes = await updatePartStudioFeatureSuppressed(
-        {
-          documentId: context.documentId,
-          workspaceId: context.workspaceId,
-          partStudioElementId: context.elementId,
-          server: context.server,
-        },
-        {
-          featureId: group.featureId,
-          parameterUpdates: [{ parameterId: "accepted", value: true }],
-        },
-      );
-      if (!updateRes.ok) {
-        setStatus(`failed to accept "${group.featureName}" in Onshape (HTTP ${updateRes.status})`);
-        return;
+    setPendingAction(`${group.featureId}:resolve`);
+    try {
+      if (ACCEPT_VIA_HIDDEN_PARAMETER_COSMO_FEATURE_TYPES.has(group.featureType)) {
+        const updateRes = await updatePartStudioFeatureSuppressed(
+          {
+            documentId: context.documentId,
+            workspaceId: context.workspaceId,
+            partStudioElementId: context.elementId,
+            server: context.server,
+          },
+          {
+            featureId: group.featureId,
+            parameterUpdates: [{ parameterId: "accepted", value: true }],
+          },
+        );
+        if (!updateRes.ok) {
+          setStatus(`failed to accept "${group.featureName}" in Onshape (HTTP ${updateRes.status})`);
+          return;
+        }
+      } else if (!SELF_STYLING_COSMO_FEATURE_TYPES.has(group.featureType)) {
+        await setCosmoFeatureOutputOpacity(group.featureId, 255);
       }
-    } else if (!SELF_STYLING_COSMO_FEATURE_TYPES.has(group.featureType)) {
-      await setCosmoFeatureOutputOpacity(group.featureId, 255);
+      await withSavedDocument((doc) => resolveUncertaintyAnnotation(doc, annotationIdFor(group.featureId)));
+      void loadEverything();
+    } finally {
+      setPendingAction(null);
     }
-    await withSavedDocument((doc) => resolveUncertaintyAnnotation(doc, annotationIdFor(group.featureId)));
-    void loadEverything();
   }
 
   /** Reject: deletes the Cosmo Feature outright, discarding its proposed geometry entirely. */
@@ -1243,24 +1257,29 @@ function ParameterMarkPanelInner() {
     const confirmed = window.confirm(confirmMessage);
     if (!confirmed) return;
 
+    setPendingAction(`${group.featureId}:reject`);
     setSaving(true);
-    const deleteRes = await deletePartStudioFeature(
-      {
-        documentId: context.documentId,
-        workspaceId: context.workspaceId,
-        partStudioElementId: context.elementId,
-        server: context.server,
-      },
-      { featureId: group.featureId },
-    );
-    setSaving(false);
+    try {
+      const deleteRes = await deletePartStudioFeature(
+        {
+          documentId: context.documentId,
+          workspaceId: context.workspaceId,
+          partStudioElementId: context.elementId,
+          server: context.server,
+        },
+        { featureId: group.featureId },
+      );
+      setSaving(false);
 
-    if (!deleteRes.ok) {
-      setStatus(`failed to delete feature in Onshape (HTTP ${deleteRes.status})`);
-      return;
+      if (!deleteRes.ok) {
+        setStatus(`failed to delete feature in Onshape (HTTP ${deleteRes.status})`);
+        return;
+      }
+
+      await withSavedDocument((doc) => removeUncertaintyAnnotationById(doc, annotationIdFor(group.featureId)));
+    } finally {
+      setPendingAction(null);
     }
-
-    await withSavedDocument((doc) => removeUncertaintyAnnotationById(doc, annotationIdFor(group.featureId)));
   }
 
   /**
@@ -1371,7 +1390,11 @@ function ParameterMarkPanelInner() {
                 disabled={saving}
                 onClick={() => void resolveMark(group)}
               >
-                {isQuestion ? "Mark Answered" : "Accept"}
+                {pendingAction === `${group.featureId}:resolve`
+                  ? "Saving..."
+                  : isQuestion
+                    ? "Mark Answered"
+                    : "Accept"}
               </button>
               <button
                 type="button"
@@ -1379,7 +1402,7 @@ function ParameterMarkPanelInner() {
                 disabled={saving}
                 onClick={() => void rejectMark(group)}
               >
-                Reject
+                {pendingAction === `${group.featureId}:reject` ? "Removing..." : "Reject"}
               </button>
             </>
           )}
@@ -1525,7 +1548,7 @@ function ParameterMarkPanelInner() {
                 disabled={saving}
                 onClick={() => void resolveMark(group)}
               >
-                Accept selected
+                {pendingAction === `${group.featureId}:resolve` ? "Saving..." : "Accept selected"}
               </button>
               <button
                 type="button"
@@ -1533,7 +1556,7 @@ function ParameterMarkPanelInner() {
                 disabled={saving}
                 onClick={() => void rejectMark(group)}
               >
-                Reject
+                {pendingAction === `${group.featureId}:reject` ? "Removing..." : "Reject"}
               </button>
             </>
           )}
@@ -1688,22 +1711,24 @@ function ParameterMarkPanelInner() {
                 <div className={styles.proposalGroupHeader}>
                   <span className={styles.proposalGroupName}>{block.proposalGroup.name}</span>
                   <span className={styles.proposalGroupCount}>{block.members.length} cards</span>
-                  <button
-                    type="button"
-                    className={styles.secondaryButton}
-                    disabled={saving}
-                    onClick={() => void handleRenameGroup(block.proposalGroup)}
-                  >
-                    Rename
-                  </button>
-                  <button
-                    type="button"
-                    className={styles.secondaryButton}
-                    disabled={saving}
-                    onClick={() => void handleUngroup(block.proposalGroup.id)}
-                  >
-                    Ungroup
-                  </button>
+                  <div className={styles.proposalGroupActions}>
+                    <button
+                      type="button"
+                      className={styles.secondaryButton}
+                      disabled={saving}
+                      onClick={() => void handleRenameGroup(block.proposalGroup)}
+                    >
+                      Rename
+                    </button>
+                    <button
+                      type="button"
+                      className={styles.secondaryButton}
+                      disabled={saving}
+                      onClick={() => void handleUngroup(block.proposalGroup.id)}
+                    >
+                      Ungroup
+                    </button>
+                  </div>
                 </div>
                 <div className={styles.proposalGroupMembers}>
                   {block.members.map((member) => renderCard(member, { insideGroup: true }))}
