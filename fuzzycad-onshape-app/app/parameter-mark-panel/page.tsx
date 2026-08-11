@@ -962,28 +962,21 @@ function ParameterMarkPanelInner() {
 
         await Promise.all(
           batch.map(async (group) => {
+            // merged: true collapses the 4 typed BODY/EDGE/FACE/VERTEX
+            // Onshape calls this route normally makes into 1 -- this
+            // caller flattens them into one untyped map anyway (see next),
+            // so there was no reason to pay for 4 round-trips per feature.
             const res = await fetchFeatureCreatedPartIds({
               documentId: context!.documentId,
               workspaceId: context!.workspaceId,
               partStudioElementId: context!.elementId,
               server: context!.server,
               featureId: group.featureId,
+              merged: true,
             });
             if (!res.ok) return;
 
-            const entities = (res as Record<string, unknown>).entities;
-            if (!entities || typeof entities !== "object") return;
-
-            const selectionIds: string[] = [];
-            for (const ids of Object.values(entities as Record<string, unknown>)) {
-              if (!Array.isArray(ids)) continue;
-              for (const id of ids) {
-                if (typeof id === "string") {
-                  selectionIds.push(id);
-                }
-              }
-            }
-
+            const selectionIds = Array.isArray(res.mergedIds) ? res.mergedIds : [];
             entityMapCacheRef.current.set(group.featureId, selectionIds);
           }),
         );
