@@ -558,6 +558,12 @@ function ParameterMarkPanelInner() {
         if (featureId) matched.add(featureId);
       }
 
+      console.debug("[FuzzyCAD] SELECTION received", {
+        selections,
+        matchedFeatureIds: Array.from(matched),
+        entityToFeatureRefSize: entityToFeatureRef.current.size,
+      });
+
       setSelectedFeatureIds(matched);
 
       if (selectionRefreshTimerRef.current !== null) {
@@ -948,6 +954,17 @@ function ParameterMarkPanelInner() {
 
       if (!cancelled) {
         entityToFeatureRef.current = next;
+        console.debug(
+          "[FuzzyCAD] entityToFeatureRef rebuilt",
+          Object.fromEntries(
+            featureGroups.map((group) => [
+              group.featureId,
+              Array.from(next.entries())
+                .filter(([, featureId]) => featureId === group.featureId)
+                .map(([selectionId]) => selectionId),
+            ]),
+          ),
+        );
       }
     }
 
