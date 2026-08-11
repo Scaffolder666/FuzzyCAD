@@ -25,6 +25,20 @@ export const runtime = "nodejs";
  * already confirmed live for BODY, rather than guessing at how a
  * FeatureScript function returning a MAP of several arrays would come
  * back over the wire (untested, so avoided).
+ *
+ * The click-to-highlight caller doesn't actually care which EntityType a
+ * selectionId came from -- it just flattens all four arrays into one
+ * lookup map -- so `merged=1` runs ONE FeatureScript call per feature
+ * instead of four, unioning the same four already-confirmed qCreatedBy
+ * queries with qUnion (the exact 2-argument form used throughout this
+ * codebase's .fs files) before the same confirmed
+ * evaluateQuery/transientQueriesToStrings array-of-strings return. This
+ * was added after a live 429 (Too Many Requests) from Onshape: with
+ * several marks open, rebuilding the click-to-highlight map fired 4
+ * calls per feature simultaneously, easily tripping the rate limit.
+ * Callers that need the typed BODY/EDGE/FACE/VERTEX breakdown (e.g.
+ * part-appearance styling, which needs real Onshape partIds
+ * specifically) omit `merged` and get the unchanged typed response.
  */
 const ENTITY_TYPES = ["BODY", "EDGE", "FACE", "VERTEX"] as const;
 type EntityTypeName = (typeof ENTITY_TYPES)[number];
@@ -32,6 +46,17 @@ type EntityTypeName = (typeof ENTITY_TYPES)[number];
 function buildScript(featureId: string, entityType: EntityTypeName) {
   return `function(context is Context, queries) {
     return transientQueriesToStrings(evaluateQuery(context, qCreatedBy(makeId("${featureId}"), EntityType.${entityType})));
+}`;
+}
+
+function buildMergedScript(featureId: string) {
+  return `function(context is Context, queries) {
+    const fid = makeId("${featureId}");
+    const merged = qUnion(
+        qUnion(qCreatedBy(fid, EntityType.BODY), qCreatedBy(fid, EntityType.EDGE)),
+        qUnion(qCreatedBy(fid, EntityType.FACE), qCreatedBy(fid, EntityType.VERTEX))
+    );
+    return transientQueriesToStrings(evaluateQuery(context, merged));
 }`;
 }
 
@@ -67,6 +92,7 @@ export async function GET(req: NextRequest) {
   const workspaceId = params.get("workspaceId");
   const partStudioElementId = params.get("partStudioElementId");
   const featureId = params.get("featureId");
+  const merged = params.get("merged") === "1";
 
   const accessToken = req.cookies.get("onshape_access_token")?.value;
 
@@ -89,6 +115,33 @@ export async function GET(req: NextRequest) {
   }
 
   const endpoint = `${server}/api/partstudios/d/${documentId}/w/${workspaceId}/e/${partStudioElementId}/featurescript`;
+
+  if (merged) {
+    const res = await onshapeFetch(
+      endpoint,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ script: buildMergedScript(featureId) }),
+      },
+      { route: "/api/onshape/partstudio-feature-created-parts", operation: "evaluate-featurescript-merged" },
+    );
+    const data = await parseJsonOrText(res);
+
+    return NextResponse.json(
+      {
+        endpoint,
+        status: res.status,
+        ok: res.ok,
+        mergedIds: res.ok ? extractIds(data) : [],
+      },
+      { status: res.status },
+    );
+  }
 
   const results = await Promise.all(
     ENTITY_TYPES.map(async (entityType) => {

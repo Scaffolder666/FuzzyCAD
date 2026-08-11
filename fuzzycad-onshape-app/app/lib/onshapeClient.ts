@@ -30,6 +30,7 @@ assemblyOverlayResult?: unknown;
   reconstructionResult?: unknown;
   projectState?: unknown;
   partIds?: string[];
+  mergedIds?: string[];
 };
 
 async function parseApiResult(res: Response): Promise<ApiResult> {
@@ -304,7 +305,7 @@ export async function addPartStudioTransformFeature(
  */
 /** Which real Onshape partId(s) a feature created -- the Features API and Part List API never link the two on their own, so this goes through qCreatedBy() via FeatureScript. */
 export async function fetchFeatureCreatedPartIds(
-  query: PartStudioQuery & { featureId: string },
+  query: PartStudioQuery & { featureId: string; merged?: boolean },
 ): Promise<ApiResult> {
   const params = new URLSearchParams({
     documentId: query.documentId,
@@ -313,6 +314,9 @@ export async function fetchFeatureCreatedPartIds(
     featureId: query.featureId,
     server: query.server,
   });
+  if (query.merged) {
+    params.set("merged", "1");
+  }
 
   const res = await fetch(`/api/onshape/partstudio-feature-created-parts?${params.toString()}`);
 
