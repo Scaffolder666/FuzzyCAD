@@ -9,9 +9,6 @@ annotation { "Feature Type Name" : "FuzzyCAD Proposed Chamfer" }
 export const fuzzycadProposedChamfer = defineFeature(function(context is Context, id is Id, definition is map)
     precondition
     {
-        annotation { "Name" : "Body to chamfer", "Filter" : EntityType.BODY }
-        definition.body is Query;
-
         annotation { "Name" : "Edge to chamfer", "Filter" : EntityType.EDGE }
         definition.edge is Query;
 
@@ -26,12 +23,16 @@ export const fuzzycadProposedChamfer = defineFeature(function(context is Context
         definition.accepted is boolean;
     }
     {
-        if (isQueryEmpty(context, definition.body) || isQueryEmpty(context, definition.edge))
+        if (isQueryEmpty(context, definition.edge))
         {
             return;
         }
 
-        const originalBody = definition.body;
+        // Derived from the edge, not a separate selector -- matches
+        // proposedFillet.fs/needsInputChamfer.fs's qOwnerBody derivation,
+        // which avoids a second manual pick silently leaving this feature
+        // with no preview geometry at all when it's skipped.
+        const originalBody = qOwnerBody(definition.edge);
         const edgeLine = evEdgeTangentLine(context, {
                 "edge" : definition.edge,
                 "parameter" : 0.5
