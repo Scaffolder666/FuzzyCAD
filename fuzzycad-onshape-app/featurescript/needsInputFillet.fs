@@ -123,6 +123,17 @@ export const fuzzycadNeedsInputFillet = defineFeature(function(context is Contex
         // than both the sketch strokes and the red radius callout.
         drawVeryLightGhostOutline(context, id + "ghostOutline", proposedBody);
 
+        // Recolor just the fillet's own edges within that same base
+        // outline, laid directly over the faint grey line at those
+        // edges so the ghost outline itself reads orange there too, not
+        // just the separate bold highlight below.
+        drawThinEdgeOutline(
+                context,
+                id + "ghostOutlineFilletTint",
+                filletBoundaryEdges,
+                color(0.90, 0.45, 0.05, 0.6)
+        );
+
         // Bold orange outline specifically on the fillet's own edges --
         // reads clearly as "this is what's being filleted" without
         // relying on jittery colored fill.
@@ -973,6 +984,77 @@ function drawVeryLightGhostOutline(
             {
                 "bodies" : outlineBodies,
                 "closed" : false
+            }
+        );
+    }
+}
+
+//////////////////////////////////////////////////////////////////////
+//
+// THIN EDGE OUTLINE (same single-strand, no-jitter sampling as
+// drawVeryLightGhostOutline above, but takes an edge Query directly
+// instead of deriving edges from a body -- lets a specific subset of
+// edges, e.g. the fillet's own boundary, get their own color laid
+// directly over the whole-body ghost outline instead of every edge
+// sharing one color)
+//
+//////////////////////////////////////////////////////////////////////
+
+function drawThinEdgeOutline(
+    context is Context,
+    id is Id,
+    edgeQuery is Query,
+    outlineColor is map)
+{
+    const sampleSpacing = 5 * millimeter;
+
+    const edges = evaluateQuery(context, edgeQuery);
+    var outlineBodies = qNothing();
+
+    for (var edgeIndex = 0; edgeIndex < size(edges); edgeIndex += 1)
+    {
+        const edgeQ = edges[edgeIndex];
+        const edgeLength = evLength(context, { "entities" : edgeQ });
+        const pointCount = ceil(max(edgeLength / sampleSpacing, 5));
+
+        const tangents = @evEdgeTangentLines(
+            context,
+            {
+                "edge" : edgeQ,
+                "parameters" : range(0.0, 0.995, pointCount)
+            }
+        );
+
+        var points = makeArray(pointCount, undefined);
+
+        for (var p = 0; p < pointCount; p += 1)
+        {
+            points[p] = tangents[p].origin as Vector;
+        }
+
+        const outlineId = id + ("edge" ~ toString(edgeIndex));
+        opFitSpline(context, outlineId, { "points" : points });
+
+        outlineBodies = qUnion(outlineBodies, qCreatedBy(outlineId, EntityType.BODY));
+    }
+
+    if (!isQueryEmpty(context, outlineBodies))
+    {
+        opCreateCompositePart(
+            context,
+            id + "outlineComposite",
+            {
+                "bodies" : outlineBodies,
+                "closed" : false
+            }
+        );
+
+        setProperty(
+            context,
+            {
+                "entities" : qCreatedBy(id + "outlineComposite", EntityType.BODY),
+                "propertyType" : PropertyType.APPEARANCE,
+                "value" : outlineColor
             }
         );
     }
