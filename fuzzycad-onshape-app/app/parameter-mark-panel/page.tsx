@@ -362,6 +362,18 @@ function ParameterMarkPanelInner() {
   // hit real Onshape API usage limits once this session from excessive
   // polling.
   const lastEntityMapKeyRef = useRef<string>("");
+  // Per-feature cache of already-fetched selectionIds, keyed by featureId --
+  // entityToFeatureRef itself gets fully rebuilt whenever the open feature
+  // set changes (see lastEntityMapKeyRef above), but without this cache that
+  // rebuild re-fetched EVERY open feature's entities from scratch even when
+  // only one new feature was added. With several marks open at once that
+  // burst of simultaneous partstudio-feature-created-parts calls (4 Onshape
+  // FeatureScript evaluations per feature) is exactly what was tripping a
+  // live 429 (Too Many Requests) from Onshape, which left the whole map
+  // empty and silently broke click-to-highlight for every open feature, not
+  // just the newly added one. Reusing already-fetched features here means a
+  // rebuild only has to fetch the actual delta.
+  const entityMapCacheRef = useRef<Map<string, string[]>>(new Map());
   // DOM nodes for each proposal card, keyed by featureId, so a SELECTION
   // match can scrollIntoView the right one.
   const cardNodesRef = useRef<Map<string, HTMLDivElement>>(new Map());
@@ -925,32 +937,70 @@ function ParameterMarkPanelInner() {
     let cancelled = false;
 
     async function buildEntityMap() {
-      const next = new Map<string, string>();
+      // Drop cache entries for features that are no longer open, then only
+      // fetch the ones we don't already have cached -- see
+      // entityMapCacheRef's own comment above for why this matters.
+      const currentFeatureIds = new Set(featureGroups.map((group) => group.featureId));
+      for (const cachedFeatureId of entityMapCacheRef.current.keys()) {
+        if (!currentFeatureIds.has(cachedFeatureId)) {
+          entityMapCacheRef.current.delete(cachedFeatureId);
+        }
+      }
 
-      await Promise.all(
-        featureGroups.map(async (group) => {
-          const res = await fetchFeatureCreatedPartIds({
-            documentId: context!.documentId,
-            workspaceId: context!.workspaceId,
-            partStudioElementId: context!.elementId,
-            server: context!.server,
-            featureId: group.featureId,
-          });
-          if (!res.ok) return;
+      const groupsToFetch = featureGroups.filter(
+        (group) => !entityMapCacheRef.current.has(group.featureId),
+      );
 
-          const entities = (res as Record<string, unknown>).entities;
-          if (!entities || typeof entities !== "object") return;
+      // Small-concurrency batches instead of one Promise.all across every
+      // uncached feature -- firing all of them at once is exactly the burst
+      // that triggered a live 429 from Onshape with several marks open.
+      const BATCH_SIZE = 2;
+      const BATCH_DELAY_MS = 350;
 
-          for (const ids of Object.values(entities as Record<string, unknown>)) {
-            if (!Array.isArray(ids)) continue;
-            for (const id of ids) {
-              if (typeof id === "string") {
-                next.set(id, group.featureId);
+      for (let i = 0; i < groupsToFetch.length && !cancelled; i += BATCH_SIZE) {
+        const batch = groupsToFetch.slice(i, i + BATCH_SIZE);
+
+        await Promise.all(
+          batch.map(async (group) => {
+            const res = await fetchFeatureCreatedPartIds({
+              documentId: context!.documentId,
+              workspaceId: context!.workspaceId,
+              partStudioElementId: context!.elementId,
+              server: context!.server,
+              featureId: group.featureId,
+            });
+            if (!res.ok) return;
+
+            const entities = (res as Record<string, unknown>).entities;
+            if (!entities || typeof entities !== "object") return;
+
+            const selectionIds: string[] = [];
+            for (const ids of Object.values(entities as Record<string, unknown>)) {
+              if (!Array.isArray(ids)) continue;
+              for (const id of ids) {
+                if (typeof id === "string") {
+                  selectionIds.push(id);
+                }
               }
             }
-          }
-        }),
-      );
+
+            entityMapCacheRef.current.set(group.featureId, selectionIds);
+          }),
+        );
+
+        if (i + BATCH_SIZE < groupsToFetch.length) {
+          await new Promise((resolve) => setTimeout(resolve, BATCH_DELAY_MS));
+        }
+      }
+
+      const next = new Map<string, string>();
+      for (const group of featureGroups) {
+        const selectionIds = entityMapCacheRef.current.get(group.featureId);
+        if (!selectionIds) continue;
+        for (const selectionId of selectionIds) {
+          next.set(selectionId, group.featureId);
+        }
+      }
 
       if (!cancelled) {
         entityToFeatureRef.current = next;
