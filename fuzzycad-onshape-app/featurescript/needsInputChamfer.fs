@@ -12,9 +12,6 @@ annotation {
 export const fuzzycadNeedsInputChamfer = defineFeature(function(context is Context, id is Id, definition is map)
     precondition
     {
-        annotation { "Name" : "Body to chamfer", "Filter" : EntityType.BODY }
-        definition.body is Query;
-
         annotation { "Name" : "Edge to chamfer", "Filter" : EntityType.EDGE }
         definition.edge is Query;
 
@@ -32,12 +29,17 @@ export const fuzzycadNeedsInputChamfer = defineFeature(function(context is Conte
         definition.accepted is boolean;
     }
     {
-        if (isQueryEmpty(context, definition.body) || isQueryEmpty(context, definition.edge))
+        if (isQueryEmpty(context, definition.edge))
         {
             return;
         }
 
-        const originalBody = definition.body;
+        // Derived from the edge, not a separate selector -- an unfilled
+        // second "pick the body too" selector was silently leaving this
+        // feature with no preview geometry at all (see needsInputFillet.fs,
+        // which uses the same qOwnerBody derivation for the identical
+        // reason).
+        const originalBody = qOwnerBody(definition.edge);
         const edgeLine = evEdgeTangentLine(context, {
                 "edge" : definition.edge,
                 "parameter" : 0.5
