@@ -250,9 +250,19 @@
 .rowActions {
   display: flex;
   align-items: center;
-  gap: 6px;
-  flex-shrink: 0;
+  flex-wrap: wrap;
+  row-gap: 6px;
+  column-gap: 6px;
   padding-top: 4px;
+}
+
+/* "Remove from group" as its own trailing unit: wraps onto its own line
+   (right-aligned) once the status tag + Accept/Reject don't leave room,
+   instead of overflowing the card in a narrow panel. */
+.rowActionsSecondary {
+  display: flex;
+  gap: 6px;
+  margin-left: auto;
 }
 
 .acceptButton {

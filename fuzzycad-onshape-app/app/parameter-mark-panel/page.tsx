@@ -1407,14 +1407,16 @@ function ParameterMarkPanelInner() {
             </>
           )}
           {options?.insideGroup ? (
-            <button
-              type="button"
-              className={styles.secondaryButton}
-              disabled={saving}
-              onClick={() => void handleRemoveFromGroup(group.featureId)}
-            >
-              Remove from group
-            </button>
+            <div className={styles.rowActionsSecondary}>
+              <button
+                type="button"
+                className={styles.secondaryButton}
+                disabled={saving}
+                onClick={() => void handleRemoveFromGroup(group.featureId)}
+              >
+                Remove from group
+              </button>
+            </div>
           ) : null}
         </div>
 
@@ -1561,14 +1563,16 @@ function ParameterMarkPanelInner() {
             </>
           )}
           {options?.insideGroup ? (
-            <button
-              type="button"
-              className={styles.secondaryButton}
-              disabled={saving}
-              onClick={() => void handleRemoveFromGroup(group.featureId)}
-            >
-              Remove from group
-            </button>
+            <div className={styles.rowActionsSecondary}>
+              <button
+                type="button"
+                className={styles.secondaryButton}
+                disabled={saving}
+                onClick={() => void handleRemoveFromGroup(group.featureId)}
+              >
+                Remove from group
+              </button>
+            </div>
           ) : null}
         </div>
 
