@@ -400,6 +400,20 @@ function ParameterMarkPanelInner() {
   // bookkeeping for setTimeout/clearTimeout and shouldn't itself cause
   // a re-render.
   const selectionRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Which Needs Input mark (if any) currently has its full coherent
+  // hand-drawn line revealed (definition.expanded === true in the
+  // FeatureScript). Set by focusNeedsInputMark below, either from a
+  // SELECTION match or a card click; cleared (and the previous mark
+  // collapsed back to transparent) whenever selection moves to
+  // something else. A ref, not state: it's just bookkeeping for the
+  // REST toggle, never rendered directly.
+  const expandedFeatureIdRef = useRef<string | null>(null);
+  // featureId -> featureType, kept in sync with featureGroups below via a
+  // dedicated effect so the SELECTION handler (which only resubscribes on
+  // [hasUrlContext, urlServer], not on every featureGroups change) can
+  // still always read the current type through this ref instead of
+  // closing over a stale featureGroups snapshot.
+  const featureTypeByIdRef = useRef<Map<string, string>>(new Map());
   // Proposal grouping (see document.ts's ProposalGroup): a purely
   // cosmetic cluster of cards a reviewer thinks belong to the same
   // design intent. groupSelectMode toggles a checkbox on every card;
@@ -595,6 +609,25 @@ function ParameterMarkPanelInner() {
       });
 
       setSelectedFeatureIds(matched);
+
+      // Needs Input "expanded" auto-reveal/auto-collapse: clicking a
+      // Needs Input mark's geometry in the 3D view reveals its full
+      // sketchy line the same way clicking its card does (see
+      // focusNeedsInputMark); clicking away (or clicking something that
+      // isn't a Needs Input mark) collapses whatever was expanded.
+      let matchedNeedsInputId: string | null = null;
+      for (const featureId of matched) {
+        const featureType = featureTypeByIdRef.current.get(featureId);
+        if (featureType && NEEDS_INPUT_COSMO_FEATURE_TYPES.has(featureType)) {
+          matchedNeedsInputId = featureId;
+          break;
+        }
+      }
+      if (matchedNeedsInputId) {
+        focusNeedsInputMark(matchedNeedsInputId);
+      } else {
+        collapseExpandedMark();
+      }
 
       if (selectionRefreshTimerRef.current !== null) {
         clearTimeout(selectionRefreshTimerRef.current);
@@ -883,6 +916,10 @@ function ParameterMarkPanelInner() {
       parameters: parametersByFeature.get(feature.featureId) ?? [],
     }));
   }, [detectedFeatures, parameters]);
+
+  useEffect(() => {
+    featureTypeByIdRef.current = new Map(featureGroups.map((group) => [group.featureId, group.featureType]));
+  }, [featureGroups]);
 
   /**
    * Buckets featureGroups (one per card) into render blocks: either a
@@ -1261,6 +1298,62 @@ function ParameterMarkPanelInner() {
   }
 
   /**
+   * Toggles a Needs Input mark's hidden "expanded" boolean -- gates
+   * whether the FeatureScript draws the full coherent hand-drawn line
+   * (drawSketchyFaceFill / drawNeedsInputSketch) on top of the
+   * always-on simple ghost outline + warning icon. Same generic
+   * parameterUpdates path as saveNoteText/setActiveOption above; the
+   * regen this triggers is real (it's a geometry-drawing branch, not a
+   * pure appearance patch) but scoped to a single feature.
+   */
+  async function setMarkExpanded(featureId: string, expanded: boolean) {
+    if (!context) return;
+    await updatePartStudioFeatureSuppressed(
+      {
+        documentId: context.documentId,
+        workspaceId: context.workspaceId,
+        partStudioElementId: context.elementId,
+        server: context.server,
+      },
+      {
+        featureId,
+        parameterUpdates: [{ parameterId: "expanded", value: expanded }],
+      },
+    );
+  }
+
+  /**
+   * Reveals one Needs Input mark's full sketchy line and collapses
+   * whichever one was previously revealed, if different -- the
+   * "click the object in the 3D view OR its card, sketchy line
+   * appears; click something else, it auto-collapses" behavior. A
+   * no-op if featureId is already the expanded one. Only meaningful
+   * for Needs Input cards (the other Cosmo Feature types have no
+   * "expanded" parameter at all).
+   */
+  function focusNeedsInputMark(featureId: string) {
+    if (expandedFeatureIdRef.current === featureId) return;
+    const previous = expandedFeatureIdRef.current;
+    expandedFeatureIdRef.current = featureId;
+    if (previous) {
+      void setMarkExpanded(previous, false);
+    }
+    void setMarkExpanded(featureId, true);
+  }
+
+  /**
+   * Collapses whichever Needs Input mark is currently expanded, if
+   * any -- used when a SELECTION event matches nothing (clicking away
+   * in the 3D view) or matches only non-Needs-Input geometry.
+   */
+  function collapseExpandedMark() {
+    const previous = expandedFeatureIdRef.current;
+    if (!previous) return;
+    expandedFeatureIdRef.current = null;
+    void setMarkExpanded(previous, false);
+  }
+
+  /**
    * fuzzycadCompareAlternatives only: switches which candidate is shown
    * by patching "activeOption" (a plain BTMParameterString, see
    * compareAlternatives.fs) through the same generic parameterUpdates
@@ -1467,7 +1560,10 @@ function ParameterMarkPanelInner() {
       >
         <div
           className={styles.proposalHeader}
-          onClick={() => openFeatureDialog(group.featureId)}
+          onClick={() => {
+            openFeatureDialog(group.featureId);
+            if (isQuestion) focusNeedsInputMark(group.featureId);
+          }}
           title="Click to highlight this feature in Onshape"
         >
           {groupSelectMode ? (

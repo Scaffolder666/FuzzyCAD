@@ -41,6 +41,19 @@ export const fuzzycadNeedsInputFillet = defineFeature(function(context is Contex
             "UIHint" : UIHint.ALWAYS_HIDDEN
         }
         definition.accepted is boolean;
+
+        // Controlled internally by the FuzzyCAD right panel: whether the
+        // coherent hand-drawn line is currently revealed for this mark
+        // (clicked in the 3D view or on its card) -- see
+        // drawSketchyFaceFill below. Everything else (ghost outline,
+        // fillet-edge highlight, warning icon) is always visible
+        // regardless of this flag.
+        annotation {
+            "Name" : "Expanded",
+            "Default" : false,
+            "UIHint" : UIHint.ALWAYS_HIDDEN
+        }
+        definition.expanded is boolean;
     }
     {
         if (isQueryEmpty(context, definition.edge))
@@ -119,7 +132,10 @@ export const fuzzycadNeedsInputFillet = defineFeature(function(context is Contex
         // sparse/incomplete look is retired. Uncertainty is now signaled by
         // the grey-faded original + red radius callout + warning icon
         // instead of by the candidate geometry itself looking unfinished.
-        drawSketchyFaceFill(context, id + "faceFill", proposedBody);
+        if (definition.expanded)
+        {
+            drawSketchyFaceFill(context, id + "faceFill", proposedBody);
+        }
 
         // Makes the mark impossible to miss at a glance.
         drawWarningIcon(context, id + "warningIcon", proposedBody);
