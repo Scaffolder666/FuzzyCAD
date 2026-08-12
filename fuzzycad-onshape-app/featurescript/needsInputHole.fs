@@ -32,16 +32,6 @@ export const fuzzycadNeedsInputHole = defineFeature(function(context is Context,
             "UIHint" : UIHint.ALWAYS_HIDDEN
         }
         definition.accepted is boolean;
-
-        // Free-text reviewer note, set from the FuzzyCAD right panel (not
-        // the native Feature dialog) -- rendered on the mark itself in the
-        // 3D view by drawNoteLabel below.
-        annotation {
-            "Name" : "Note",
-            "Default" : "",
-            "UIHint" : UIHint.ALWAYS_HIDDEN
-        }
-        definition.noteText is string;
     }
     {
         if (isQueryEmpty(context, definition.body) || isQueryEmpty(context, definition.entities))
@@ -117,9 +107,6 @@ export const fuzzycadNeedsInputHole = defineFeature(function(context is Context,
 
         // Makes the mark impossible to miss at a glance.
         drawWarningIcon(context, id + "warningIcon", proposedBody);
-
-        // Optional reviewer note, shown directly on the mark in the 3D view.
-        drawNoteLabel(context, id + "noteLabel", proposedBody, definition.noteText);
 
         const shownLength =
             definition.depthNeedsInput
@@ -362,55 +349,6 @@ function drawWarningIcon(
     });
 
     skSolve(textSketch);
-}
-
-//////////////////////////////////////////////////////////////////////
-//
-// REVIEWER NOTE LABEL
-//
-// Optional free-text note, set from the FuzzyCAD right panel, rendered
-// directly on the mark in the 3D view -- floated above the warning
-// icon so both stay legible without overlapping. No-op when empty
-// (the common case, since most marks won't have a note).
-//
-//////////////////////////////////////////////////////////////////////
-
-function drawNoteLabel(
-    context is Context,
-    id is Id,
-    body is Query,
-    noteText is string)
-{
-    if (noteText == "")
-    {
-        return;
-    }
-
-    const bbox = evBox3d(context, { "topology" : body, "tight" : true });
-    const iconSize = min(max(norm(bbox.maxCorner - bbox.minCorner) * 0.12, 8 * millimeter), 20 * millimeter);
-
-    const center =
-        vector(
-            (bbox.minCorner[0] + bbox.maxCorner[0]) / 2,
-            (bbox.minCorner[1] + bbox.maxCorner[1]) / 2,
-            bbox.maxCorner[2]
-        ) + vector(0, 0, 1) * (iconSize * 2.3);
-
-    const notePlane = plane(center, vector(0, 1, 0));
-    const uv = worldToPlane(notePlane, center);
-    const textSize = 3.2 * millimeter;
-    const halfWidth = min(max(iconSize * 1.6, 18 * millimeter), 40 * millimeter);
-
-    const noteSketch = newSketchOnPlane(context, id + "noteSketch", { "sketchPlane" : notePlane });
-
-    skText(noteSketch, "note", {
-            "text" : noteText,
-            "fontName" : "OpenSans-Regular.ttf",
-            "firstCorner" : vector(uv[0] - halfWidth, uv[1] - textSize),
-            "secondCorner" : vector(uv[0] + halfWidth, uv[1] + textSize)
-    });
-
-    skSolve(noteSketch);
 }
 
 

@@ -1200,49 +1200,6 @@ function ParameterMarkPanelInner() {
   }
 
   /**
-   * Needs Input marks only: saves the free-text note shown on the mark in
-   * the 3D view (see needsInput*.fs's drawNoteLabel -- a plain
-   * BTMParameterString "noteText", same generic parameterUpdates path as
-   * setActiveOption below, not the numeric-expression path livePreviewValue
-   * uses). No loadEverything() re-fetch afterward: the note doesn't affect
-   * card existence, grouping, or anything else the panel reads besides its
-   * own value, and NoteInput's local draft state already shows what was
-   * just typed -- an extra full reload would just risk clobbering the
-   * field mid-edit for no visible benefit.
-   */
-  async function saveNoteText(group: FeatureGroup, text: string) {
-    if (!context) return;
-
-    const updateRes = await updatePartStudioFeatureSuppressed(
-      {
-        documentId: context.documentId,
-        workspaceId: context.workspaceId,
-        partStudioElementId: context.elementId,
-        server: context.server,
-      },
-      {
-        featureId: group.featureId,
-        parameterUpdates: [{ parameterId: "noteText", value: text }],
-      },
-    );
-
-    if (!updateRes.ok) {
-      setStatus(`failed to save note for "${group.featureName}" (HTTP ${updateRes.status})`);
-      return;
-    }
-
-    setParameters((current) =>
-      current === null
-        ? current
-        : current.map((parameter) =>
-            parameter.featureId === group.featureId && parameter.parameterId === "noteText"
-              ? { ...parameter, message: { ...parameter.message, value: text } }
-              : parameter,
-          ),
-    );
-  }
-
-  /**
    * fuzzycadCompareAlternatives only: switches which candidate is shown
    * by patching "activeOption" (a plain BTMParameterString, see
    * compareAlternatives.fs) through the same generic parameterUpdates
@@ -1461,7 +1418,7 @@ function ParameterMarkPanelInner() {
         </div>
 
         {group.parameters
-          .filter((entry) => entry.typeName !== "BTMParameterBoolean" && entry.parameterId !== "noteText")
+          .filter((entry) => entry.typeName !== "BTMParameterBoolean")
           .map((entry) => (
             <ParamValueRow
               key={entry.parameterId}
@@ -1470,14 +1427,6 @@ function ParameterMarkPanelInner() {
               onLivePreview={(value) => void livePreviewValue(entry, value)}
             />
           ))}
-
-        {isQuestion ? (
-          <NoteInput
-            group={group}
-            disabled={resolved}
-            onSave={(text) => void saveNoteText(group, text)}
-          />
-        ) : null}
 
         <div className={styles.rowActions}>
           {resolved ? (
@@ -2057,70 +2006,6 @@ function ParamValueRow({
           if (event.key === "Enter") {
             event.currentTarget.blur();
           }
-        }}
-        onClick={(event) => event.stopPropagation()}
-      />
-    </div>
-  );
-}
-
-/**
- * Free-text note shown on a Needs Input mark in the 3D view itself (see
- * needsInput*.fs's drawNoteLabel), not just here in the panel -- lets a
- * reviewer say what specifically needs attention right on the geometry,
- * next to the warning icon. Reads its current value out of group.parameters
- * (a plain BTMParameterString "noteText", same as ParamValueRow reads any
- * other value parameter) rather than owning separate state, so a refresh
- * from Onshape's own feature dialog or another session stays in sync the
- * same way. Unlike ParamValueRow, an empty commit is valid here (clearing
- * the note back to blank is a real, intentional edit, not "nothing typed
- * yet") and there's no Enter-to-commit binding, since Enter should insert a
- * newline in a multi-line note instead of submitting it.
- */
-function NoteInput({
-  group,
-  disabled,
-  onSave,
-}: {
-  group: FeatureGroup;
-  disabled: boolean;
-  onSave: (text: string) => void;
-}) {
-  const entry = group.parameters.find((parameter) => parameter.parameterId === "noteText");
-  const serverValue = entry ? formatFeatureParameterValue(entry.typeName, entry.message) : "";
-
-  const [draft, setDraft] = useState(serverValue);
-  const lastCommittedRef = useRef(serverValue);
-  const isFocusedRef = useRef(false);
-
-  useEffect(() => {
-    if (isFocusedRef.current) return;
-    setDraft(serverValue);
-    lastCommittedRef.current = serverValue;
-  }, [serverValue, group.featureId]);
-
-  function commit() {
-    if (disabled || draft === lastCommittedRef.current) return;
-    lastCommittedRef.current = draft;
-    onSave(draft);
-  }
-
-  return (
-    <div className={styles.paramEditRow}>
-      <span className={styles.paramEditLabel}>Note</span>
-      <textarea
-        className={styles.noteInput}
-        rows={2}
-        value={draft}
-        disabled={disabled}
-        placeholder="Shown on the mark in the 3D view..."
-        onChange={(event) => setDraft(event.target.value)}
-        onFocus={() => {
-          isFocusedRef.current = true;
-        }}
-        onBlur={() => {
-          isFocusedRef.current = false;
-          commit();
         }}
         onClick={(event) => event.stopPropagation()}
       />
