@@ -30,16 +30,6 @@ export const fuzzycadNeedsInputScale = defineFeature(function(context is Context
             "UIHint" : UIHint.ALWAYS_HIDDEN
         }
         definition.accepted is boolean;
-
-        // Free-text reviewer note, set from the FuzzyCAD right panel (not
-        // the native Feature dialog) -- rendered on the mark itself in the
-        // 3D view by drawNoteLabel below.
-        annotation {
-            "Name" : "Note",
-            "Default" : "",
-            "UIHint" : UIHint.ALWAYS_HIDDEN
-        }
-        definition.noteText is string;
     }
     {
         if (isQueryEmpty(context, definition.body) || isQueryEmpty(context, definition.originPoint))
@@ -92,9 +82,6 @@ export const fuzzycadNeedsInputScale = defineFeature(function(context is Context
 
         // Makes the mark impossible to miss at a glance.
         drawWarningIcon(context, id + "warningIcon", proposedBody);
-
-        // Optional reviewer note, shown directly on the mark in the 3D view.
-        drawNoteLabel(context, id + "noteLabel", proposedBody, definition.noteText);
 
         const bbox =
             evBox3d(context, {
@@ -317,7 +304,7 @@ function drawWarningIcon(
     body is Query)
 {
     const bbox = evBox3d(context, { "topology" : body, "tight" : true });
-    const size = min(max(norm(bbox.maxCorner - bbox.minCorner) * 0.12, 8 * millimeter), 20 * millimeter);
+    const size = min(max(norm(bbox.maxCorner - bbox.minCorner) * 0.20, 14 * millimeter), 32 * millimeter);
     const half = size / 2;
 
     const center =
@@ -328,7 +315,18 @@ function drawWarningIcon(
         ) + vector(0, 0, 1) * (size * 0.9);
 
     const iconColor = color(0.90, 0.10, 0.08, 1.0);
-    const iconPlane = plane(center, vector(0, 1, 0));
+    const textColor = color(0, 0, 0, 1.0);
+
+    // Explicit U/V basis instead of a bare plane(point, normal) -- letting
+    // Onshape pick the in-plane axes on its own put the triangle and "!"
+    // sideways in practice (live-confirmed). U is pinned to world X (the
+    // reading direction), and the normal is derived FROM that so V works
+    // out to world Z (upright) -- same "derive normal from the axis you
+    // actually care about" technique drawDimensionArrow already uses
+    // successfully elsewhere in this codebase.
+    const uAxis = vector(1, 0, 0);
+    const iconNormal = normalize(cross(uAxis, vector(0, 0, 1)));
+    const iconPlane = plane(center, iconNormal, uAxis);
     const uv = worldToPlane(iconPlane, center);
 
     const triSketch = newSketchOnPlane(context, id + "triSketch", { "sketchPlane" : iconPlane });
@@ -364,66 +362,38 @@ function drawWarningIcon(
             "value" : iconColor
     });
 
-    const textSketch = newSketchOnPlane(context, id + "iconText", { "sketchPlane" : iconPlane });
-    const textSize = size * 0.30;
+    // "!" on its own plane, nudged a hair off the triangle's surface along
+    // the shared normal -- extracting it flush with the triangle (offset 0
+    // on the same plane) put two opaque coincident faces in the exact same
+    // spot, which z-fights in the viewport.
+    const textPlane = plane(center + iconNormal * (0.05 * millimeter), iconNormal, uAxis);
+    const textSketch = newSketchOnPlane(context, id + "iconText", { "sketchPlane" : textPlane });
+    const textSize = size * 0.34;
 
     skText(textSketch, "exclamation", {
             "text" : "!",
             "fontName" : "OpenSans-Regular.ttf",
-            "firstCorner" : vector(uv[0] - textSize * 0.3, uv[1] - half * 0.55),
-            "secondCorner" : vector(uv[0] + textSize * 0.3, uv[1] - half * 0.55 + textSize * 1.5)
+            "firstCorner" : vector(uv[0] - textSize * 0.28, uv[1] - half * 0.55),
+            "secondCorner" : vector(uv[0] + textSize * 0.28, uv[1] - half * 0.55 + textSize * 1.5)
     });
 
     skSolve(textSketch);
-}
 
-//////////////////////////////////////////////////////////////////////
-//
-// REVIEWER NOTE LABEL
-//
-// Optional free-text note, set from the FuzzyCAD right panel, rendered
-// directly on the mark in the 3D view -- floated above the warning
-// icon so both stay legible without overlapping. No-op when empty
-// (the common case, since most marks won't have a note).
-//
-//////////////////////////////////////////////////////////////////////
-
-function drawNoteLabel(
-    context is Context,
-    id is Id,
-    body is Query,
-    noteText is string)
-{
-    if (noteText == "")
-    {
-        return;
-    }
-
-    const bbox = evBox3d(context, { "topology" : body, "tight" : true });
-    const iconSize = min(max(norm(bbox.maxCorner - bbox.minCorner) * 0.12, 8 * millimeter), 20 * millimeter);
-
-    const center =
-        vector(
-            (bbox.minCorner[0] + bbox.maxCorner[0]) / 2,
-            (bbox.minCorner[1] + bbox.maxCorner[1]) / 2,
-            bbox.maxCorner[2]
-        ) + vector(0, 0, 1) * (iconSize * 2.3);
-
-    const notePlane = plane(center, vector(0, 1, 0));
-    const uv = worldToPlane(notePlane, center);
-    const textSize = 3.2 * millimeter;
-    const halfWidth = min(max(iconSize * 1.6, 18 * millimeter), 40 * millimeter);
-
-    const noteSketch = newSketchOnPlane(context, id + "noteSketch", { "sketchPlane" : notePlane });
-
-    skText(noteSketch, "note", {
-            "text" : noteText,
-            "fontName" : "OpenSans-Regular.ttf",
-            "firstCorner" : vector(uv[0] - halfWidth, uv[1] - textSize),
-            "secondCorner" : vector(uv[0] + halfWidth, uv[1] + textSize)
+    opExtractSurface(context, id + "textSurface", {
+            "faces" : qSketchRegion(id + "iconText"),
+            "offset" : 0 * meter,
+            "useFacesAroundToTrimOffset" : false
     });
 
-    skSolve(noteSketch);
+    opDeleteBodies(context, id + "deleteIconText", {
+            "entities" : qCreatedBy(id + "iconText")
+    });
+
+    setProperty(context, {
+            "entities" : qCreatedBy(id + "textSurface", EntityType.BODY),
+            "propertyType" : PropertyType.APPEARANCE,
+            "value" : textColor
+    });
 }
 
 

@@ -129,6 +129,7 @@ const COSMO_FEATURE_TYPES = new Set([
   "fuzzycadNeedsInputScale",
   "fuzzycadNeedsInputHole",
   "fuzzycadCompareAlternatives",
+  "fuzzycadNote",
 ]);
 
 /**
@@ -169,6 +170,11 @@ const SELF_STYLING_COSMO_FEATURE_TYPES = new Set([
   // non-active alternatives via its own setProperty calls, same as
   // every other type in this set -- see compareAlternatives.fs.
   "fuzzycadCompareAlternatives",
+  // fuzzycadNote never fades or colors any existing body -- it draws its
+  // own standalone callout geometry (note.fs) and touches nothing else,
+  // so there is no REST opacity call for it to conflict with either way.
+  // Listed here anyway so resolveMark/rejectMark skip attempting one.
+  "fuzzycadNote",
 ]);
 
 /**
@@ -185,6 +191,18 @@ const SELF_STYLING_COSMO_FEATURE_TYPES = new Set([
  * concrete options, not one person's proposal.
  */
 const ALTERNATIVE_COMPARISON_COSMO_FEATURE_TYPES = new Set(["fuzzycadCompareAlternatives"]);
+
+/**
+ * fuzzycadNote (note.fs) -- a pure annotation pinned to a location, not a
+ * proposal or a question about the model. Doesn't need its own card
+ * renderer the way ALTERNATIVE_COMPARISON does (the generic
+ * renderProposalCard layout -- tag, note text field, Accept/Reject,
+ * comment thread -- fits fine), but "Accept ... final geometry stays in
+ * the model" is nonsense for something that never touched the model, so
+ * this set exists purely to swap in note-appropriate confirm-dialog and
+ * tag copy in resolveMark/rejectMark/renderProposalCard below.
+ */
+const NOTE_COSMO_FEATURE_TYPES = new Set(["fuzzycadNote"]);
 
 /**
  * Cosmo Feature types that represent an open question (operation known,
@@ -1200,15 +1218,15 @@ function ParameterMarkPanelInner() {
   }
 
   /**
-   * Needs Input marks only: saves the free-text note shown on the mark in
-   * the 3D view (see needsInput*.fs's drawNoteLabel -- a plain
-   * BTMParameterString "noteText", same generic parameterUpdates path as
-   * setActiveOption below, not the numeric-expression path livePreviewValue
-   * uses). No loadEverything() re-fetch afterward: the note doesn't affect
-   * card existence, grouping, or anything else the panel reads besides its
-   * own value, and NoteInput's local draft state already shows what was
-   * just typed -- an extra full reload would just risk clobbering the
-   * field mid-edit for no visible benefit.
+   * fuzzycadNote only: saves the note's text, shown both here (via
+   * NoteInput) and on the callout in the 3D view (note.fs's
+   * drawNoteCallout). Plain BTMParameterString "noteText" -- same
+   * generic parameterUpdates path as setActiveOption below, not the
+   * numeric-expression path livePreviewValue uses. No loadEverything()
+   * re-fetch afterward: the note text doesn't affect card existence,
+   * grouping, or anything else the panel reads besides its own value,
+   * and NoteInput's local draft state already shows what was just
+   * typed.
    */
   async function saveNoteText(group: FeatureGroup, text: string) {
     if (!context) return;
@@ -1314,9 +1332,11 @@ function ParameterMarkPanelInner() {
     if (!context) return;
     const confirmMessage = ALTERNATIVE_COMPARISON_COSMO_FEATURE_TYPES.has(group.featureType)
       ? `Accept the currently selected candidate for "${group.featureName}"? It becomes the final geometry -- the other alternatives are discarded. This can't be edited again without reopening.`
-      : NEEDS_INPUT_COSMO_FEATURE_TYPES.has(group.featureType)
-        ? `Mark "${group.featureName}" as answered?`
-        : `Accept "${group.featureName}"? Its geometry stays in the model as final -- this can't be edited again without reopening.`;
+      : NOTE_COSMO_FEATURE_TYPES.has(group.featureType)
+        ? `Mark this note as addressed?`
+        : NEEDS_INPUT_COSMO_FEATURE_TYPES.has(group.featureType)
+          ? `Mark "${group.featureName}" as answered?`
+          : `Accept "${group.featureName}"? Its geometry stays in the model as final -- this can't be edited again without reopening.`;
     const confirmed = window.confirm(confirmMessage);
     if (!confirmed) return;
 
@@ -1354,9 +1374,11 @@ function ParameterMarkPanelInner() {
     if (!context) return;
     const confirmMessage = ALTERNATIVE_COMPARISON_COSMO_FEATURE_TYPES.has(group.featureType)
       ? `Reject the comparison for "${group.featureName}"? Current component is kept as is, both alternatives and all comments are lost.`
-      : NEEDS_INPUT_COSMO_FEATURE_TYPES.has(group.featureType)
-        ? `Remove the question "${group.featureName}"? Its comments will be lost.`
-        : `Delete "${group.featureName}"? Its proposed geometry and comments will be lost.`;
+      : NOTE_COSMO_FEATURE_TYPES.has(group.featureType)
+        ? `Delete this note? Its comments will be lost.`
+        : NEEDS_INPUT_COSMO_FEATURE_TYPES.has(group.featureType)
+          ? `Remove the question "${group.featureName}"? Its comments will be lost.`
+          : `Delete "${group.featureName}"? Its proposed geometry and comments will be lost.`;
     const confirmed = window.confirm(confirmMessage);
     if (!confirmed) return;
 
@@ -1428,6 +1450,7 @@ function ParameterMarkPanelInner() {
     const resolved = annotation?.status === "resolved";
     const isSelected = selectedFeatureIds.has(group.featureId);
     const isQuestion = NEEDS_INPUT_COSMO_FEATURE_TYPES.has(group.featureType);
+    const isNote = NOTE_COSMO_FEATURE_TYPES.has(group.featureType);
     const isCheckedForGrouping = groupSelectionIds.has(group.featureId);
 
     return (
@@ -1461,7 +1484,7 @@ function ParameterMarkPanelInner() {
         </div>
 
         {group.parameters
-          .filter((entry) => entry.typeName !== "BTMParameterBoolean" && entry.parameterId !== "noteText")
+          .filter((entry) => entry.typeName !== "BTMParameterBoolean" && !(isNote && entry.parameterId === "noteText"))
           .map((entry) => (
             <ParamValueRow
               key={entry.parameterId}
@@ -1471,7 +1494,7 @@ function ParameterMarkPanelInner() {
             />
           ))}
 
-        {isQuestion ? (
+        {isNote ? (
           <NoteInput
             group={group}
             disabled={resolved}
@@ -1482,7 +1505,9 @@ function ParameterMarkPanelInner() {
         <div className={styles.rowActions}>
           {resolved ? (
             <>
-              <span className={styles.tagAnswered}>{isQuestion ? "Answered" : "Resolved"}</span>
+              <span className={styles.tagAnswered}>
+                {isQuestion ? "Answered" : isNote ? "Addressed" : "Resolved"}
+              </span>
               <button
                 type="button"
                 className={styles.secondaryButton}
@@ -1494,7 +1519,9 @@ function ParameterMarkPanelInner() {
             </>
           ) : (
             <>
-              <span className={styles.tagProposed}>{isQuestion ? "Needs Input" : "Proposed"}</span>
+              <span className={styles.tagProposed}>
+                {isQuestion ? "Needs Input" : isNote ? "Note" : "Proposed"}
+              </span>
               <button
                 type="button"
                 className={styles.acceptButton}
@@ -1505,7 +1532,9 @@ function ParameterMarkPanelInner() {
                   ? "Saving..."
                   : isQuestion
                     ? "Mark Answered"
-                    : "Accept"}
+                    : isNote
+                      ? "Mark Addressed"
+                      : "Accept"}
               </button>
               <button
                 type="button"
@@ -2065,17 +2094,15 @@ function ParamValueRow({
 }
 
 /**
- * Free-text note shown on a Needs Input mark in the 3D view itself (see
- * needsInput*.fs's drawNoteLabel), not just here in the panel -- lets a
- * reviewer say what specifically needs attention right on the geometry,
- * next to the warning icon. Reads its current value out of group.parameters
- * (a plain BTMParameterString "noteText", same as ParamValueRow reads any
- * other value parameter) rather than owning separate state, so a refresh
- * from Onshape's own feature dialog or another session stays in sync the
- * same way. Unlike ParamValueRow, an empty commit is valid here (clearing
- * the note back to blank is a real, intentional edit, not "nothing typed
- * yet") and there's no Enter-to-commit binding, since Enter should insert a
- * newline in a multi-line note instead of submitting it.
+ * fuzzycadNote's card only: the note's text, editable here or on its
+ * callout in the 3D view (note.fs). Reads its current value out of
+ * group.parameters (a plain BTMParameterString "noteText", same as
+ * ParamValueRow reads any other value parameter) rather than owning
+ * separate state, so a refresh from Onshape's own feature dialog or
+ * another session stays in sync. Unlike ParamValueRow, an empty commit
+ * is valid (clearing the note is a real edit) and there's no
+ * Enter-to-commit binding, since Enter should insert a newline in a
+ * multi-line note instead of submitting it.
  */
 function NoteInput({
   group,
@@ -2113,7 +2140,7 @@ function NoteInput({
         rows={2}
         value={draft}
         disabled={disabled}
-        placeholder="Shown on the mark in the 3D view..."
+        placeholder="Shown on the callout in the 3D view..."
         onChange={(event) => setDraft(event.target.value)}
         onFocus={() => {
           isFocusedRef.current = true;
