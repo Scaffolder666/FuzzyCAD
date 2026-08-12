@@ -32,6 +32,18 @@ export const fuzzycadNeedsInputHole = defineFeature(function(context is Context,
             "UIHint" : UIHint.ALWAYS_HIDDEN
         }
         definition.accepted is boolean;
+
+        // Controlled internally by the FuzzyCAD right panel: whether the
+        // coherent hand-drawn line is currently revealed for this mark
+        // (clicked in the 3D view or on its card) -- see
+        // drawNeedsInputSketch below. Everything else (simple outline +
+        // warning icon) is always visible regardless of this flag.
+        annotation {
+            "Name" : "Expanded",
+            "Default" : false,
+            "UIHint" : UIHint.ALWAYS_HIDDEN
+        }
+        definition.expanded is boolean;
     }
     {
         if (isQueryEmpty(context, definition.body) || isQueryEmpty(context, definition.entities))
@@ -98,15 +110,21 @@ export const fuzzycadNeedsInputHole = defineFeature(function(context is Context,
                 "value" : color(0.75, 0.75, 0.75, 0.08)
         });
 
-        // NEEDS INPUT visual language: the same coherent, full-coverage
-        // hand-drawn outline Proposed uses, just recolored black -- the old
-        // sparse/incomplete look is retired. Uncertainty is now signaled by
-        // the grey-faded original + red depth callout + warning icon
-        // instead of by the candidate geometry itself looking unfinished.
-        drawNeedsInputSketch(context, id + "needsSketch", proposedBody);
+        // Always-on: a simple faint frame + warning icon are enough to spot
+        // a mark at a glance. The coherent hand-drawn line only appears
+        // once "expanded" -- clicked in the 3D view or on its card in the
+        // right panel -- and collapses again once something else is
+        // clicked, so the viewport doesn't stay cluttered with every mark's
+        // full line at once.
+        drawVeryLightGhostOutline(context, id + "ghostOutline", proposedBody);
 
         // Makes the mark impossible to miss at a glance.
         drawWarningIcon(context, id + "warningIcon", proposedBody);
+
+        if (definition.expanded)
+        {
+            drawNeedsInputSketch(context, id + "needsSketch", proposedBody);
+        }
 
         const shownLength =
             definition.depthNeedsInput
@@ -161,6 +179,68 @@ returns map
     }
 
     return definition;
+}
+
+
+//////////////////////////////////////////////////////////////////////
+//
+// VERY LIGHT GHOST OUTLINE
+//
+// Always-on simple frame -- a single faint, clean line along every
+// edge, no jitter. Read alongside the warning icon, this is enough to
+// spot a mark at a glance without the full coherent hand-drawn line
+// competing for attention until someone actually expands it.
+//
+//////////////////////////////////////////////////////////////////////
+
+function drawVeryLightGhostOutline(context is Context, id is Id, body is Query)
+{
+    const outlineColor = color(0.38, 0.38, 0.38, 0.14);
+    const sampleSpacing = 5 * millimeter;
+
+    const bodyEdges = evaluateQuery(context, qOwnedByBody(qEverything(EntityType.EDGE), body));
+
+    var outlineBodies = qNothing();
+
+    for (var edgeIndex = 0; edgeIndex < size(bodyEdges); edgeIndex += 1)
+    {
+        const edgeQuery = bodyEdges[edgeIndex];
+        const edgeLength = evLength(context, { "entities" : edgeQuery });
+        const pointCount = ceil(max(edgeLength / sampleSpacing, 5));
+
+        const tangents = @evEdgeTangentLines(context, {
+                "edge" : edgeQuery,
+                "parameters" : range(0.0, 0.995, pointCount)
+        });
+
+        var points = makeArray(pointCount, undefined);
+
+        for (var p = 0; p < pointCount; p += 1)
+        {
+            points[p] = tangents[p].origin as Vector;
+        }
+
+        const outlineId = id + ("edge" ~ toString(edgeIndex));
+        opFitSpline(context, outlineId, { "points" : points });
+
+        const outlineBody = qCreatedBy(outlineId, EntityType.BODY);
+
+        setProperty(context, {
+                "entities" : outlineBody,
+                "propertyType" : PropertyType.APPEARANCE,
+                "value" : outlineColor
+        });
+
+        outlineBodies = qUnion(outlineBodies, outlineBody);
+    }
+
+    if (!isQueryEmpty(context, outlineBodies))
+    {
+        opCreateCompositePart(context, id + "outlineComposite", {
+                "bodies" : outlineBodies,
+                "closed" : false
+        });
+    }
 }
 
 
