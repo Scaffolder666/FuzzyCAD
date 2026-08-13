@@ -1,5 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { onshapeFetch, parseJsonOrText } from "../../../lib/server/onshapeApi";
+import { getCachedFeatureScript } from "../../../lib/server/onshapeCreatedPartsCache";
+
+// A feature's created parts only change when the feature itself
+// regenerates, so a recent merged result is safe to reuse for a couple of
+// minutes -- long enough to collapse the right panel's rebuild bursts,
+// short enough that an edited mark refreshes quickly.
+const MERGED_CACHE_TTL_MS = 3 * 60 * 1000;
 
 export const runtime = "nodejs";
 
@@ -117,29 +124,30 @@ export async function GET(req: NextRequest) {
   const endpoint = `${server}/api/partstudios/d/${documentId}/w/${workspaceId}/e/${partStudioElementId}/featurescript`;
 
   if (merged) {
-    const res = await onshapeFetch(
+    // Cached + in-flight-deduped: the right panel fires one of these per
+    // open mark to rebuild its click-to-highlight map, and used to storm
+    // Onshape into a 429 with several marks open. See
+    // onshapeCreatedPartsCache for how concurrent identical calls collapse
+    // into one Onshape request.
+    const cacheKey = [server, documentId, workspaceId, partStudioElementId, featureId, "merged"].join("|");
+    const result = await getCachedFeatureScript({
+      cacheKey,
       endpoint,
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          Accept: "application/json",
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ script: buildMergedScript(featureId) }),
-      },
-      { route: "/api/onshape/partstudio-feature-created-parts", operation: "evaluate-featurescript-merged" },
-    );
-    const data = await parseJsonOrText(res);
+      accessToken,
+      script: buildMergedScript(featureId),
+      route: "/api/onshape/partstudio-feature-created-parts",
+      operation: "evaluate-featurescript-merged",
+      ttlMs: MERGED_CACHE_TTL_MS,
+    });
 
     return NextResponse.json(
       {
         endpoint,
-        status: res.status,
-        ok: res.ok,
-        mergedIds: res.ok ? extractIds(data) : [],
+        status: result.status,
+        ok: result.ok,
+        mergedIds: result.ok ? extractIds(result.data) : [],
       },
-      { status: res.status },
+      { status: result.status },
     );
   }
 
