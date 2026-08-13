@@ -28,15 +28,33 @@ import(path : "onshape/std/geometry.fs", version : "3044.0");
 // - Once Accept selected sets accepted=true, the chosen candidate remains
 //   instantiated and the placeholder is deleted.
 //
-// UNCONFIRMED (flagging for whoever debugs a compile failure next):
+// PARTIALLY CONFIRMED (checked against Onshape's own FeatureScript docs
+// and forum, not a real compile -- flagging for whoever debugs a
+// compile failure next):
 // - `PartStudioItemType.ENTIRE_PART_STUDIO` as a "Filter" value on a
-//   PartStudioData parameter -- not verified against a real compile.
+//   PartStudioData parameter IS a real, documented pattern (Onshape's
+//   own FsDoc examples use `Filter: PartStudioItemType.SOLID ||
+//   PartStudioItemType.ENTIRE_PART_STUDIO`). There was a real bug where
+//   a Filter of ENTIRE_PART_STUDIO ALONE (exactly what's used here, no
+//   other type combined) failed with "No entities or features
+//   available" (forum.onshape.com/discussion/14071) -- an Onshape
+//   employee said this should be fixed as of September 2020, so likely
+//   fine now, but that's a report, not a retest.
 // - `source.partQuery` as a writable field on the PartStudioData map --
-//   not verified against a real compile.
-// If the Feature Studio editor rejects either of these, that is almost
-// certainly why nothing reaches the right panel: a Feature Studio that
-// doesn't compile publishes no custom feature type, so there is nothing
-// to insert and nothing for the panel to detect.
+//   still genuinely unconfirmed, nothing found either way.
+// - Separately, and NOT covered by any of the above: the REST Feature
+//   API's wire serialization for a PartStudioData parameter (what JSON
+//   shape a POST .../features body needs for currentOption/
+//   alternativeA/alternativeB) has never been captured live and isn't
+//   documented anywhere found so far. The toolbar's insert path
+//   (parameter-mark-panel/page.tsx, "compare" tool) works around this
+//   by omitting these parameters from the insert JSON entirely and
+//   letting Onshape's native dialog collect them post-insert, so this
+//   only matters if a future flow needs to construct one directly.
+// If the Feature Studio editor rejects any of the FeatureScript itself,
+// that is almost certainly why nothing reaches the right panel: a
+// Feature Studio that doesn't compile publishes no custom feature type,
+// so there is nothing to insert and nothing for the panel to detect.
 //
 // Right-panel protocol stays unchanged:
 //   activeOption = "CURRENT" | "ALTERNATIVE_A" | "ALTERNATIVE_B"

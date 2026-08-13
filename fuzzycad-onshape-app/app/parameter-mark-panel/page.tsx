@@ -294,21 +294,47 @@ const ACCEPT_VIA_HIDDEN_PARAMETER_COSMO_FEATURE_TYPES = new Set([
  *  - "markConstrain": a standalone annotation/constraint pinned to the
  *    model, not a question about a value (currently just Note; more may
  *    join this category later).
- * fuzzycadCompareAlternatives ("conflict") is deliberately NOT here --
- * unlike every type above, it can't be inserted empty and picked
- * afterward: it inherently compares >=2 already-concrete candidate
- * queries, so there's nothing meaningful to insert before those
- * candidates are already chosen. Needs its own dedicated flow, not a
- * toolbar button, if it's ever wired up.
+ *  - "conflict": >=2 already-concrete candidates competing for the same
+ *    slot (currently just fuzzycadCompareAlternatives). Unlike the two
+ *    categories above, its Query/PartStudioData reference parameters
+ *    (comparisonSlot/currentOption/alternativeA/alternativeB -- see
+ *    compareAlternatives.fs) are simply OMITTED from the insert
+ *    parameters array entirely, not sent as a well-formed-but-empty
+ *    placeholder the way queryListParameter does for Query fields:
+ *    PartStudioData's own wire shape has never been captured live in
+ *    this codebase (nothing in Onshape's own docs or forum covers its
+ *    REST serialization either), so there is nothing to build a correct
+ *    empty placeholder FROM. Omitting the parameter entirely and
+ *    opening the result via openFeatureDialog is the lower-risk bet:
+ *    Onshape's native dialog should render its own pickers for
+ *    whatever's unset, same as any fresh Insert-menu feature -- but this
+ *    is the first insert in this codebase to omit a declared parameter
+ *    outright rather than include an empty-but-well-formed one, so
+ *    treat it as unverified until tested. If Onshape's insert
+ *    validation turns out to require every declared parameter present,
+ *    a pre-insert "configure candidates, then insert complete JSON"
+ *    setup flow is the fallback -- but that still needs PartStudioData's
+ *    real wire shape captured from a live GET first, so it doesn't
+ *    avoid the unknown, only moves where the guess has to happen.
  *
- * Clicking any button here inserts that featureType with no geometry
- * parameter filled in (see queryListParameter/insertToolbarMark) --
- * Onshape's own native "click body/edge/face in the 3D view" flow
+ * Clicking any button here inserts that featureType with as much left
+ * unset as the tool's own precondition allows (see
+ * buildCustomFeatureParameters/insertToolbarMark) -- Onshape's own
+ * native "click body/edge/face/Part Studio in the 3D view or tree" flow
  * handles the actual picking once the resulting incomplete feature is
  * opened, so this list only needs enough to build the insert request.
  */
-type ToolbarToolId = "move" | "extrude" | "chamfer" | "fillet" | "scale" | "rotate" | "stretch" | "note";
-type ToolbarToolCategory = "needsInput" | "markConstrain";
+type ToolbarToolId =
+  | "move"
+  | "extrude"
+  | "chamfer"
+  | "fillet"
+  | "scale"
+  | "rotate"
+  | "stretch"
+  | "note"
+  | "compare";
+type ToolbarToolCategory = "needsInput" | "markConstrain" | "conflict";
 
 const TOOLBAR_TOOLS: {
   id: ToolbarToolId;
@@ -372,6 +398,13 @@ const TOOLBAR_TOOLS: {
     featureType: "fuzzycadNote",
     featureName: "FuzzyCAD Note",
     category: "markConstrain",
+  },
+  {
+    id: "compare",
+    label: "Conflict",
+    featureType: "fuzzycadCompareAlternatives",
+    featureName: "FuzzyCAD Compare Alternatives",
+    category: "conflict",
   },
 ];
 
@@ -452,6 +485,16 @@ function ToolbarIcon({ tool }: { tool: ToolbarToolId }) {
           <circle cx="12" cy="9" r="2" />
           <path d="M12 11v9" />
           <path d="M8 22h8" />
+        </svg>
+      );
+    case "compare":
+      return (
+        <svg {...common}>
+          <path d="M12 3v6" />
+          <path d="M12 9L5 15v6" />
+          <path d="M12 9l7 6v6" />
+          <circle cx="5" cy="20" r="1.5" />
+          <circle cx="19" cy="20" r="1.5" />
         </svg>
       );
   }
@@ -614,6 +657,38 @@ function buildCustomFeatureParameters(tool: ToolbarToolId, geometryIds: string[]
       // note.fs's precondition: `definition.target is Query` (single
       // vertex/edge/face pick) + `definition.noteText is string`.
       return [queryListParameter("target", geometryIds), stringParameter("noteText", "")];
+    case "compare":
+      // compareAlternatives.fs's precondition also declares
+      // comparisonSlot/currentOption/alternativeA (all required) and
+      // alternativeB (only required when hasAlternativeB is true) --
+      // deliberately NOT included here at all (see TOOLBAR_TOOLS's own
+      // comment on the "conflict" category for why: their real wire
+      // shape, PartStudioData for the three Part Studio references, has
+      // never been captured live). Every scalar/boolean field IS
+      // included explicitly, matching this codebase's established
+      // practice everywhere else of never relying on a FeatureScript
+      // "Default" annotation being applied for an omitted parameter.
+      // alternativeB's own move/rotate fields are skipped too --
+      // compareAlternatives.fs's own precondition only declares them
+      // inside `if (definition.hasAlternativeB)`, so they're not
+      // required while it's false.
+      return [
+        booleanParameter("hasAlternativeB", false),
+        quantityParameter("currentMoveX", "0*mm"),
+        quantityParameter("currentMoveY", "0*mm"),
+        quantityParameter("currentMoveZ", "0*mm"),
+        quantityParameter("currentRotateX", "0*deg"),
+        quantityParameter("currentRotateY", "0*deg"),
+        quantityParameter("currentRotateZ", "0*deg"),
+        quantityParameter("alternativeAMoveX", "0*mm"),
+        quantityParameter("alternativeAMoveY", "0*mm"),
+        quantityParameter("alternativeAMoveZ", "0*mm"),
+        quantityParameter("alternativeARotateX", "0*deg"),
+        quantityParameter("alternativeARotateY", "0*deg"),
+        quantityParameter("alternativeARotateZ", "0*deg"),
+        stringParameter("activeOption", "CURRENT"),
+        booleanParameter("accepted", false),
+      ];
   }
 }
 
