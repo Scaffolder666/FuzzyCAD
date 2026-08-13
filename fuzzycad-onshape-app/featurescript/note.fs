@@ -163,15 +163,70 @@ function drawNoteCallout(
             "value" : calloutColor
     });
 
-    // Text plane built from the leader's own tangent-perpendicular basis
-    // (same technique drawEngineeringLeader/drawDimensionArrow already use
-    // successfully elsewhere in this codebase) -- NOT a fixed world-axis
-    // normal, which read sideways in practice on the warning icon.
-    const textPoint = labelPoint + side2 * (4 * millimeter);
-    const textPlane = plane(textPoint + side * (0.02 * millimeter), side, dir);
+    // Boxed callout: a filled panel + colored border sit behind the note
+    // text, like a proper annotation balloon, so the note reads as a
+    // deliberate label rather than characters floating in space. The panel,
+    // border and text share the leader's tangent-perpendicular plane basis
+    // (NOT a fixed world axis, which read sideways in practice on the
+    // warning icon), and are each nudged a hair apart along the shared
+    // normal so the three coincident faces don't z-fight.
+    const textPoint = labelPoint + side2 * (11 * millimeter);
+    const textSize = 6.0 * millimeter;
+
+    const halfW = 2.2 * textSize;
+    const halfH = textSize;
+    const fillPad = 0.6 * textSize;
+    const borderPad = fillPad + 0.24 * textSize;
+
+    const panelUv = worldToPlane(plane(textPoint, side, dir), textPoint);
+
+    // Border panel -- slightly larger, sits furthest back, colored the
+    // callout blue so it shows as a frame around the lighter fill.
+    const borderPlane = plane(textPoint + side * (0.02 * millimeter), side, dir);
+    const borderSketch = newSketchOnPlane(context, id + "noteBorder", { "sketchPlane" : borderPlane });
+    skRectangle(borderSketch, "borderRect", {
+            "firstCorner" : vector(panelUv[0] - halfW - borderPad, panelUv[1] - halfH - borderPad),
+            "secondCorner" : vector(panelUv[0] + halfW + borderPad, panelUv[1] + halfH + borderPad)
+    });
+    skSolve(borderSketch);
+    opExtractSurface(context, id + "noteBorderSurface", {
+            "faces" : qSketchRegion(id + "noteBorder"),
+            "offset" : 0 * meter,
+            "useFacesAroundToTrimOffset" : false
+    });
+    opDeleteBodies(context, id + "deleteNoteBorder", { "entities" : qCreatedBy(id + "noteBorder") });
+    setProperty(context, {
+            "entities" : qCreatedBy(id + "noteBorderSurface", EntityType.BODY),
+            "propertyType" : PropertyType.APPEARANCE,
+            "value" : calloutColor
+    });
+
+    // Fill panel -- inset, sits in front of the border, light so the black
+    // note text stays legible on top of it.
+    const fillColor = color(0.93, 0.96, 1.0, 1.0);
+    const fillPlane = plane(textPoint + side * (0.05 * millimeter), side, dir);
+    const fillSketch = newSketchOnPlane(context, id + "noteFill", { "sketchPlane" : fillPlane });
+    skRectangle(fillSketch, "fillRect", {
+            "firstCorner" : vector(panelUv[0] - halfW - fillPad, panelUv[1] - halfH - fillPad),
+            "secondCorner" : vector(panelUv[0] + halfW + fillPad, panelUv[1] + halfH + fillPad)
+    });
+    skSolve(fillSketch);
+    opExtractSurface(context, id + "noteFillSurface", {
+            "faces" : qSketchRegion(id + "noteFill"),
+            "offset" : 0 * meter,
+            "useFacesAroundToTrimOffset" : false
+    });
+    opDeleteBodies(context, id + "deleteNoteFill", { "entities" : qCreatedBy(id + "noteFill") });
+    setProperty(context, {
+            "entities" : qCreatedBy(id + "noteFillSurface", EntityType.BODY),
+            "propertyType" : PropertyType.APPEARANCE,
+            "value" : fillColor
+    });
+
+    // Text on top, nudged furthest along the normal.
+    const textPlane = plane(textPoint + side * (0.08 * millimeter), side, dir);
     const textUv = worldToPlane(textPlane, textPoint);
     const textSketch = newSketchOnPlane(context, id + "labelSketch", { "sketchPlane" : textPlane });
-    const textSize = 6.0 * millimeter;
 
     skText(textSketch, "label", {
             "text" : noteText,
