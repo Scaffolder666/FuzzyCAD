@@ -4,6 +4,17 @@ export type OnshapeElement = {
   type?: string;
   elementType?: string;
   dataType?: string;
+  // The microversion at which this specific element was last saved --
+  // confirmed live (parameter-mark-panel's namespace resolution) that
+  // this differs per element within the same document/workspace
+  // response, not a single value repeated across every row. Combined
+  // with the element's own owning documentId, this is exactly the
+  // "documentId::m<microversionId>" shape Onshape's custom-feature
+  // namespace convention expects (forum-confirmed, and matching a
+  // manually-captured real feature's namespace) -- lets a fresh,
+  // correct namespace be built on demand instead of only ever copying
+  // one out of an already-inserted feature instance.
+  microversionId?: string;
 };
 
 export type ApiResult = {
