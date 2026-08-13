@@ -572,6 +572,14 @@ function isValidUncertaintyDocument(value: unknown): value is FuzzyCADUncertaint
  */
 function ParameterMarkPanelInner() {
   const [context, setContext] = useState<SharedOnshapeContext | null>(null);
+  // Ref mirror of context -- insertToolbarMark is called from inside the
+  // SELECTION handler below, which lives in a useEffect that only
+  // resubscribes on [hasUrlContext, urlServer]. That closure was created
+  // once at mount, when context was still its initial null, so reading
+  // `context` directly from inside it would always see null and silently
+  // no-op every toolbar insert (confirmed live: Move stayed stuck on the
+  // "Select body geometry..." status forever). Same fix as armedToolRef.
+  const contextRef = useRef<SharedOnshapeContext | null>(null);
   const [status, setStatus] = useState("waiting for Onshape context...");
   const [parameters, setParameters] = useState<ValueParameterEntry[] | null>(null);
   // Source of truth for "which Cosmo Feature cards exist" -- see
@@ -663,6 +671,10 @@ function ParameterMarkPanelInner() {
   useEffect(() => {
     armedToolRef.current = armedTool;
   }, [armedTool]);
+
+  useEffect(() => {
+    contextRef.current = context;
+  }, [context]);
   // entityId (Onshape's short transient selectionId, e.g. "KHNB") ->
   // featureId, built from partstudio-feature-created-parts's entities
   // field across every open Cosmo Feature. A ref, not state: it's read
@@ -1005,6 +1017,15 @@ function ParameterMarkPanelInner() {
    * reopen, and from the header's Refresh button for an immediate check.
    */
   async function loadEverything(options?: { manual?: boolean }) {
+    // contextRef, not the outer `context` state variable directly: this
+    // function is called (via insertToolbarMark, focusNeedsInputMark's
+    // setMarkExpanded, and the debounced post-SELECTION refresh below)
+    // from inside the SELECTION handler's stale useEffect closure, which
+    // only ever sees whatever `context` was at mount (null). Shadowing
+    // the name here makes every `context.xxx` reference in the rest of
+    // this function read the always-current ref instead, with no other
+    // changes needed.
+    const context = contextRef.current;
     if (!context) return;
 
     if (annualQuotaExhaustedRef.current && !options?.manual) {
@@ -1623,6 +1644,10 @@ function ParameterMarkPanelInner() {
    * pure appearance patch) but scoped to a single feature.
    */
   async function setMarkExpanded(featureId: string, expanded: boolean) {
+    // contextRef, not context -- called from the SELECTION handler's
+    // stale closure via focusNeedsInputMark/collapseExpandedMark. See
+    // loadEverything's identical comment.
+    const context = contextRef.current;
     if (!context) return;
     await updatePartStudioFeatureSuppressed(
       {
@@ -1708,7 +1733,12 @@ function ParameterMarkPanelInner() {
    * accidentally commit.
    */
   async function insertToolbarMark(toolId: ToolbarToolId, geometryIds: string[]) {
-    if (!context || insertingTool) return;
+    // contextRef, not context -- see contextRef's own comment. This
+    // function is called from the SELECTION handler's stale closure, so
+    // the plain `context` variable here would always be whatever it was
+    // at mount (null), silently no-opping every insert.
+    const currentContext = contextRef.current;
+    if (!currentContext || insertingTool) return;
 
     const tool = TOOLBAR_TOOLS.find((entry) => entry.id === toolId);
     if (!tool) return;
@@ -1721,10 +1751,10 @@ function ParameterMarkPanelInner() {
 
       const insertRes = await addPartStudioCustomFeature(
         {
-          documentId: context.documentId,
-          workspaceId: context.workspaceId,
-          partStudioElementId: context.elementId,
-          server: context.server,
+          documentId: currentContext.documentId,
+          workspaceId: currentContext.workspaceId,
+          partStudioElementId: currentContext.elementId,
+          server: currentContext.server,
         },
         { featureType: tool.featureType, name: tool.featureName, parameters },
       );
