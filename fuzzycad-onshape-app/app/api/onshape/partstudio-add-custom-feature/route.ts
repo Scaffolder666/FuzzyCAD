@@ -16,6 +16,7 @@ type RequestBody = {
   server?: string;
   featureType: string;
   name: string;
+  namespace?: string;
   parameters: BTMParameter[];
 };
 
@@ -31,11 +32,16 @@ type RequestBody = {
  * in the TypeScript client where it's easier to keep in sync with each
  * needsInput*.fs file's own precondition.
  *
- * No "namespace" field: every FuzzyCAD custom feature is defined in the
- * SAME document as the Part Studios that use it (confirmed with the
- * project owner), so this is a same-document feature reference, not the
- * cross-document Feature Studio case partstudio-add-custom-feature-debug
- * was built to test.
+ * `namespace` IS required even though every FuzzyCAD custom feature is
+ * defined in the same document as the Part Studios that use it
+ * (confirmed with the project owner) -- confirmed live that omitting it
+ * produces Onshape's own "Feature has invalid type" 400, not just a
+ * cross-document-only requirement the way partstudio-add-custom-feature-
+ * debug's own comment originally assumed. The client is expected to
+ * supply a real value copied from an already-inserted instance's own
+ * raw JSON (see DetectedCosmoFeature.namespace in
+ * parameter-mark-panel/page.tsx); this route just forwards whatever it
+ * receives.
  */
 export async function POST(req: NextRequest) {
   const accessToken = req.cookies.get("onshape_access_token")?.value;
@@ -62,6 +68,7 @@ export async function POST(req: NextRequest) {
     server = "https://cad.onshape.com",
     featureType,
     name,
+    namespace,
     parameters,
   } = body;
 
@@ -94,6 +101,7 @@ export async function POST(req: NextRequest) {
     message: {
       featureType,
       name: name || featureType,
+      ...(namespace ? { namespace } : {}),
       suppressed: false,
       parameters,
     },
