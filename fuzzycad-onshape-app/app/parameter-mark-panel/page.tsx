@@ -61,7 +61,6 @@ type FeatureGroup = {
   featureName: string;
   featureType: string;
   parameters: ValueParameterEntry[];
-  selectionReady: boolean | null;
 };
 
 /**
@@ -91,12 +90,6 @@ type DetectedCosmoFeature = {
   // insertToolbarMark can copy a real, already-working value instead of
   // guessing one.
   namespace: string | null;
-  // Whether this tool's own selectionParamId (see TOOLBAR_TOOLS) points
-  // at real geometry yet -- read straight off this same raw feature
-  // entry's own message.parameters, no separate API call. null when the
-  // featureType has no registered selectionParamId (a tool without
-  // step-by-step guidance, or an unrecognized featureType).
-  selectionReady: boolean | null;
 };
 
 /**
@@ -368,16 +361,34 @@ const TOOLBAR_TOOLS: {
    * fundamentally different (multi-Part-Studio, not single-query)
    * interaction, out of scope for this pass.
    */
-  guidance?: { select: string; selectedLabel: string; adjust: string };
   /**
-   * Which of this tool's own BTMParameterQueryList fields to read back
-   * from the raw feature tree to know whether "step 1" is done --
-   * matches the parameterId queryListParameter was given in
-   * buildCustomFeatureParameters above. Read by extractCosmoFeatures
-   * off data already fetched for detectedFeatures (paramsData.rawData),
-   * not a separate API call.
+   * Task-level guidance for the CREATION session only (see
+   * ToolCreationGuide/ActiveCreation below) -- shown in a dismissible
+   * panel from the moment the toolbar button is clicked until Confirm/
+   * Cancel, not attached to the persisted card afterward. Earlier this
+   * session this same guidance lived as a per-card two-step progress
+   * indicator (done/pending derived from re-GETting the persisted
+   * feature tree's query parameters) -- dropped after Onshape's own
+   * documented closeFeatureDialog semantics confirmed why that was the
+   * wrong source of truth: closing a dialog with accept:false explicitly
+   * discards picks/edits ("close without saving"), so a persisted-tree
+   * GET can't reliably reflect an in-progress, not-yet-accepted native
+   * dialog session -- not even shortly afterward, since a pick that was
+   * never accepted may never have been saved at all. Two lines only,
+   * matching the two things a Needs Input mark actually needs before
+   * Accept can happen: real geometry, and SOME preview to look at (the
+   * exact number stays open by design, see `adjust`'s "can stay
+   * unresolved" framing -- a Needs Input mark's whole point is that a
+   * collaborator resolves the value later, not that the creator must).
+   *   - select: what to pick in the 3D view (CAD vocabulary avoided,
+   *     e.g. "Select the face you want to extend" not "Select entities
+   *     to extrude")
+   *   - adjust: what the resulting preview means and that its exact
+   *     value doesn't need to be final
+   * Omitted for "compare" -- its interaction (multiple Part Studio
+   * references, not a single pick + value) doesn't fit this shape.
    */
-  selectionParamId?: string;
+  guidance?: { select: string; adjust: string };
 }[] = [
   {
     id: "move",
@@ -385,11 +396,10 @@ const TOOLBAR_TOOLS: {
     featureType: "fuzzycadNeedsInputMove",
     featureName: "FuzzyCAD Needs Input Move",
     category: "needsInput",
-    selectionParamId: "body",
     guidance: {
-      select: "Select the object you want to move.",
-      selectedLabel: "Object selected.",
-      adjust: "Then drag the arrows to explore where it should go.",
+      select: "Select the object you want to move in the 3D view.",
+      adjust:
+        "Drag the arrows to show the intended movement. The exact distance can stay unresolved for a collaborator to decide.",
     },
   },
   {
@@ -398,11 +408,10 @@ const TOOLBAR_TOOLS: {
     featureType: "fuzzycadNeedsInputExtrude",
     featureName: "FuzzyCAD Needs Input Extrude",
     category: "needsInput",
-    selectionParamId: "entities",
     guidance: {
-      select: "Select the face you want to extend.",
-      selectedLabel: "Face selected.",
-      adjust: "Then adjust the depth to explore how far it should extend.",
+      select: "Select the face you want to extend in the 3D view.",
+      adjust:
+        "Use the preview to show the intended direction. The exact depth can stay unresolved for a collaborator to decide.",
     },
   },
   {
@@ -411,11 +420,9 @@ const TOOLBAR_TOOLS: {
     featureType: "fuzzycadNeedsInputChamfer",
     featureName: "FuzzyCAD Needs Input Chamfer",
     category: "needsInput",
-    selectionParamId: "edge",
     guidance: {
-      select: "Select the edge(s) you want to bevel.",
-      selectedLabel: "Edge(s) selected.",
-      adjust: "Then adjust the width.",
+      select: "Select the edge(s) you want to bevel in the 3D view.",
+      adjust: "Use the preview to mark the intended bevel. The exact width can stay unresolved for a collaborator to decide.",
     },
   },
   {
@@ -424,11 +431,10 @@ const TOOLBAR_TOOLS: {
     featureType: "fuzzycadNeedsInputFillet",
     featureName: "FuzzyCAD Needs Input Fillet",
     category: "needsInput",
-    selectionParamId: "edge",
     guidance: {
-      select: "Select the sharp edge(s) you want to round.",
-      selectedLabel: "Edge(s) selected.",
-      adjust: "Then adjust the radius to explore the rounding.",
+      select: "Select the sharp edge(s) you want to round in the 3D view.",
+      adjust:
+        "Use the preview to show the intended rounding. The exact radius can stay unresolved for a collaborator to decide.",
     },
   },
   {
@@ -437,11 +443,10 @@ const TOOLBAR_TOOLS: {
     featureType: "fuzzycadNeedsInputScale",
     featureName: "FuzzyCAD Needs Input Scale",
     category: "needsInput",
-    selectionParamId: "body",
     guidance: {
-      select: "Select the object you want to resize.",
-      selectedLabel: "Object selected.",
-      adjust: "Then drag the handle to explore a larger or smaller size.",
+      select: "Select the object you want to resize in the 3D view.",
+      adjust:
+        "Use the preview to show larger or smaller as intended. The exact scale can stay unresolved for a collaborator to decide.",
     },
   },
   {
@@ -450,11 +455,10 @@ const TOOLBAR_TOOLS: {
     featureType: "fuzzycadNeedsInputRotate",
     featureName: "FuzzyCAD Needs Input Rotate",
     category: "needsInput",
-    selectionParamId: "body",
     guidance: {
-      select: "Select the object you want to rotate.",
-      selectedLabel: "Object selected.",
-      adjust: "Choose an axis, then adjust the angle.",
+      select: "Select the object you want to rotate in the 3D view.",
+      adjust:
+        "Choose the intended axis and check the preview direction. The exact angle can stay unresolved for a collaborator to decide.",
     },
   },
   {
@@ -463,11 +467,10 @@ const TOOLBAR_TOOLS: {
     featureType: "fuzzycadNeedsInputStretch",
     featureName: "FuzzyCAD Needs Input Stretch",
     category: "needsInput",
-    selectionParamId: "face",
     guidance: {
-      select: "Select the face that should stay fixed.",
-      selectedLabel: "Fixed face selected.",
-      adjust: "The object will stretch away from this face.",
+      select: "Select the face that should stay fixed in the 3D view.",
+      adjust:
+        "The object stretches away from this face. The exact amount can stay unresolved for a collaborator to decide.",
     },
   },
   {
@@ -476,11 +479,9 @@ const TOOLBAR_TOOLS: {
     featureType: "fuzzycadNote",
     featureName: "FuzzyCAD Note",
     category: "markConstrain",
-    selectionParamId: "target",
     guidance: {
-      select: "Select the point, edge, or face this note refers to.",
-      selectedLabel: "Location selected.",
-      adjust: "Then add your note.",
+      select: "Select the point, edge, or face this note refers to in the 3D view.",
+      adjust: "Type the note you want collaborators to see.",
     },
   },
   {
@@ -491,13 +492,6 @@ const TOOLBAR_TOOLS: {
     category: "conflict",
   },
 ];
-
-/**
- * featureType -> tool lookup, built once -- extractCosmoFeatures needs
- * selectionParamId per raw feature it reads, keyed by featureType (the
- * only identifier a raw feature entry carries), not by ToolbarToolId.
- */
-const TOOLBAR_TOOL_BY_FEATURE_TYPE = new Map(TOOLBAR_TOOLS.map((tool) => [tool.featureType, tool]));
 
 /**
  * Render order + per-category identity for the toolbar's three sections
@@ -996,6 +990,16 @@ function ParameterMarkPanelInner() {
   // buttons during a save, and swaps that one tool's icon to a spinner
   // label so it's clear which insert is running.
   const [insertingTool, setInsertingTool] = useState<ToolbarToolId | null>(null);
+  // The mark currently being created, from the moment its toolbar insert
+  // succeeds until Confirm/Cancel (see ToolCreationGuide/
+  // confirmActiveCreation/cancelActiveCreation). Deliberately NOT derived
+  // from the persisted feature tree -- confirmed via Onshape's own
+  // closeFeatureDialog docs that closing with accept:false discards
+  // picks/edits ("close without saving"), so a GET of the committed tree
+  // can't reliably reflect an open, not-yet-accepted native dialog
+  // session. This is local, ephemeral session state instead.
+  const [activeCreation, setActiveCreation] = useState<{ toolId: ToolbarToolId; featureId: string } | null>(null);
+  const [creationActionBusy, setCreationActionBusy] = useState(false);
 
   useEffect(() => {
     contextRef.current = context;
@@ -1111,34 +1115,6 @@ function ParameterMarkPanelInner() {
     }
   }
 
-  /**
-   * Reads whether toolId's registered selectionParamId (see
-   * TOOLBAR_TOOLS) currently points at real geometry, straight off this
-   * feature's own raw message.parameters -- the same BTMParameterQueryList
-   * shape queryListParameter builds for inserts (message.queries: [...]),
-   * just read back instead of written. Returns null if this featureType
-   * has no registered selectionParamId, or the expected parameter/shape
-   * isn't present (an older feature instance, an unrecognized type).
-   */
-  function readSelectionReady(featureMessage: Record<string, unknown>, featureType: string): boolean | null {
-    const selectionParamId = TOOLBAR_TOOL_BY_FEATURE_TYPE.get(featureType)?.selectionParamId;
-    if (!selectionParamId) return null;
-
-    const parameters = featureMessage.parameters;
-    if (!Array.isArray(parameters)) return null;
-
-    for (const param of parameters) {
-      if (!param || typeof param !== "object") continue;
-      const paramMessage = (param as Record<string, unknown>).message;
-      if (!paramMessage || typeof paramMessage !== "object") continue;
-      const record = paramMessage as Record<string, unknown>;
-      if (record.parameterId !== selectionParamId) continue;
-      return Array.isArray(record.queries) && record.queries.length > 0;
-    }
-
-    return null;
-  }
-
   /** Every Cosmo Feature instance found in a raw features-list dump, however it got there -- always inserted directly in Onshape's own UI, never by this panel. */
   function extractCosmoFeatures(rawFeatures: unknown): DetectedCosmoFeature[] {
     if (!Array.isArray(rawFeatures)) return [];
@@ -1157,7 +1133,6 @@ function ParameterMarkPanelInner() {
           featureName: typeof name === "string" ? name : featureId,
           featureType,
           namespace: typeof namespace === "string" && namespace ? namespace : null,
-          selectionReady: readSelectionReady(message as Record<string, unknown>, featureType),
         });
       }
     }
@@ -1593,7 +1568,6 @@ function ParameterMarkPanelInner() {
       featureName: feature.featureName,
       featureType: feature.featureType,
       parameters: parametersByFeature.get(feature.featureId) ?? [],
-      selectionReady: feature.selectionReady,
     }));
   }, [detectedFeatures, parameters]);
 
@@ -1891,16 +1865,7 @@ function ParameterMarkPanelInner() {
   async function livePreviewValue(entry: ValueParameterEntry, value: string) {
     if (!context) return;
 
-    window.parent.postMessage(
-      {
-        documentId: context.documentId,
-        workspaceId: context.workspaceId,
-        elementId: context.elementId,
-        messageName: "closeFeatureDialog",
-        accept: false,
-      },
-      context.server,
-    );
+    postCloseFeatureDialog(false);
 
     const baseExpression = formatFeatureParameterValue(entry.typeName, entry.message);
     const expression = substituteNumericMagnitude(baseExpression, value);
@@ -2132,25 +2097,16 @@ function ParameterMarkPanelInner() {
       const newFeatureId = extractInsertedFeatureId(insertRes.data);
 
       if (newFeatureId) {
-        // Reuses the exact same wording as this feature's own card
-        // guidance (see ToolGuidanceSteps/TOOLBAR_TOOLS) instead of a
-        // separate generic string -- one source of truth for "what to
-        // do next" so the two can't drift into different phrasing for
-        // the same tool. guidance.select is a full sentence ending in
-        // "." for the card; the trailing period is stripped here since
-        // this status line embeds it mid-sentence instead.
-        const nextStep = tool.guidance ? tool.guidance.select.replace(/\.$/, "") : "pick geometry";
-        setStatus(`${tool.label} inserted -- ${nextStep} in the 3D view`);
+        setStatus(`${tool.label} inserted`);
+        // Starts the creation session (see ToolCreationGuide below) --
+        // no auto-refresh here. Onshape's dialog is opened purely as the
+        // real picker/manipulator surface; it's still open until Confirm/
+        // Cancel closes it via closeFeatureDialog. Refreshing the card
+        // list now would only ever show a still-empty, not-yet-accepted
+        // mark, so that GET is deferred to confirmActiveCreation/
+        // cancelActiveCreation, whichever actually happens.
+        setActiveCreation({ toolId, featureId: newFeatureId });
         openFeatureDialog(newFeatureId);
-
-        // Give Onshape's own dialog a moment to actually take over the
-        // UI before this panel starts a GET-everything refresh -- firing
-        // both at once raced the dialog open against a fetch neither of
-        // them needed to win, and stacked an extra round of API calls
-        // right on top of the insert we just made.
-        window.setTimeout(() => {
-          void loadEverything({ manual: true });
-        }, 1000);
         return;
       }
 
@@ -2163,6 +2119,90 @@ function ParameterMarkPanelInner() {
       await loadEverything({ manual: true });
     } finally {
       setInsertingTool(null);
+    }
+  }
+
+  /**
+   * One-way postMessage to Onshape's client (same origin-scoped send
+   * every other closeFeatureDialog call in this file uses, e.g.
+   * openFeatureDialog/livePreviewValue/setActiveOption). Officially
+   * documented (onshape-public.github.io/docs/app-dev/messages/
+   * element-right-panel): accept:true "mimics closing the dialog by
+   * clicking the green check mark or Accept button"; accept:false
+   * "mimics closing the dialog by clicking the X or Cancel button to
+   * close without saving".
+   */
+  function postCloseFeatureDialog(accept: boolean) {
+    if (!context) return;
+    window.parent.postMessage(
+      {
+        documentId: context.documentId,
+        workspaceId: context.workspaceId,
+        elementId: context.elementId,
+        messageName: "closeFeatureDialog",
+        accept,
+      },
+      context.server,
+    );
+  }
+
+  /**
+   * Confirm (see ToolCreationGuide): accept:true is a real, documented
+   * equivalent of clicking Onshape's own native checkmark -- this never
+   * touches the feature's parameters directly, whatever is currently
+   * live in that dialog (the picked geometry, the dragged manipulator
+   * position) is what gets saved, exactly as the checkmark itself would
+   * save it. The mark still starts flagged "needs input" (see
+   * buildCustomFeatureParameters) -- Confirm ends the creation session,
+   * it is not the same action as Accept/"Mark Answered" on the
+   * resulting card, which is a separate, later, explicit decision.
+   */
+  function confirmActiveCreation() {
+    if (!activeCreation) return;
+    postCloseFeatureDialog(true);
+    setActiveCreation(null);
+    // A beat for Onshape to actually process the accept server-side
+    // before this panel's own GET would otherwise race it.
+    window.setTimeout(() => {
+      void loadEverything({ manual: true });
+    }, 500);
+  }
+
+  /**
+   * Cancel (see ToolCreationGuide): accept:false alone only ends the
+   * native dialog's OWN editing session ("close without saving") -- it
+   * does not remove the feature itself, because unlike Onshape's native
+   * "Insert -> pick -> OK" flow, FuzzyCAD's own insert already created
+   * this feature via a REST POST before ever opening the dialog (see
+   * insertToolbarMark). Left alone, Cancel would leave a permanently
+   * empty, incomplete Needs Input mark sitting in the tree. So Cancel
+   * here is accept:false PLUS an explicit delete of that same feature,
+   * same deletePartStudioFeature call rejectMark already uses.
+   */
+  async function cancelActiveCreation() {
+    if (!context || !activeCreation) return;
+    setCreationActionBusy(true);
+    try {
+      postCloseFeatureDialog(false);
+
+      const deleteRes = await deletePartStudioFeature(
+        {
+          documentId: context.documentId,
+          workspaceId: context.workspaceId,
+          partStudioElementId: context.elementId,
+          server: context.server,
+        },
+        { featureId: activeCreation.featureId },
+      );
+
+      if (!deleteRes.ok) {
+        setStatus(`failed to discard the in-progress mark (HTTP ${deleteRes.status})`);
+      }
+
+      setActiveCreation(null);
+      void loadEverything({ manual: true });
+    } finally {
+      setCreationActionBusy(false);
     }
   }
 
@@ -2186,16 +2226,7 @@ function ParameterMarkPanelInner() {
   ) {
     if (!context) return;
 
-    window.parent.postMessage(
-      {
-        documentId: context.documentId,
-        workspaceId: context.workspaceId,
-        elementId: context.elementId,
-        messageName: "closeFeatureDialog",
-        accept: false,
-      },
-      context.server,
-    );
+    postCloseFeatureDialog(false);
 
     const updateRes = await updatePartStudioFeatureSuppressed(
       {
@@ -2247,6 +2278,14 @@ function ParameterMarkPanelInner() {
     if (!confirmed) return;
 
     setPendingAction(`${group.featureId}:resolve`);
+    // Closing any dialog left open for this exact feature first (e.g.
+    // opened by clicking the card header) -- same reasoning and same
+    // one-way message livePreviewValue/setActiveOption already use
+    // above: that dialog's own uncommitted edits could otherwise
+    // clobber this write on its next regen/close, and accept:false is
+    // confirmed to discard them cleanly ("close without saving") rather
+    // than accidentally committing a half-finished edit.
+    postCloseFeatureDialog(false);
     try {
       if (ACCEPT_VIA_HIDDEN_PARAMETER_COSMO_FEATURE_TYPES.has(group.featureType)) {
         const updateRes = await updatePartStudioFeatureSuppressed(
@@ -2389,12 +2428,8 @@ function ParameterMarkPanelInner() {
             />
           ) : null}
           <span className={styles.cardTitle}>{group.featureName}</span>
-          <span className={styles.cardTypeTag}>({group.featureType})</span>
+          <span className={styles.cardTypeTag}>({isQuestion ? "Needs Input" : isNote ? "Note" : "Proposal"})</span>
         </div>
-
-        {!resolved ? (
-          <ToolGuidanceSteps featureType={group.featureType} selectionReady={group.selectionReady} />
-        ) : null}
 
         {group.parameters
           .filter((entry) => entry.typeName !== "BTMParameterBoolean" && !(isNote && entry.parameterId === "noteText"))
@@ -2799,10 +2834,18 @@ function ParameterMarkPanelInner() {
         })}
       </div>
 
+      {activeCreation ? (
+        <ToolCreationGuide
+          toolId={activeCreation.toolId}
+          busy={creationActionBusy}
+          onConfirm={confirmActiveCreation}
+          onCancel={() => void cancelActiveCreation()}
+        />
+      ) : null}
+
       {parameters === null ? null : featureGroups.length === 0 ? (
         <p className={styles.emptyState}>
-          No FuzzyCAD custom feature proposals found. Insert one (e.g. &quot;FuzzyCAD Proposed
-          Extrude&quot;) from Onshape&apos;s own feature toolbar to see it here.
+          No FuzzyCAD marks yet. Choose a Needs Input, Mark, or Conflict tool above to create one.
         </p>
       ) : (
         <div className={styles.proposalList}>
@@ -2977,48 +3020,70 @@ function AlternativeDiscussionThread({
 }
 
 /**
- * Task-level "what do I do next" guidance -- deliberately NOT a
- * restatement of Onshape's own native operation panel (which already
- * shows the real picker + the real value field once opened). Two-layer
- * division of labor: this answers "what should I be doing right now",
- * the native panel answers "how do I actually do it". Renders nothing
- * for a tool with no registered guidance (see TOOLBAR_TOOLS), or once
- * selectionReady comes back null (an older feature instance predating
- * this field, or an unrecognized shape) -- degrading silently rather
- * than showing a guess.
+ * Creation coach: shown in a dismissible panel directly under the
+ * create toolbar from the moment a tool is clicked until Confirm/
+ * Cancel, replacing Onshape's own native dialog as the thing a novice
+ * actually looks at and drives -- that dialog stays open the whole
+ * time (its picker/manipulator is still what's doing the real work),
+ * it's just not something the user needs to touch directly. See
+ * ActiveCreation/confirmActiveCreation/cancelActiveCreation for the
+ * postMessage mechanics.
+ *
+ * Two-layer division of labor with Onshape's own operation panel:
+ * this says WHAT to do ("select the face you want to extend"),
+ * Onshape's panel (still open, off to the side) is what actually DOES
+ * it (the real picker, the real manipulator, the real value field).
+ *
+ * `adjust`'s wording deliberately frames the preview as communicating
+ * intent, not as something that must be numerically finished here --
+ * a Needs Input mark's entire point is that the exact value stays open
+ * for a collaborator to resolve later, not something the creator has
+ * to nail down before Confirm.
  */
-function ToolGuidanceSteps({
-  featureType,
-  selectionReady,
+function ToolCreationGuide({
+  toolId,
+  busy,
+  onConfirm,
+  onCancel,
 }: {
-  featureType: string;
-  selectionReady: boolean | null;
+  toolId: ToolbarToolId;
+  busy: boolean;
+  onConfirm: () => void;
+  onCancel: () => void;
 }) {
-  const tool = TOOLBAR_TOOL_BY_FEATURE_TYPE.get(featureType);
-  if (!tool?.guidance || selectionReady === null) return null;
+  const tool = TOOLBAR_TOOLS.find((entry) => entry.id === toolId);
+  if (!tool?.guidance) return null;
   const { guidance } = tool;
+  const sectionClass = TOOLBAR_CATEGORY_META[tool.category].sectionClass;
 
   return (
-    <div className={styles.guidanceSteps}>
-      <div
-        className={
-          selectionReady
-            ? `${styles.guidanceStep} ${styles.guidanceStepDone}`
-            : `${styles.guidanceStep} ${styles.guidanceStepActive}`
-        }
-      >
-        <span className={styles.guidanceStepMark}>{selectionReady ? "✓" : "●"}</span>
-        <span>{selectionReady ? guidance.selectedLabel : guidance.select}</span>
+    <div className={`${styles.toolbarSection} ${sectionClass} ${styles.creationGuide}`}>
+      <div className={styles.creationGuideHeader}>
+        <span className={styles.toolbarSectionLabel}>Creating {tool.label}</span>
+        <button
+          type="button"
+          className={styles.secondaryButton}
+          disabled={busy}
+          onClick={onCancel}
+          title="Cancel and discard this mark"
+        >
+          Cancel
+        </button>
       </div>
-      <div
-        className={
-          selectionReady
-            ? `${styles.guidanceStep} ${styles.guidanceStepActive}`
-            : `${styles.guidanceStep} ${styles.guidanceStepPending}`
-        }
-      >
-        <span className={styles.guidanceStepMark}>{selectionReady ? "●" : "○"}</span>
-        <span>{guidance.adjust}</span>
+      <div className={styles.guidanceSteps}>
+        <div className={styles.guidanceStep}>
+          <span className={styles.guidanceStepMark}>1</span>
+          <span>{guidance.select}</span>
+        </div>
+        <div className={styles.guidanceStep}>
+          <span className={styles.guidanceStepMark}>2</span>
+          <span>{guidance.adjust}</span>
+        </div>
+      </div>
+      <div className={styles.creationGuideActions}>
+        <button type="button" className={styles.acceptButton} disabled={busy} onClick={onConfirm}>
+          {busy ? "Saving..." : "Confirm"}
+        </button>
       </div>
     </div>
   );

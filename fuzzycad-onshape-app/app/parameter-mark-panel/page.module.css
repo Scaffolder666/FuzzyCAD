@@ -336,56 +336,60 @@
   font-size: 11.5px;
 }
 
-/* Two-layer division of labor with Onshape's own native operation
-   panel: this tells a novice WHAT to do next in plain language, the
-   native panel handles HOW to do it (the actual picker, the actual
-   value field). Two steps only -- select geometry, then adjust the
-   value -- matching what selectionReady can actually detect. */
+/* Creation guide's own numbered step list (see ToolCreationGuide) --
+   plain, non-reactive steps, not a live progress tracker: shown only
+   while a mark is actively being created, gone the moment Confirm/
+   Cancel ends that session. */
 .guidanceSteps {
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 5px;
   padding: 2px 0 2px;
 }
 
 .guidanceStep {
   display: flex;
   align-items: baseline;
-  gap: 7px;
-  font-size: 12px;
-  line-height: 1.4;
+  gap: 8px;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: #33354a;
 }
 
 .guidanceStepMark {
   flex-shrink: 0;
-  width: 14px;
-  text-align: center;
-  font-size: 11px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.08);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10.5px;
+  font-weight: 700;
+  color: #45485a;
 }
 
-.guidanceStepDone {
-  color: #16824f;
+/* Creation guide -- dismissible panel shown under the toolbar for the
+   duration of a creation session (see ToolCreationGuide). Reuses a
+   category section's own tint/rail so it visually continues the
+   toolbar button the user just clicked, instead of looking like a
+   fourth, unrelated section. */
+.creationGuide {
+  margin-bottom: 6px;
 }
 
-.guidanceStepDone .guidanceStepMark {
-  color: #16824f;
+.creationGuideHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
 }
 
-.guidanceStepActive {
-  color: #1c3fa0;
-  font-weight: 600;
-}
-
-.guidanceStepActive .guidanceStepMark {
-  color: #2452c8;
-}
-
-.guidanceStepPending {
-  color: #9a9dab;
-}
-
-.guidanceStepPending .guidanceStepMark {
-  color: #c7cad3;
+.creationGuideActions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 8px;
 }
 
 .paramEditRow {
