@@ -277,16 +277,11 @@ const ACCEPT_VIA_HIDDEN_PARAMETER_COSMO_FEATURE_TYPES = new Set([
 /**
  * The toolbar's "create a new mark" tools -- one per Needs Input
  * FeatureScript type (Hole excluded for now, same as the interaction
- * pass above). Each maps straight onto that feature's own precondition
- * (see the matching needsInput*.fs file): `requiredEntityTypes` gates
- * which button is enabled for the current 3D-view selection, matching
- * that precondition's own Filter as closely as the SELECTION postMessage
- * lets us check client-side. Move/Scale/Rotate want EntityType.BODY,
- * which the SELECTION message may or may not report distinctly from a
- * plain face click depending on how the geometry was selected in
- * Onshape's own viewport -- this is the one part of the toolbar most
- * likely to need a live-test correction, same caveat as
- * buildAxialStretchTransform in needsInputStretch.fs.
+ * pass above). Clicking one inserts that featureType with no geometry
+ * parameter filled in (see queryListParameter/insertToolbarMark) --
+ * Onshape's own native "click body/edge/face in the 3D view" flow
+ * handles the actual picking once the resulting incomplete feature is
+ * opened, so this list only needs enough to build the insert request.
  */
 type ToolbarToolId = "move" | "extrude" | "chamfer" | "fillet" | "scale" | "rotate" | "stretch";
 
@@ -295,56 +290,38 @@ const TOOLBAR_TOOLS: {
   label: string;
   featureType: string;
   featureName: string;
-  requiredEntityTypes: string[];
 }[] = [
-  {
-    id: "move",
-    label: "Move",
-    featureType: "fuzzycadNeedsInputMove",
-    featureName: "FuzzyCAD Needs Input Move",
-    requiredEntityTypes: ["BODY"],
-  },
+  { id: "move", label: "Move", featureType: "fuzzycadNeedsInputMove", featureName: "FuzzyCAD Needs Input Move" },
   {
     id: "extrude",
     label: "Extrude",
     featureType: "fuzzycadNeedsInputExtrude",
     featureName: "FuzzyCAD Needs Input Extrude",
-    requiredEntityTypes: ["FACE"],
   },
   {
     id: "chamfer",
     label: "Chamfer",
     featureType: "fuzzycadNeedsInputChamfer",
     featureName: "FuzzyCAD Needs Input Chamfer",
-    requiredEntityTypes: ["EDGE", "FACE"],
   },
   {
     id: "fillet",
     label: "Fillet",
     featureType: "fuzzycadNeedsInputFillet",
     featureName: "FuzzyCAD Needs Input Fillet",
-    requiredEntityTypes: ["EDGE", "FACE"],
   },
-  {
-    id: "scale",
-    label: "Scale",
-    featureType: "fuzzycadNeedsInputScale",
-    featureName: "FuzzyCAD Needs Input Scale",
-    requiredEntityTypes: ["BODY"],
-  },
+  { id: "scale", label: "Scale", featureType: "fuzzycadNeedsInputScale", featureName: "FuzzyCAD Needs Input Scale" },
   {
     id: "rotate",
     label: "Rotate",
     featureType: "fuzzycadNeedsInputRotate",
     featureName: "FuzzyCAD Needs Input Rotate",
-    requiredEntityTypes: ["BODY"],
   },
   {
     id: "stretch",
     label: "Stretch",
     featureType: "fuzzycadNeedsInputStretch",
     featureName: "FuzzyCAD Needs Input Stretch",
-    requiredEntityTypes: ["FACE"],
   },
 ];
 
@@ -435,25 +412,40 @@ function ToolbarIcon({ tool }: { tool: ToolbarToolId }) {
  * partstudios endpoint (see partstudio-add-custom-feature/route.ts);
  * the unversioned path doesn't support queryString-based queries.
  */
+/**
+ * Deliberately built empty (geometryIds is always [] from the toolbar
+ * now -- see insertToolbarMark's own comment for why): rather than
+ * fighting Onshape's transient-vs-deterministic-ID distinction to
+ * pre-fill a query at insert time, the toolbar inserts the feature with
+ * this parameter left unset, exactly like a freshly-inserted-but-not-
+ * yet-picked feature from Onshape's own Insert menu. Opening it (double-
+ * click in the tree, or Onshape auto-focuses it right after insert)
+ * drops straight into Onshape's own native "click body/edge/face in the
+ * 3D view" picking flow -- proven, and not something this app needs to
+ * reimplement. If geometryIds is ever non-empty, still builds a real
+ * qTransient(...) query (kept working, not removed, in case a future
+ * caller has a legitimate use for pre-filling).
+ */
 function queryListParameter(parameterId: string, geometryIds: string[]): BTMParameter {
-  const transientQueries = geometryIds.map((id) => `qTransient("${id}")`);
-  const queryExpression = transientQueries.reduce((combined, next) =>
-    combined ? `qUnion(${combined}, ${next})` : next,
-  );
+  const queries =
+    geometryIds.length === 0
+      ? []
+      : [
+          {
+            type: 138,
+            typeName: "BTMIndividualQuery",
+            message: {
+              queryString: `query = ${geometryIds
+                .map((id) => `qTransient("${id}")`)
+                .reduce((combined, next) => (combined ? `qUnion(${combined}, ${next})` : next))};`,
+            },
+          },
+        ];
 
   return {
     type: 148,
     typeName: "BTMParameterQueryList",
-    message: {
-      parameterId,
-      queries: [
-        {
-          type: 138,
-          typeName: "BTMIndividualQuery",
-          message: { queryString: `query = ${queryExpression};` },
-        },
-      ],
-    },
+    message: { parameterId, queries },
   };
 }
 
@@ -649,28 +641,11 @@ function ParameterMarkPanelInner() {
   // linking; the other half, card->viewport via openFeatureDialog, already
   // existed).
   const [selectedFeatureIds, setSelectedFeatureIds] = useState<Set<string>>(new Set());
-  // Toolbar "arm, then pick" state (SketchUp-style: choose the tool
-  // first, THEN click the object it applies to -- not the other way
-  // round). Clicking a toolbar button arms it; the NEXT SELECTION
-  // postMessage received while armed triggers the insert and disarms.
-  // Clicking the same armed button again cancels; clicking a different
-  // one re-arms to that tool instead.
-  const [armedTool, setArmedTool] = useState<ToolbarToolId | null>(null);
-  // Ref mirror of armedTool -- the SELECTION handler below lives inside
-  // a useEffect that only resubscribes on [hasUrlContext, urlServer], so
-  // it would otherwise see a stale armedTool from whatever render set up
-  // that listener. Kept in sync by a dedicated effect right after
-  // armedTool's declaration.
-  const armedToolRef = useRef<ToolbarToolId | null>(null);
   // Which toolbar tool has an insert in flight -- disables every toolbar
   // button the same way `saving`/`pendingAction` disable the card
   // buttons during a save, and swaps that one tool's icon to a spinner
   // label so it's clear which insert is running.
   const [insertingTool, setInsertingTool] = useState<ToolbarToolId | null>(null);
-
-  useEffect(() => {
-    armedToolRef.current = armedTool;
-  }, [armedTool]);
 
   useEffect(() => {
     contextRef.current = context;
@@ -916,25 +891,7 @@ function ParameterMarkPanelInner() {
         selections,
         matchedFeatureIds: Array.from(matched),
         entityToFeatureRefSize: entityToFeatureRef.current.size,
-        armedTool: armedToolRef.current,
       });
-
-      // Toolbar "arm, then pick": this SELECTION is the pick for
-      // whichever tool is currently armed. Fires the insert straight
-      // from this event's own geometryIds (not from any separately
-      // stored state, to avoid any race with a stale snapshot) and
-      // disarms either way -- a failed/mismatched pick shouldn't leave
-      // the tool silently armed forever.
-      if (armedToolRef.current) {
-        const toolId = armedToolRef.current;
-        armedToolRef.current = null;
-        setArmedTool(null);
-        if (geometryIds.length > 0) {
-          void insertToolbarMark(toolId, geometryIds);
-        } else {
-          setStatus("Nothing selected -- tool cancelled");
-        }
-      }
 
       setSelectedFeatureIds(matched);
 
@@ -1702,27 +1659,14 @@ function ParameterMarkPanelInner() {
    * The actual insert happens later, from the SELECTION handler, once
    * the next pick comes in.
    */
-  function toggleArmedTool(toolId: ToolbarToolId) {
-    setArmedTool((prev) => {
-      if (prev === toolId) {
-        setStatus("Tool cancelled");
-        return null;
-      }
-      const tool = TOOLBAR_TOOLS.find((entry) => entry.id === toolId);
-      setStatus(
-        tool
-          ? `Select ${tool.requiredEntityTypes.join(" or ").toLowerCase()} geometry for ${tool.label}...`
-          : "",
-      );
-      return toolId;
-    });
-  }
-
   /**
    * Toolbar "create a new mark" action -- inserts a fresh instance of
-   * the given tool's Cosmo Feature, seeded from the geometryIds of
-   * whatever was just picked while the tool was armed (see the
-   * SELECTION handler above, which is this function's only caller).
+   * the given tool's Cosmo Feature with no geometry pre-filled (see
+   * queryListParameter's own comment for why: geometryIds is always []
+   * from here). The new feature shows up exactly like one freshly
+   * inserted from Onshape's own Insert menu before its first pick --
+   * opening it drops straight into Onshape's native "click body/edge/
+   * face in the 3D view" flow, no separate dialog step needed.
    * This is the create half of the app; the card list below is purely
    * for reviewing/managing marks that already exist, never for making
    * new ones.
@@ -1733,10 +1677,10 @@ function ParameterMarkPanelInner() {
    * accidentally commit.
    */
   async function insertToolbarMark(toolId: ToolbarToolId, geometryIds: string[]) {
-    // contextRef, not context -- see contextRef's own comment. This
-    // function is called from the SELECTION handler's stale closure, so
-    // the plain `context` variable here would always be whatever it was
-    // at mount (null), silently no-opping every insert.
+    // contextRef rather than the plain `context` variable -- harmless
+    // here (this is called from a fresh onClick closure, so `context`
+    // itself would be fine too) but keeps this function correct
+    // regardless of which closure ends up calling it later.
     const currentContext = contextRef.current;
     if (!currentContext || insertingTool) return;
 
@@ -2367,28 +2311,24 @@ function ParameterMarkPanelInner() {
        * surface for marks that already exist (Accept/Reject/comment);
        * this row is the only place that CREATES a new one.
        *
-       * SketchUp-style "arm, then pick": click a tool to arm it (it
-       * highlights), then click the object it applies to in Onshape's
-       * own 3D view -- the NEXT SELECTION received while armed triggers
-       * the insert (see the SELECTION handler above and
-       * insertToolbarMark). Click the same tool again to cancel.
+       * Click a tool to insert a fresh, not-yet-picked instance of it
+       * (see insertToolbarMark/queryListParameter). Open the new card
+       * (or the feature in Onshape's own tree) to pick its body/edge/
+       * face the normal native way -- no separate "arm, then click in
+       * 3D" step here, since that's exactly what opening an incomplete
+       * feature already does on its own.
        */}
       <div className={styles.toolbar}>
         {TOOLBAR_TOOLS.map((tool) => {
-          const isArmed = armedTool === tool.id;
           const isInserting = insertingTool === tool.id;
           return (
             <button
               key={tool.id}
               type="button"
-              className={isArmed ? `${styles.toolbarButton} ${styles.toolbarButtonArmed}` : styles.toolbarButton}
+              className={styles.toolbarButton}
               disabled={insertingTool !== null}
-              title={
-                isArmed
-                  ? `Click ${tool.requiredEntityTypes.join(" or ").toLowerCase()} geometry in the 3D view to insert ${tool.featureName}`
-                  : `Select ${tool.label}`
-              }
-              onClick={() => toggleArmedTool(tool.id)}
+              title={`Insert ${tool.featureName}`}
+              onClick={() => void insertToolbarMark(tool.id, [])}
             >
               <span className={styles.toolbarIcon}>
                 {isInserting ? <span className={styles.toolbarSpinner} /> : <ToolbarIcon tool={tool.id} />}
@@ -2398,12 +2338,6 @@ function ParameterMarkPanelInner() {
           );
         })}
       </div>
-      {armedTool ? (
-        <p className={styles.toolbarHint}>
-          Click {TOOLBAR_TOOLS.find((entry) => entry.id === armedTool)?.requiredEntityTypes.join(" or ").toLowerCase()}{" "}
-          geometry in the 3D view to place it.
-        </p>
-      ) : null}
 
       {parameters === null ? null : featureGroups.length === 0 ? (
         <p className={styles.emptyState}>
