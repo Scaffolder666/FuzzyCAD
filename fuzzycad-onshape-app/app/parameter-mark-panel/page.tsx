@@ -1728,19 +1728,40 @@ function ParameterMarkPanelInner() {
     if (!tool) return;
 
     // Required even for a same-document custom featureType (confirmed
-    // live -- see addPartStudioCustomFeature's own comment). Copied from
-    // an already-inserted instance of the SAME featureType, not just any
-    // FuzzyCAD mark -- different needsInput*.fs files may not all live in
-    // the same Feature Studio, and reusing a mismatched namespace fails
-    // with this exact same "Feature has invalid type" error, just for a
-    // different reason (right featureType, wrong Feature Studio).
-    const namespace = detectedFeatures.find(
+    // live -- see addPartStudioCustomFeature's own comment). Prefer an
+    // already-inserted instance of the SAME featureType, since that's
+    // guaranteed correct -- but the exact-match requirement turned out
+    // to be too strict in practice: confirmed live that a Move insert
+    // works, and once it exists in the document, its namespace ALSO
+    // works for inserting Extrude (a different featureType) even though
+    // no Extrude instance existed yet. All fuzzycadNeedsInput*.fs
+    // features share one Feature Studio in practice, so any detected
+    // FuzzyCAD feature's namespace is a reasonable fallback rather than
+    // blocking the insert outright -- logged so a real per-featureType
+    // Feature Studio split (if one ever exists) is diagnosable from a
+    // "Feature has invalid type" 400 instead of silently miscopying.
+    const exactMatch = detectedFeatures.find(
       (feature) => feature.featureType === tool.featureType && feature.namespace,
-    )?.namespace ?? undefined;
+    );
+    const fallbackMatch = detectedFeatures.find((feature) => feature.namespace);
+    const namespace = exactMatch?.namespace ?? fallbackMatch?.namespace ?? undefined;
+
+    if (exactMatch) {
+      console.debug("[FuzzyCAD] toolbar insert: exact-featureType namespace match", {
+        tool: toolId,
+        namespace,
+      });
+    } else if (fallbackMatch) {
+      console.debug("[FuzzyCAD] toolbar insert: falling back to another feature's namespace", {
+        tool: toolId,
+        borrowedFrom: fallbackMatch.featureType,
+        namespace,
+      });
+    }
 
     if (!namespace) {
       setStatus(
-        `Can't insert ${tool.label} yet: no existing ${tool.featureName} open to copy a namespace from. Insert one from Onshape's own Insert menu first.`,
+        `Can't insert ${tool.label} yet: no existing FuzzyCAD mark open to copy a namespace from. Insert one from Onshape's own Insert menu first.`,
       );
       return;
     }
