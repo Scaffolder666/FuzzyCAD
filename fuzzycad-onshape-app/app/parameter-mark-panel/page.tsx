@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import {
   addCustomFeatureProposalComment,
@@ -283,53 +283,95 @@ const ACCEPT_VIA_HIDDEN_PARAMETER_COSMO_FEATURE_TYPES = new Set([
 ]);
 
 /**
- * The toolbar's "create a new mark" tools -- one per Needs Input
- * FeatureScript type (Hole excluded for now, same as the interaction
- * pass above). Clicking one inserts that featureType with no geometry
+ * The toolbar's "create a new mark" tools, grouped into the app's three
+ * insertable categories (a fourth, Proposed*, used to be insertable here
+ * too but is no longer part of this app's flow -- Proposed* marks, if
+ * any exist, are still just read/reviewed like any other Cosmo Feature,
+ * never created from this toolbar):
+ *  - "needsInput": operation known, value not yet decided (Move/Extrude/
+ *    Chamfer/Fillet/Scale/Rotate/Stretch; Hole excluded for now, same as
+ *    the interaction pass above).
+ *  - "markConstrain": a standalone annotation/constraint pinned to the
+ *    model, not a question about a value (currently just Note; more may
+ *    join this category later).
+ * fuzzycadCompareAlternatives ("conflict") is deliberately NOT here --
+ * unlike every type above, it can't be inserted empty and picked
+ * afterward: it inherently compares >=2 already-concrete candidate
+ * queries, so there's nothing meaningful to insert before those
+ * candidates are already chosen. Needs its own dedicated flow, not a
+ * toolbar button, if it's ever wired up.
+ *
+ * Clicking any button here inserts that featureType with no geometry
  * parameter filled in (see queryListParameter/insertToolbarMark) --
  * Onshape's own native "click body/edge/face in the 3D view" flow
  * handles the actual picking once the resulting incomplete feature is
  * opened, so this list only needs enough to build the insert request.
  */
-type ToolbarToolId = "move" | "extrude" | "chamfer" | "fillet" | "scale" | "rotate" | "stretch";
+type ToolbarToolId = "move" | "extrude" | "chamfer" | "fillet" | "scale" | "rotate" | "stretch" | "note";
+type ToolbarToolCategory = "needsInput" | "markConstrain";
 
 const TOOLBAR_TOOLS: {
   id: ToolbarToolId;
   label: string;
   featureType: string;
   featureName: string;
+  category: ToolbarToolCategory;
 }[] = [
-  { id: "move", label: "Move", featureType: "fuzzycadNeedsInputMove", featureName: "FuzzyCAD Needs Input Move" },
+  {
+    id: "move",
+    label: "Move",
+    featureType: "fuzzycadNeedsInputMove",
+    featureName: "FuzzyCAD Needs Input Move",
+    category: "needsInput",
+  },
   {
     id: "extrude",
     label: "Extrude",
     featureType: "fuzzycadNeedsInputExtrude",
     featureName: "FuzzyCAD Needs Input Extrude",
+    category: "needsInput",
   },
   {
     id: "chamfer",
     label: "Chamfer",
     featureType: "fuzzycadNeedsInputChamfer",
     featureName: "FuzzyCAD Needs Input Chamfer",
+    category: "needsInput",
   },
   {
     id: "fillet",
     label: "Fillet",
     featureType: "fuzzycadNeedsInputFillet",
     featureName: "FuzzyCAD Needs Input Fillet",
+    category: "needsInput",
   },
-  { id: "scale", label: "Scale", featureType: "fuzzycadNeedsInputScale", featureName: "FuzzyCAD Needs Input Scale" },
+  {
+    id: "scale",
+    label: "Scale",
+    featureType: "fuzzycadNeedsInputScale",
+    featureName: "FuzzyCAD Needs Input Scale",
+    category: "needsInput",
+  },
   {
     id: "rotate",
     label: "Rotate",
     featureType: "fuzzycadNeedsInputRotate",
     featureName: "FuzzyCAD Needs Input Rotate",
+    category: "needsInput",
   },
   {
     id: "stretch",
     label: "Stretch",
     featureType: "fuzzycadNeedsInputStretch",
     featureName: "FuzzyCAD Needs Input Stretch",
+    category: "needsInput",
+  },
+  {
+    id: "note",
+    label: "Note",
+    featureType: "fuzzycadNote",
+    featureName: "FuzzyCAD Note",
+    category: "markConstrain",
   },
 ];
 
@@ -402,6 +444,14 @@ function ToolbarIcon({ tool }: { tool: ToolbarToolId }) {
           <rect x="7" y="7" width="10" height="10" />
           <path d="M2 12h4M2 12l3-3M2 12l3 3" />
           <path d="M22 12h-4M22 12l-3-3M22 12l-3 3" />
+        </svg>
+      );
+    case "note":
+      return (
+        <svg {...common}>
+          <circle cx="12" cy="9" r="2" />
+          <path d="M12 11v9" />
+          <path d="M8 22h8" />
         </svg>
       );
   }
@@ -480,11 +530,35 @@ function enumParameter(parameterId: string, enumName: string, value: string): BT
 }
 
 /**
+ * UNVERIFIED numeric `type` -- unlike Boolean(144)/Enum(145)/
+ * Quantity(147)/QueryList(148) above, no BTMParameterString has ever
+ * been freshly constructed for an insert in this codebase before (the
+ * only existing uses, fuzzycadNote's "noteText" and
+ * fuzzycadCompareAlternatives's "activeOption", are only ever read via
+ * GET or patched via partstudio-update-feature, which preserves
+ * whatever `type` the original already had rather than needing a fresh
+ * one). 146 is a best-effort guess -- it's the one gap in the
+ * numbered sequence this codebase HAS confirmed live (144, 145, _, 147,
+ * 148) -- not a captured value. If a Note insert 400s specifically on
+ * this parameter, this is the first thing to try alternate values for;
+ * Onshape's `typeName` may also just be authoritative regardless of
+ * `type` here, in which case this never mattered.
+ */
+function stringParameter(parameterId: string, value: string): BTMParameter {
+  return {
+    type: 146,
+    typeName: "BTMParameterString",
+    message: { parameterId, value },
+  };
+}
+
+/**
  * Builds the exact BTMParameter list each tool's own precondition
  * expects, seeded from whatever's currently selected in the 3D view.
  * Every numeric value starts at a plain placeholder with its own
  * "needs input" flag left on (true) -- the point of a Needs Input mark
  * is that the value isn't decided yet, so the toolbar never guesses one.
+ * "note" has no such flag (see note.fs -- just a target pick + text).
  */
 function buildCustomFeatureParameters(tool: ToolbarToolId, geometryIds: string[]): BTMParameter[] {
   switch (tool) {
@@ -536,6 +610,10 @@ function buildCustomFeatureParameters(tool: ToolbarToolId, geometryIds: string[]
         quantityParameter("stretchFactor", "1.5"),
         booleanParameter("stretchFactorNeedsInput", true),
       ];
+    case "note":
+      // note.fs's precondition: `definition.target is Query` (single
+      // vertex/edge/face pick) + `definition.noteText is string`.
+      return [queryListParameter("target", geometryIds), stringParameter("noteText", "")];
   }
 }
 
@@ -2402,22 +2480,25 @@ function ParameterMarkPanelInner() {
        * feature already does on its own.
        */}
       <div className={styles.toolbar}>
-        {TOOLBAR_TOOLS.map((tool) => {
+        {TOOLBAR_TOOLS.map((tool, index) => {
           const isInserting = insertingTool === tool.id;
+          const categoryChanged = index > 0 && TOOLBAR_TOOLS[index - 1].category !== tool.category;
           return (
-            <button
-              key={tool.id}
-              type="button"
-              className={styles.toolbarButton}
-              disabled={insertingTool !== null}
-              title={`Insert ${tool.featureName}`}
-              onClick={() => void insertToolbarMark(tool.id, [])}
-            >
-              <span className={styles.toolbarIcon}>
-                {isInserting ? <span className={styles.toolbarSpinner} /> : <ToolbarIcon tool={tool.id} />}
-              </span>
-              <span className={styles.toolbarLabel}>{tool.label}</span>
-            </button>
+            <Fragment key={tool.id}>
+              {categoryChanged ? <div className={styles.toolbarDivider} aria-hidden="true" /> : null}
+              <button
+                type="button"
+                className={styles.toolbarButton}
+                disabled={insertingTool !== null}
+                title={`Insert ${tool.featureName}`}
+                onClick={() => void insertToolbarMark(tool.id, [])}
+              >
+                <span className={styles.toolbarIcon}>
+                  {isInserting ? <span className={styles.toolbarSpinner} /> : <ToolbarIcon tool={tool.id} />}
+                </span>
+                <span className={styles.toolbarLabel}>{tool.label}</span>
+              </button>
+            </Fragment>
           );
         })}
       </div>
