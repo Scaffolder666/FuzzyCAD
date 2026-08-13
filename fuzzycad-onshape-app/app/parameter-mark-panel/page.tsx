@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import {
   addCustomFeatureProposalComment,
@@ -407,6 +407,25 @@ const TOOLBAR_TOOLS: {
     category: "conflict",
   },
 ];
+
+/**
+ * Render order + per-category identity for the toolbar's three sections
+ * (see TOOLBAR_TOOLS's own comment for what each category means). Each
+ * gets its own label, accent color, and CSS module class so the
+ * category boundary reads at a glance -- colored left rail + tinted
+ * background + icon color, not just a thin divider line, which turned
+ * out to be too subtle in practice (especially once the row wraps).
+ */
+const TOOLBAR_CATEGORY_ORDER: ToolbarToolCategory[] = ["needsInput", "markConstrain", "conflict"];
+
+const TOOLBAR_CATEGORY_META: Record<
+  ToolbarToolCategory,
+  { label: string; sectionClass: string }
+> = {
+  needsInput: { label: "Needs Input", sectionClass: styles.toolbarSectionNeedsInput },
+  markConstrain: { label: "Mark", sectionClass: styles.toolbarSectionMarkConstrain },
+  conflict: { label: "Conflict", sectionClass: styles.toolbarSectionConflict },
+};
 
 /**
  * Clean stroke-based line icons, one per tool -- deliberately not the
@@ -2555,25 +2574,34 @@ function ParameterMarkPanelInner() {
        * feature already does on its own.
        */}
       <div className={styles.toolbar}>
-        {TOOLBAR_TOOLS.map((tool, index) => {
-          const isInserting = insertingTool === tool.id;
-          const categoryChanged = index > 0 && TOOLBAR_TOOLS[index - 1].category !== tool.category;
+        {TOOLBAR_CATEGORY_ORDER.map((category) => {
+          const tools = TOOLBAR_TOOLS.filter((tool) => tool.category === category);
+          if (tools.length === 0) return null;
+          const meta = TOOLBAR_CATEGORY_META[category];
           return (
-            <Fragment key={tool.id}>
-              {categoryChanged ? <div className={styles.toolbarDivider} aria-hidden="true" /> : null}
-              <button
-                type="button"
-                className={styles.toolbarButton}
-                disabled={insertingTool !== null}
-                title={`Insert ${tool.featureName}`}
-                onClick={() => void insertToolbarMark(tool.id, [])}
-              >
-                <span className={styles.toolbarIcon}>
-                  {isInserting ? <span className={styles.toolbarSpinner} /> : <ToolbarIcon tool={tool.id} />}
-                </span>
-                <span className={styles.toolbarLabel}>{tool.label}</span>
-              </button>
-            </Fragment>
+            <div key={category} className={`${styles.toolbarSection} ${meta.sectionClass}`}>
+              <div className={styles.toolbarSectionLabel}>{meta.label}</div>
+              <div className={styles.toolbarSectionButtons}>
+                {tools.map((tool) => {
+                  const isInserting = insertingTool === tool.id;
+                  return (
+                    <button
+                      key={tool.id}
+                      type="button"
+                      className={styles.toolbarButton}
+                      disabled={insertingTool !== null}
+                      title={`Insert ${tool.featureName}`}
+                      onClick={() => void insertToolbarMark(tool.id, [])}
+                    >
+                      <span className={styles.toolbarIcon}>
+                        {isInserting ? <span className={styles.toolbarSpinner} /> : <ToolbarIcon tool={tool.id} />}
+                      </span>
+                      <span className={styles.toolbarLabel}>{tool.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
           );
         })}
       </div>

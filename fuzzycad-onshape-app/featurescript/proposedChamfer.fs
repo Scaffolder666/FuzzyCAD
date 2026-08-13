@@ -9,7 +9,10 @@ annotation { "Feature Type Name" : "FuzzyCAD Proposed Chamfer" }
 export const fuzzycadProposedChamfer = defineFeature(function(context is Context, id is Id, definition is map)
     precondition
     {
-        annotation { "Name" : "Edge to chamfer", "Filter" : EntityType.EDGE }
+        // BodyType.SOLID added to match needsInputChamfer.fs's filter --
+        // without it, a sketch/wire edge could be picked here even though
+        // opChamfer below expects a solid edge.
+        annotation { "Name" : "Edge to chamfer", "Filter" : EntityType.EDGE && BodyType.SOLID }
         definition.edge is Query;
 
         annotation { "Name" : "Width" }

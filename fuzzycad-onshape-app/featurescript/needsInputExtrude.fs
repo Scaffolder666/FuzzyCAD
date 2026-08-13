@@ -12,7 +12,11 @@ annotation {
 export const fuzzycadNeedsInputExtrude = defineFeature(function(context is Context, id is Id, definition is map)
     precondition
     {
-        annotation { "Name" : "Entities to extrude", "Filter" : EntityType.FACE }
+        // MaxNumberOfPicks: 1 -- direction/tangent plane are derived from a
+        // single face below; multiple non-coplanar faces would extrude the
+        // whole query in only the first one's direction, silently wrong for
+        // the rest. Single planar face keeps this unambiguous.
+        annotation { "Name" : "Face to extrude", "Filter" : EntityType.FACE, "MaxNumberOfPicks" : 1 }
         definition.entities is Query;
 
         annotation { "Name" : "Depth" }
@@ -49,6 +53,13 @@ export const fuzzycadNeedsInputExtrude = defineFeature(function(context is Conte
             return;
         }
 
+        // Owner body of the picked face -- needed so Accept can boolean-ADD
+        // the extrusion into the body it actually came from, instead of
+        // leaving a disconnected/overlapping new solid (see the accepted
+        // branch below; same qOwnerBody idiom needsInputChamfer.fs/
+        // needsInputFillet.fs already use for their own edge picks).
+        const originalBody = qOwnerBody(definition.entities);
+
         const faces = evaluateQuery(context, definition.entities);
 
         const tangentPlane =
@@ -69,15 +80,31 @@ export const fuzzycadNeedsInputExtrude = defineFeature(function(context is Conte
 
         if (definition.accepted)
         {
-            opExtrude(context, id + "acceptedExtrude", {
+            // High-level extrude() with an explicit booleanScope, not raw
+            // opExtrude -- raw opExtrude always creates a brand new,
+            // disconnected solid from the face, which for an "extrude this
+            // face outward" mark should instead merge into the body the
+            // face belongs to (the same booleanScope idiom
+            // needsInputHole.fs already uses for its own accepted branch,
+            // just ADD instead of REMOVE).
+            extrude(context, id + "acceptedExtrude", {
+                    "bodyType" : ExtendedToolBodyType.SOLID,
                     "entities" : definition.entities,
-                    "direction" : direction,
                     "endBound" : BoundingType.BLIND,
-                    "endDepth" : definition.depth
+                    "oppositeDirection" : definition.oppositeDirection,
+                    "depth" : definition.depth,
+                    "operationType" : NewBodyOperationType.ADD,
+                    "defaultScope" : false,
+                    "booleanScope" : originalBody
             });
             return;
         }
 
+        // Preview only: a separate, non-merged solid used purely to draw
+        // the ghost outline/warning icon/sketchy fill below -- deliberately
+        // NOT scope-aware (unlike the accepted branch above), since nothing
+        // should touch the real body until Accept, same principle every
+        // other needsInput*.fs preview follows.
         opExtrude(context, id + "previewExtrude", {
                 "entities" : definition.entities,
                 "direction" : direction,

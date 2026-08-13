@@ -25,6 +25,11 @@ export const fuzzycadProposedMove = defineFeature(function(context is Context, i
         definition.accepted is boolean;
     }
     {
+        if (isQueryEmpty(context, definition.body))
+        {
+            return;
+        }
+
         const originalBody = definition.body;
         const offset = vector(definition.moveX, definition.moveY, definition.moveZ);
 

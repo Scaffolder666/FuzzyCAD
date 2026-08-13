@@ -82,6 +82,11 @@ export const fuzzycadProposedRotate = defineFeature(function(context is Context,
         definition.accepted is boolean;
     }
     {
+        if (isQueryEmpty(context, definition.body) || isQueryEmpty(context, definition.axis))
+        {
+            return;
+        }
+
         const originalBody = definition.body;
 
         const rotationAxis = evAxis(context, {

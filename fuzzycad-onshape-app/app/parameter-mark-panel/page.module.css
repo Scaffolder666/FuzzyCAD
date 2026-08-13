@@ -185,18 +185,79 @@
 }
 
 /* Create toolbar -- permanently docked above the card list (see the JSX
-   comment above it). Distinct visual treatment from the cards below
-   (a bordered strip of icon buttons, not a list item) so it reads as
-   "make a new one" rather than another thing to review. */
+   comment above it). Distinct visual treatment from the cards below so
+   it reads as "make a new one" rather than another thing to review.
+   Holds one .toolbarSection per category -- a thin 1px divider between
+   groups turned out to be too subtle to read as a real boundary,
+   especially once the row wraps, so each category instead gets its own
+   tinted card with a colored left rail, an uppercase label, and its
+   icons recolored to match -- three cues instead of one, all pointing
+   at the same category identity. */
 .toolbar {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.toolbarSection {
+  border: 1px solid transparent;
+  border-left-width: 3px;
+  border-radius: 8px;
+  padding: 8px 10px 10px;
+}
+
+.toolbarSectionLabel {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  margin-bottom: 6px;
+}
+
+.toolbarSectionButtons {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  padding: 10px;
-  margin-bottom: 6px;
-  background: #fff;
-  border: 1px solid #e4e6ec;
-  border-radius: 8px;
+}
+
+/* needsInput -- blue: operation known, value not decided yet. */
+.toolbarSectionNeedsInput {
+  background: #eef3fd;
+  border-color: #c3d6f7;
+  border-left-color: #2452c8;
+}
+.toolbarSectionNeedsInput .toolbarSectionLabel {
+  color: #2452c8;
+}
+.toolbarSectionNeedsInput .toolbarIcon {
+  color: #2452c8;
+}
+
+/* markConstrain -- teal: an annotation/constraint pinned to the model. */
+.toolbarSectionMarkConstrain {
+  background: #eaf7f1;
+  border-color: #bfe6d3;
+  border-left-color: #0f9d78;
+}
+.toolbarSectionMarkConstrain .toolbarSectionLabel {
+  color: #0f9d78;
+}
+.toolbarSectionMarkConstrain .toolbarIcon {
+  color: #0f9d78;
+}
+
+/* conflict -- amber: >=2 concrete candidates competing for one slot. */
+.toolbarSectionConflict {
+  background: #fdf3ea;
+  border-color: #f3d9b8;
+  border-left-color: #c2660c;
+}
+.toolbarSectionConflict .toolbarSectionLabel {
+  color: #c2660c;
+}
+.toolbarSectionConflict .toolbarIcon {
+  color: #c2660c;
 }
 
 .toolbarButton {
@@ -214,8 +275,8 @@
 }
 
 .toolbarButton:hover:not(:disabled) {
-  background: #f4f5f8;
-  border-color: #d9dbe1;
+  background: rgba(255, 255, 255, 0.65);
+  border-color: rgba(0, 0, 0, 0.08);
 }
 
 .toolbarButton:disabled {
@@ -229,14 +290,13 @@
   justify-content: center;
   width: 26px;
   height: 26px;
-  color: #2c2e38;
 }
 
 .toolbarSpinner {
   width: 16px;
   height: 16px;
-  border: 2px solid #c7cad3;
-  border-top-color: #2452c8;
+  border: 2px solid rgba(0, 0, 0, 0.18);
+  border-top-color: currentColor;
   border-radius: 50%;
   animation: toolbarSpin 0.7s linear infinite;
 }
@@ -251,13 +311,6 @@
   font-size: 12px;
   font-weight: 600;
   color: #44465a;
-}
-
-.toolbarDivider {
-  align-self: stretch;
-  width: 1px;
-  margin: 4px 2px;
-  background: #e4e6ec;
 }
 
 .emptyState {
