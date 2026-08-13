@@ -260,7 +260,9 @@ function drawBigMoveArrow(
             "value" : color(0, 0, 0, 1.0)
     });
 
-    const detailPoint = midPoint - side2 * (7 * millimeter);
+    // Pushed well clear of the main label: both are now solid filled text
+    // (~10mm and ~5.6mm tall), so the old 7mm gap let them overlap.
+    const detailPoint = midPoint - side2 * (16 * millimeter);
     const detailPlane = plane(detailPoint + side * (0.02 * millimeter), side);
     const detailUv = worldToPlane(detailPlane, detailPoint);
     const detailSketch = newSketchOnPlane(context, id + "detailSketch", { "sketchPlane" : detailPlane });
