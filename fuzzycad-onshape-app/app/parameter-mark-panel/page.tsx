@@ -695,23 +695,18 @@ function enumParameter(parameterId: string, enumName: string, value: string): BT
 }
 
 /**
- * UNVERIFIED numeric `type` -- unlike Boolean(144)/Enum(145)/
- * Quantity(147)/QueryList(148) above, no BTMParameterString has ever
- * been freshly constructed for an insert in this codebase before (the
- * only existing uses, fuzzycadNote's "noteText" and
- * fuzzycadCompareAlternatives's "activeOption", are only ever read via
- * GET or patched via partstudio-update-feature, which preserves
- * whatever `type` the original already had rather than needing a fresh
- * one). 146 is a best-effort guess -- it's the one gap in the
- * numbered sequence this codebase HAS confirmed live (144, 145, _, 147,
- * 148) -- not a captured value. If a Note insert 400s specifically on
- * this parameter, this is the first thing to try alternate values for;
- * Onshape's `typeName` may also just be authoritative regardless of
- * `type` here, in which case this never mattered.
+ * BTMParameterString's numeric `type` is 149 -- matching Onshape's own
+ * btType string "BTMParameterString-149", the same
+ * "<name>-<number>" convention that gave Boolean(144)/Enum(145)/
+ * Quantity(147)/QueryList(148) already confirmed live above. An earlier
+ * guess of 146 (picked as "the gap" in 144,145,_,147,148) was wrong --
+ * String is 149, not in that gap -- and Onshape rejected a Note insert
+ * live with "Parameter noteText ... does not match its feature spec"
+ * (400) because of it.
  */
 function stringParameter(parameterId: string, value: string): BTMParameter {
   return {
-    type: 146,
+    type: 149,
     typeName: "BTMParameterString",
     message: { parameterId, value },
   };
