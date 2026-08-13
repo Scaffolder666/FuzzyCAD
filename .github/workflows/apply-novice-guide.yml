@@ -1,0 +1,358 @@
+name: Apply novice creation guide patch
+
+on:
+  push:
+    branches:
+      - agent/novice-creation-guide
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/novice-creation-guide
+          fetch-depth: 0
+
+      - name: Patch right-panel creation guidance
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('fuzzycad-onshape-app/app/parameter-mark-panel/page.tsx')
+          text = path.read_text()
+
+          replacements = [
+              (
+'''    guidance: {
+      select: "Select the object you want to move.",
+      selectedLabel: "Object selected.",
+      adjust: "Then drag the arrows to explore where it should go.",
+    },''',
+'''    guidance: {
+      select: "Select the object you want to move in the 3D view.",
+      selectedLabel: "Object selected.",
+      adjust:
+        "Check that the preview shows the intended movement direction. The exact X/Y/Z distance can stay unresolved.",
+    },'''
+              ),
+              (
+'''    guidance: {
+      select: "Select the face you want to extend.",
+      selectedLabel: "Face selected.",
+      adjust: "Then adjust the depth to explore how far it should extend.",
+    },''',
+'''    guidance: {
+      select: "Select the face you want to extend in the 3D view.",
+      selectedLabel: "Face selected.",
+      adjust:
+        "Check that the preview extends in the intended direction. The exact depth can stay unresolved.",
+    },'''
+              ),
+              (
+'''    guidance: {
+      select: "Select the edge(s) you want to bevel.",
+      selectedLabel: "Edge(s) selected.",
+      adjust: "Then adjust the width.",
+    },''',
+'''    guidance: {
+      select: "Select the edge(s) you want to bevel in the 3D view.",
+      selectedLabel: "Edge(s) selected.",
+      adjust:
+        "Check that the preview marks the intended bevel. The exact width can stay unresolved.",
+    },'''
+              ),
+              (
+'''    guidance: {
+      select: "Select the sharp edge(s) you want to round.",
+      selectedLabel: "Edge(s) selected.",
+      adjust: "Then adjust the radius to explore the rounding.",
+    },''',
+'''    guidance: {
+      select: "Select the sharp edge(s) you want to round in the 3D view.",
+      selectedLabel: "Edge(s) selected.",
+      adjust:
+        "Check that the preview rounds the intended edge(s). The exact radius can stay unresolved.",
+    },'''
+              ),
+              (
+'''    guidance: {
+      select: "Select the object you want to resize.",
+      selectedLabel: "Object selected.",
+      adjust: "Then drag the handle to explore a larger or smaller size.",
+    },''',
+'''    guidance: {
+      select: "Select the object you want to resize in the 3D view.",
+      selectedLabel: "Object selected.",
+      adjust:
+        "Check that the preview communicates larger or smaller as intended. The exact scale can stay unresolved.",
+    },'''
+              ),
+              (
+'''    guidance: {
+      select: "Select the object you want to rotate.",
+      selectedLabel: "Object selected.",
+      adjust: "Choose an axis, then adjust the angle.",
+    },''',
+'''    guidance: {
+      select: "Select the object you want to rotate in the 3D view.",
+      selectedLabel: "Object selected.",
+      adjust:
+        "Choose the intended rotation axis and check the preview direction. The exact angle can stay unresolved.",
+    },'''
+              ),
+              (
+'''    guidance: {
+      select: "Select the face that should stay fixed.",
+      selectedLabel: "Fixed face selected.",
+      adjust: "The object will stretch away from this face.",
+    },''',
+'''    guidance: {
+      select: "Select the face that should stay fixed in the 3D view.",
+      selectedLabel: "Fixed face selected.",
+      adjust:
+        "Check that the preview stretches away from this face in the intended direction. The exact amount can stay unresolved.",
+    },'''
+              ),
+              (
+'''    guidance: {
+      select: "Select the point, edge, or face this note refers to.",
+      selectedLabel: "Location selected.",
+      adjust: "Then add your note.",
+    },''',
+'''    guidance: {
+      select: "Select the point, edge, or face this note refers to in the 3D view.",
+      selectedLabel: "Location selected.",
+      adjust: "Type the note you want collaborators to see.",
+    },'''
+              ),
+              (
+'''  const [insertingTool, setInsertingTool] = useState<ToolbarToolId | null>(null);
+
+  useEffect(() => {''',
+'''  const [insertingTool, setInsertingTool] = useState<ToolbarToolId | null>(null);
+  // Local creation guidance for the tool whose native Onshape dialog was
+  // just opened. This is intentionally NOT derived from the persisted
+  // feature tree: while Onshape's edit dialog is open its picker/value
+  // changes are still a native draft, so a GET of the committed feature
+  // tree is not a trustworthy progress tracker. Starting another tool
+  // replaces the guide; the user can dismiss it at any time.
+  const [creationGuideToolId, setCreationGuideToolId] = useState<ToolbarToolId | null>(null);
+
+  useEffect(() => {'''
+              ),
+              (
+'''    setInsertingTool(toolId);
+    setStatus(`Inserting ${tool.label}...`);''',
+'''    if (tool.guidance) {
+      setCreationGuideToolId(toolId);
+    }
+    setInsertingTool(toolId);
+    setStatus(`Inserting ${tool.label}...`);'''
+              ),
+              (
+'''      if (!insertRes.ok) {
+        setStatus(`failed to insert ${tool.label} (HTTP ${insertRes.status})`);''',
+'''      if (!insertRes.ok) {
+        setCreationGuideToolId(null);
+        setStatus(`failed to insert ${tool.label} (HTTP ${insertRes.status})`);'''
+              ),
+              (
+'''        // Reuses the exact same wording as this feature's own card
+        // guidance (see ToolGuidanceSteps/TOOLBAR_TOOLS) instead of a
+        // separate generic string -- one source of truth for "what to
+        // do next" so the two can't drift into different phrasing for
+        // the same tool. guidance.select is a full sentence ending in
+        // "." for the card; the trailing period is stripped here since
+        // this status line embeds it mid-sentence instead.
+        const nextStep = tool.guidance ? tool.guidance.select.replace(/\.$/, "") : "pick geometry";
+        setStatus(`${tool.label} inserted -- ${nextStep} in the 3D view`);''',
+'''        const nextStep = tool.guidance?.select ?? "Follow the Onshape feature panel.";
+        setStatus(`${tool.label} inserted — ${nextStep}`);'''
+              ),
+              (
+'''          <span className={styles.cardTitle}>{group.featureName}</span>
+          <span className={styles.cardTypeTag}>({group.featureType})</span>
+        </div>
+
+        {!resolved ? (
+          <ToolGuidanceSteps featureType={group.featureType} selectionReady={group.selectionReady} />
+        ) : null}
+''',
+'''          <span className={styles.cardTitle}>{group.featureName}</span>
+          <span className={styles.cardTypeTag}>
+            ({isQuestion ? "Needs Input" : isNote ? "Note" : "Proposal"})
+          </span>
+        </div>
+'''
+              ),
+              (
+'''      </div>
+
+      {parameters === null ? null : featureGroups.length === 0 ? (
+        <p className={styles.emptyState}>
+          No FuzzyCAD custom feature proposals found. Insert one (e.g. &quot;FuzzyCAD Proposed
+          Extrude&quot;) from Onshape&apos;s own feature toolbar to see it here.
+        </p>''',
+'''      </div>
+
+      {creationGuideToolId ? (
+        <ToolCreationGuide
+          toolId={creationGuideToolId}
+          onDismiss={() => setCreationGuideToolId(null)}
+        />
+      ) : null}
+
+      {parameters === null ? null : featureGroups.length === 0 ? (
+        <p className={styles.emptyState}>
+          No FuzzyCAD marks yet. Choose a Needs Input, Mark, or Conflict tool above to create one.
+        </p>'''
+              ),
+              (
+'''/**
+ * Task-level "what do I do next" guidance -- deliberately NOT a
+ * restatement of Onshape's own native operation panel (which already
+ * shows the real picker + the real value field once opened). Two-layer
+ * division of labor: this answers "what should I be doing right now",
+ * the native panel answers "how do I actually do it". Renders nothing
+ * for a tool with no registered guidance (see TOOLBAR_TOOLS), or once
+ * selectionReady comes back null (an older feature instance predating
+ * this field, or an unrecognized shape) -- degrading silently rather
+ * than showing a guess.
+ */
+function ToolGuidanceSteps({
+  featureType,
+  selectionReady,
+}: {
+  featureType: string;
+  selectionReady: boolean | null;
+}) {
+  const tool = TOOLBAR_TOOL_BY_FEATURE_TYPE.get(featureType);
+  if (!tool?.guidance || selectionReady === null) return null;
+  const { guidance } = tool;
+
+  return (
+    <div className={styles.guidanceSteps}>
+      <div
+        className={
+          selectionReady
+            ? `${styles.guidanceStep} ${styles.guidanceStepDone}`
+            : `${styles.guidanceStep} ${styles.guidanceStepActive}`
+        }
+      >
+        <span className={styles.guidanceStepMark}>{selectionReady ? "✓" : "●"}</span>
+        <span>{selectionReady ? guidance.selectedLabel : guidance.select}</span>
+      </div>
+      <div
+        className={
+          selectionReady
+            ? `${styles.guidanceStep} ${styles.guidanceStepActive}`
+            : `${styles.guidanceStep} ${styles.guidanceStepPending}`
+        }
+      >
+        <span className={styles.guidanceStepMark}>{selectionReady ? "●" : "○"}</span>
+        <span>{guidance.adjust}</span>
+      </div>
+    </div>
+  );
+}
+''',
+'''/**
+ * Task-level creation coach for the native Onshape feature dialog.
+ *
+ * Needs Input is intentionally different from an ordinary CAD command:
+ * the provisional geometry communicates the trend of a possible change,
+ * while the exact distance/radius/angle/etc. may remain unknown. This
+ * guide therefore tells the creator what geometry to select, how to read
+ * the preview, and how to save the open question. It deliberately does
+ * NOT claim to track live picker progress from the persisted feature tree.
+ */
+function ToolCreationGuide({
+  toolId,
+  onDismiss,
+}: {
+  toolId: ToolbarToolId;
+  onDismiss: () => void;
+}) {
+  const tool = TOOLBAR_TOOLS.find((entry) => entry.id === toolId);
+  if (!tool?.guidance) return null;
+
+  const isNeedsInput = tool.category === "needsInput";
+  const finishText = isNeedsInput
+    ? "Click ✓ in the Onshape feature panel to place this Needs Input mark. The exact value can remain open for a collaborator."
+    : "Click ✓ in the Onshape feature panel to save this mark.";
+
+  const sectionClass =
+    tool.category === "needsInput"
+      ? styles.toolbarSectionNeedsInput
+      : tool.category === "markConstrain"
+        ? styles.toolbarSectionMarkConstrain
+        : styles.toolbarSectionConflict;
+
+  return (
+    <div className={`${styles.toolbarSection} ${sectionClass}`} style={{ marginBottom: 12 }}>
+      <div className={styles.titleRow}>
+        <div>
+          <div className={styles.toolbarSectionLabel}>Creating {tool.label}</div>
+          {isNeedsInput ? (
+            <div className={styles.status}>
+              The preview shows the direction of change, not a final value.
+            </div>
+          ) : null}
+        </div>
+        <button
+          type="button"
+          className={styles.secondaryButton}
+          onClick={onDismiss}
+          aria-label="Dismiss creation guidance"
+          title="Dismiss"
+        >
+          ×
+        </button>
+      </div>
+
+      <div className={styles.guidanceSteps} style={{ marginTop: 8 }}>
+        <div className={styles.guidanceStep}>
+          <span className={styles.guidanceStepMark}>1</span>
+          <span>{tool.guidance.select}</span>
+        </div>
+        <div className={styles.guidanceStep}>
+          <span className={styles.guidanceStepMark}>2</span>
+          <span>{tool.guidance.adjust}</span>
+        </div>
+        <div className={styles.guidanceStep}>
+          <span className={styles.guidanceStepMark}>3</span>
+          <span>{finishText}</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+'''
+              ),
+          ]
+
+          for index, (old, new) in enumerate(replacements, start=1):
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'replacement {index} expected exactly once, found {count}')
+              text = text.replace(old, new, 1)
+
+          path.write_text(text)
+          PY
+
+      - name: Remove one-shot workflow
+        run: rm .github/workflows/apply-novice-guide.yml
+
+      - name: Commit patched UI
+        shell: bash
+        run: |
+          git config user.name "FuzzyCAD patch bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add fuzzycad-onshape-app/app/parameter-mark-panel/page.tsx .github/workflows/apply-novice-guide.yml
+          git commit -m "Fix novice Needs Input creation guidance"
+          git push origin HEAD:agent/novice-creation-guide
