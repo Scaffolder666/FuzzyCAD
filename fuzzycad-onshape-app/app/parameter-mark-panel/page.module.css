@@ -187,13 +187,15 @@
 /* Create toolbar -- permanently docked above the card list (see the JSX
    comment above it). Distinct visual treatment from the cards below
    (a bordered strip of icon buttons, not a list item) so it reads as
-   "make a new one" rather than another thing to review. */
+   "make a new one" rather than another thing to review. SketchUp-style
+   "arm, then pick": a button stays visibly pressed (.toolbarButtonArmed)
+   while waiting for the matching 3D-view click. */
 .toolbar {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
-  padding: 8px;
-  margin-bottom: 14px;
+  gap: 8px;
+  padding: 10px;
+  margin-bottom: 6px;
   background: #fff;
   border: 1px solid #e4e6ec;
   border-radius: 8px;
@@ -203,12 +205,12 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 2px;
-  min-width: 52px;
-  border: 1px solid transparent;
+  gap: 4px;
+  min-width: 68px;
+  border: 1.5px solid transparent;
   background: transparent;
-  border-radius: 6px;
-  padding: 6px 8px;
+  border-radius: 8px;
+  padding: 10px 10px 8px;
   cursor: pointer;
   transition: background 0.12s ease, border-color 0.12s ease;
 }
@@ -223,16 +225,62 @@
   opacity: 0.35;
 }
 
+.toolbarButtonArmed {
+  background: #eaf1ff;
+  border-color: #3b6fe0;
+}
+
+.toolbarButtonArmed:hover:not(:disabled) {
+  background: #dfeaff;
+  border-color: #3b6fe0;
+}
+
 .toolbarIcon {
-  font-size: 17px;
-  line-height: 1;
-  color: #3a3d4a;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  color: #2c2e38;
+}
+
+.toolbarButtonArmed .toolbarIcon {
+  color: #2452c8;
+}
+
+.toolbarSpinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid #c7cad3;
+  border-top-color: #2452c8;
+  border-radius: 50%;
+  animation: toolbarSpin 0.7s linear infinite;
+}
+
+@keyframes toolbarSpin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .toolbarLabel {
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 600;
-  color: #6c6f7d;
+  color: #44465a;
+}
+
+.toolbarButtonArmed .toolbarLabel {
+  color: #2452c8;
+}
+
+.toolbarHint {
+  color: #2452c8;
+  background: #eaf1ff;
+  border-radius: 6px;
+  padding: 6px 10px;
+  margin: 0 0 14px;
+  font-size: 11.5px;
+  font-weight: 600;
 }
 
 .emptyState {
