@@ -2838,6 +2838,7 @@ function ParameterMarkPanelInner() {
                   busy={creationActionBusy}
                   onConfirm={confirmActiveCreation}
                   onCancel={() => void cancelActiveCreation()}
+                  onOpenInView={() => openFeatureDialog(activeCreation.featureId)}
                 />
               ) : null}
             </div>
@@ -3048,11 +3049,13 @@ function ToolCreationGuide({
   busy,
   onConfirm,
   onCancel,
+  onOpenInView,
 }: {
   toolId: ToolbarToolId;
   busy: boolean;
   onConfirm: () => void;
   onCancel: () => void;
+  onOpenInView: () => void;
 }) {
   const tool = TOOLBAR_TOOLS.find((entry) => entry.id === toolId);
   if (!tool?.guidance) return null;
@@ -3072,15 +3075,37 @@ function ToolCreationGuide({
           Cancel
         </button>
       </div>
+      {/*
+       * Steps are clickable actions, not static text: each one takes the
+       * user straight into Onshape's native feature dialog (openFeatureDialog),
+       * which is where both the geometry pick and the manipulator drag
+       * happen. The API has no per-parameter "arm just this pick" message,
+       * so both steps open the same dialog -- the numbering communicates
+       * the order to do them in once there.
+       */}
       <div className={styles.guidanceSteps}>
-        <div className={styles.guidanceStep}>
+        <button
+          type="button"
+          className={styles.guidanceStep}
+          disabled={busy}
+          onClick={onOpenInView}
+          title="Open the feature in the 3D view to pick geometry"
+        >
           <span className={styles.guidanceStepMark}>1</span>
-          <span>{guidance.select}</span>
-        </div>
-        <div className={styles.guidanceStep}>
+          <span className={styles.guidanceStepText}>{guidance.select}</span>
+          <span className={styles.guidanceStepGo}>Open in 3D ↗</span>
+        </button>
+        <button
+          type="button"
+          className={styles.guidanceStep}
+          disabled={busy}
+          onClick={onOpenInView}
+          title="Open the feature in the 3D view to adjust it"
+        >
           <span className={styles.guidanceStepMark}>2</span>
-          <span>{guidance.adjust}</span>
-        </div>
+          <span className={styles.guidanceStepText}>{guidance.adjust}</span>
+          <span className={styles.guidanceStepGo}>Open in 3D ↗</span>
+        </button>
       </div>
       <div className={styles.creationGuideActions}>
         <button type="button" className={styles.acceptButton} disabled={busy} onClick={onConfirm}>
