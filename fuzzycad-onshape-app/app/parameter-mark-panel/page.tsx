@@ -1062,6 +1062,18 @@ function ParameterMarkPanelInner() {
   // something else. A ref, not state: it's just bookkeeping for the
   // REST toggle, never rendered directly.
   const expandedFeatureIdRef = useRef<string | null>(null);
+  // Serializes every setMarkExpanded call (see enqueueMarkExpanded
+  // below) through one promise chain, so completion order always
+  // matches issue order. Without this, two overlapping "expand"/
+  // "collapse" REST round trips for different features (each its own
+  // GET-then-POST, see partstudio-update-feature's own comment) can
+  // finish out of order -- e.g. clicking mark A then quickly clicking
+  // mark B fires [A->true], then [A->false, B->true], and if the
+  // network happens to land the stale [A->true] LAST, mark A's sketchy
+  // line stays visible (or reappears) even though B is now the one
+  // actually focused. This was very likely what "the sketchy line
+  // timing seems wrong" was actually seeing.
+  const markExpandQueueRef = useRef<Promise<unknown>>(Promise.resolve());
   // featureId -> featureType, kept in sync with featureGroups below via a
   // dedicated effect so the SELECTION handler (which only resubscribes on
   // [hasUrlContext, urlServer], not on every featureGroups change) can
@@ -1990,6 +2002,21 @@ function ParameterMarkPanelInner() {
   }
 
   /**
+   * Runs a setMarkExpanded call only after every previously enqueued
+   * one has actually finished, so completion order can never diverge
+   * from issue order -- see markExpandQueueRef's own comment for the
+   * out-of-order race this closes. A failed call doesn't break the
+   * chain for whatever's queued after it.
+   */
+  function enqueueMarkExpanded(featureId: string, expanded: boolean) {
+    const next = markExpandQueueRef.current
+      .catch(() => undefined)
+      .then(() => setMarkExpanded(featureId, expanded));
+    markExpandQueueRef.current = next;
+    return next;
+  }
+
+  /**
    * Reveals one Needs Input mark's full sketchy line and collapses
    * whichever one was previously revealed, if different -- the
    * "click the object in the 3D view OR its card, sketchy line
@@ -2003,9 +2030,9 @@ function ParameterMarkPanelInner() {
     const previous = expandedFeatureIdRef.current;
     expandedFeatureIdRef.current = featureId;
     if (previous) {
-      void setMarkExpanded(previous, false);
+      void enqueueMarkExpanded(previous, false);
     }
-    void setMarkExpanded(featureId, true);
+    void enqueueMarkExpanded(featureId, true);
   }
 
   /**
@@ -2017,7 +2044,7 @@ function ParameterMarkPanelInner() {
     const previous = expandedFeatureIdRef.current;
     if (!previous) return;
     expandedFeatureIdRef.current = null;
-    void setMarkExpanded(previous, false);
+    void enqueueMarkExpanded(previous, false);
   }
 
   /**
