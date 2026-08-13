@@ -1761,6 +1761,13 @@ function ParameterMarkPanelInner() {
 
       if (!insertRes.ok) {
         setStatus(`failed to insert ${tool.label} (HTTP ${insertRes.status})`);
+        console.error("[FuzzyCAD] toolbar insert failed", {
+          tool: toolId,
+          featureType: tool.featureType,
+          geometryIds,
+          parameters,
+          insertRes,
+        });
         return;
       }
 
