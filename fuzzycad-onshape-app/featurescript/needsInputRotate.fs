@@ -4,6 +4,53 @@ import(path : "onshape/std/common.fs", version : "3044.0");
 
 //////////////////////////////////////////////////////////////////////
 //
+// ROTATION AXIS MODE
+//
+// Which axis to rotate about, chosen from the native Feature dialog
+// as a plain radio-button choice instead of forcing every user to
+// find and pick a piece of geometry that happens to yield an axis.
+// X/Y/Z rotate about the body's own bounding-box center; CUSTOM keeps
+// the original "pick an edge/circle/cylinder" behavior below for
+// anyone who needs to rotate about a specific mechanical reference
+// (a hinge pin, a bolt circle, etc).
+//
+//////////////////////////////////////////////////////////////////////
+
+export enum
+FuzzyCADRotationAxisMode
+{
+    annotation
+    {
+        "Name" :
+            "X"
+    }
+    X,
+
+    annotation
+    {
+        "Name" :
+            "Y"
+    }
+    Y,
+
+    annotation
+    {
+        "Name" :
+            "Z"
+    }
+    Z,
+
+    annotation
+    {
+        "Name" :
+            "Custom (pick a reference)"
+    }
+    CUSTOM
+}
+
+
+//////////////////////////////////////////////////////////////////////
+//
 // FUZZYCAD NEEDS INPUT ROTATE
 //
 // User interaction:
@@ -77,35 +124,39 @@ defineFeature(function(
 
 
         //////////////////////////////////////////////////////////////////
-        // ROTATION REFERENCE
+        // ROTATION AXIS
         //
-        // IMPORTANT:
-        //
-        // We no longer force the collaborator to find a straight EDGE.
-        //
-        // QueryFilterCompound.ALLOWS_AXIS supports geometry from which
-        // Onshape can infer an axis:
-        //
-        //   line
-        //   circle
-        //   arc
-        //   cylinder
-        //   mate connector
-        //
+        // Defaults to one of the body's own X/Y/Z axes (through its
+        // bounding-box center) via a plain radio-button choice -- no
+        // geometry pick required at all for the common case. CUSTOM
+        // reveals the original "pick anything ALLOWS_AXIS supports"
+        // field below (line / circle / arc / cylinder / mate
+        // connector) for anyone who needs a precise mechanical
+        // reference instead.
         //////////////////////////////////////////////////////////////////
 
         annotation
         {
             "Name" :
-                "Rotation reference",
-
-            "Filter" :
-                QueryFilterCompound.ALLOWS_AXIS,
-
-            "MaxNumberOfPicks" :
-                1
+                "Rotate about"
         }
-        definition.axis is Query;
+        definition.rotationAxisMode is FuzzyCADRotationAxisMode;
+
+        if (definition.rotationAxisMode == FuzzyCADRotationAxisMode.CUSTOM)
+        {
+            annotation
+            {
+                "Name" :
+                    "Rotation reference",
+
+                "Filter" :
+                    QueryFilterCompound.ALLOWS_AXIS,
+
+                "MaxNumberOfPicks" :
+                    1
+            }
+            definition.axis is Query;
+        }
 
 
         //////////////////////////////////////////////////////////////////
@@ -186,7 +237,14 @@ defineFeature(function(
                 context,
                 definition.body
             )
-            ||
+        )
+        {
+            return;
+        }
+
+        if (
+            definition.rotationAxisMode == FuzzyCADRotationAxisMode.CUSTOM
+            &&
             isQueryEmpty(
                 context,
                 definition.axis
@@ -207,41 +265,64 @@ defineFeature(function(
 
         //////////////////////////////////////////////////////////////////
         //
+        // BOUNDING BOX
+        //
+        // Computed once, up front -- used both to build the default
+        // X/Y/Z axis below and later to find the farthest corner for
+        // the rotation gesture radius (see FIND A LARGE, VISIBLE
+        // RADIUS below), instead of evaluating it twice.
+        //
+        //////////////////////////////////////////////////////////////////
+
+        const bbox =
+            evBox3d(
+                context,
+                {
+                    "topology" :
+                        originalBody,
+
+                    "tight" :
+                        true
+                }
+            );
+
+
+        const bboxCenter =
+            (bbox.minCorner + bbox.maxCorner) / 2;
+
+
+        //////////////////////////////////////////////////////////////////
+        //
         // EXTRACT ROTATION AXIS
         //
-        // This is the main change from the old implementation.
+        // CUSTOM mode: same evAxis() derivation as before -- supports
+        // line / circle / arc / cylinder / mate connector references.
         //
-        // OLD:
-        //
-        //   evEdgeTangentLine(parameter 0)
-        //   evEdgeTangentLine(parameter 1)
-        //   axis = normalize(end - start)
-        //
-        // That only made sense for straight edges and breaks conceptually
-        // for a closed circular edge.
-        //
-        // NEW:
-        //
-        //   evAxis()
-        //
-        // Circle:
-        //   circle center + normal
-        //
-        // Cylinder:
-        //   cylinder center line
-        //
-        // Straight edge:
-        //   edge line itself
+        // X/Y/Z mode: no geometry pick at all -- axis is simply the
+        // chosen world axis through the body's own bounding-box
+        // center, exactly like the vertical spin handle TinkerCAD
+        // gives you the instant you select an object.
         //
         //////////////////////////////////////////////////////////////////
 
         const rotationAxis =
+            (definition.rotationAxisMode == FuzzyCADRotationAxisMode.CUSTOM)
+            ?
             evAxis(
                 context,
                 {
                     "axis" :
                         definition.axis
                 }
+            )
+            :
+            line(
+                bboxCenter,
+                (definition.rotationAxisMode == FuzzyCADRotationAxisMode.X)
+                ? vector(1, 0, 0)
+                : (definition.rotationAxisMode == FuzzyCADRotationAxisMode.Y)
+                    ? vector(0, 1, 0)
+                    : vector(0, 0, 1)
             );
 
 
@@ -389,22 +470,9 @@ defineFeature(function(
         // FIND A LARGE, VISIBLE RADIUS FOR THE ROTATION GESTURE
         //
         // Find whichever bounding-box corner lies farthest from the
-        // rotation axis.
+        // rotation axis. Reuses "bbox" computed above.
         //
         //////////////////////////////////////////////////////////////////
-
-        const bbox =
-            evBox3d(
-                context,
-                {
-                    "topology" :
-                        originalBody,
-
-                    "tight" :
-                        true
-                }
-            );
-
 
         const corners =
             [

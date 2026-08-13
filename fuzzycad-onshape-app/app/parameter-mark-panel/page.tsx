@@ -127,6 +127,7 @@ const COSMO_FEATURE_TYPES = new Set([
   "fuzzycadNeedsInputMove",
   "fuzzycadNeedsInputRotate",
   "fuzzycadNeedsInputScale",
+  "fuzzycadNeedsInputStretch",
   "fuzzycadNeedsInputHole",
   "fuzzycadCompareAlternatives",
   "fuzzycadNote",
@@ -165,6 +166,7 @@ const SELF_STYLING_COSMO_FEATURE_TYPES = new Set([
   "fuzzycadNeedsInputMove",
   "fuzzycadNeedsInputRotate",
   "fuzzycadNeedsInputScale",
+  "fuzzycadNeedsInputStretch",
   "fuzzycadNeedsInputHole",
   // fuzzycadCompareAlternatives fades Current component / faded-out
   // non-active alternatives via its own setProperty calls, same as
@@ -220,6 +222,7 @@ const NEEDS_INPUT_COSMO_FEATURE_TYPES = new Set([
   "fuzzycadNeedsInputMove",
   "fuzzycadNeedsInputRotate",
   "fuzzycadNeedsInputScale",
+  "fuzzycadNeedsInputStretch",
   "fuzzycadNeedsInputHole",
 ]);
 
@@ -260,6 +263,7 @@ const ACCEPT_VIA_HIDDEN_PARAMETER_COSMO_FEATURE_TYPES = new Set([
   "fuzzycadNeedsInputMove",
   "fuzzycadNeedsInputRotate",
   "fuzzycadNeedsInputScale",
+  "fuzzycadNeedsInputStretch",
   "fuzzycadNeedsInputHole",
   // fuzzycadCompareAlternatives: "Accept selected" patches accepted=true,
   // which makes the SAME feature instance commit whichever candidate
