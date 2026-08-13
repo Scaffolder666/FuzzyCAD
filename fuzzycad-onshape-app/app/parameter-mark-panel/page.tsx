@@ -408,19 +408,6 @@ function ToolbarIcon({ tool }: { tool: ToolbarToolId }) {
 }
 
 /**
- * geometryIds here are the SELECTION postMessage's own selectionId
- * values (e.g. "KFti") -- short, transient, viewer-session-only IDs.
- * They are NOT the persistent/deterministic geometryIds a plain
- * BTMIndividualQuery.geometryIds field expects (confirmed live: using
- * them there produced a real feature with a "not found" regen error,
- * even though the insert itself succeeded). Onshape's own forum
- * confirms the fix: wrap each transient ID in qTransient(...) inside a
- * queryString instead -- FeatureScript resolves it against the live
- * viewer session, no ID conversion needed. Requires the /api/v6/
- * partstudios endpoint (see partstudio-add-custom-feature/route.ts);
- * the unversioned path doesn't support queryString-based queries.
- */
-/**
  * Deliberately built empty (geometryIds is always [] from the toolbar
  * now -- see insertToolbarMark's own comment for why): rather than
  * fighting Onshape's transient-vs-deterministic-ID distinction to
@@ -430,9 +417,20 @@ function ToolbarIcon({ tool }: { tool: ToolbarToolId }) {
  * click in the tree, or Onshape auto-focuses it right after insert)
  * drops straight into Onshape's own native "click body/edge/face in the
  * 3D view" picking flow -- proven, and not something this app needs to
- * reimplement. If geometryIds is ever non-empty, still builds a real
- * qTransient(...) query (kept working, not removed, in case a future
- * caller has a legitimate use for pre-filling).
+ * reimplement.
+ *
+ * If geometryIds is ever non-empty, this still builds a queryString
+ * using qTransient(...) (each transient SELECTION.selectionId, e.g.
+ * "KFti", wrapped so FeatureScript resolves it against the live viewer
+ * session -- confirmed live that raw geometryIds doesn't work for these,
+ * "not found" at regen time even though the insert itself succeeds).
+ * NOT currently exercised by any caller, and NOT currently usable
+ * as-is: Onshape's own forum says queryString-based queries need the
+ * /api/v6/ partstudios endpoint, but partstudio-add-custom-feature has
+ * since been reverted to the unversioned path (namespace-based custom
+ * feature resolution broke under /v6/ -- see that route's own comment).
+ * Left in for reference, not deleted, but treat as unverified until a
+ * real caller and endpoint combination proves it again.
  */
 function queryListParameter(parameterId: string, geometryIds: string[]): BTMParameter {
   const queries =
