@@ -82,6 +82,14 @@ type DetectedCosmoFeature = {
   featureId: string;
   featureName: string;
   featureType: string;
+  // Which Feature Studio (document/version) defines this feature's own
+  // custom featureType -- present on every already-inserted custom
+  // feature's raw JSON even when that Feature Studio lives in the SAME
+  // document (confirmed live: omitting it on a toolbar insert produced
+  // Onshape's own "Feature has invalid type" 400). Read here so
+  // insertToolbarMark can copy a real, already-working value instead of
+  // guessing one.
+  namespace: string | null;
 };
 
 /**
@@ -772,8 +780,14 @@ function ParameterMarkPanelInner() {
       const featureType = (message as Record<string, unknown>).featureType;
       const featureId = (message as Record<string, unknown>).featureId;
       const name = (message as Record<string, unknown>).name;
+      const namespace = (message as Record<string, unknown>).namespace;
       if (typeof featureType === "string" && COSMO_FEATURE_TYPES.has(featureType) && typeof featureId === "string") {
-        found.push({ featureId, featureName: typeof name === "string" ? name : featureId, featureType });
+        found.push({
+          featureId,
+          featureName: typeof name === "string" ? name : featureId,
+          featureType,
+          namespace: typeof namespace === "string" && namespace ? namespace : null,
+        });
       }
     }
     return found;
@@ -1687,6 +1701,20 @@ function ParameterMarkPanelInner() {
     const tool = TOOLBAR_TOOLS.find((entry) => entry.id === toolId);
     if (!tool) return;
 
+    // Required even for a same-document custom featureType (confirmed
+    // live -- see addPartStudioCustomFeature's own comment). Copied from
+    // whichever already-inserted FuzzyCAD mark happens to be open right
+    // now, since they all share the one Feature Studio that defines
+    // every fuzzycadNeedsInput*/fuzzycadProposed*/fuzzycadNote type.
+    const namespace = detectedFeatures.find((feature) => feature.namespace)?.namespace ?? undefined;
+
+    if (!namespace) {
+      setStatus(
+        `Can't insert ${tool.label} yet: no existing FuzzyCAD mark open to copy a namespace from. Insert one from Onshape's own Insert menu first.`,
+      );
+      return;
+    }
+
     setInsertingTool(toolId);
     setStatus(`Inserting ${tool.label}...`);
 
@@ -1700,7 +1728,7 @@ function ParameterMarkPanelInner() {
           partStudioElementId: currentContext.elementId,
           server: currentContext.server,
         },
-        { featureType: tool.featureType, name: tool.featureName, parameters },
+        { featureType: tool.featureType, name: tool.featureName, namespace, parameters },
       );
 
       if (!insertRes.ok) {

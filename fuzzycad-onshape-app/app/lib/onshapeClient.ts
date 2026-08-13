@@ -361,10 +361,17 @@ export type BTMParameter = {
  * precondition expects (see buildCustomFeatureParameters in
  * parameter-mark-panel/page.tsx for the per-tool mapping); the route
  * itself is generic and just forwards them.
+ *
+ * `namespace` is required even for a custom featureType defined in the
+ * SAME document as this Part Studio (confirmed live: omitting it
+ * produces Onshape's own "Feature has invalid type" 400) -- it tells
+ * Onshape which Feature Studio/version defines that type. The caller is
+ * expected to copy this from an already-inserted instance's own raw
+ * JSON (see DetectedCosmoFeature.namespace) rather than construct one.
  */
 export async function addPartStudioCustomFeature(
   query: PartStudioQuery,
-  body: { featureType: string; name: string; parameters: BTMParameter[] },
+  body: { featureType: string; name: string; namespace?: string; parameters: BTMParameter[] },
 ): Promise<ApiResult> {
   const res = await fetch(`/api/onshape/partstudio-add-custom-feature`, {
     method: "POST",
