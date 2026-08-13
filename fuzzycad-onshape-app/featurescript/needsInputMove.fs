@@ -354,13 +354,30 @@ function drawBigMoveArrow(
             "value" : markerColor
     });
 
-    // Main motion label and component breakdown. The red arrow carries the
-    // action; the black annotation carries measured engineering detail.
+    // Main motion label + component breakdown, stacked on ONE explicitly-
+    // oriented plane so the two rows never overlap regardless of travel
+    // direction. Auto plane axes previously let the detail row slide
+    // sideways into the main label; here uAxis is a world-horizontal in the
+    // label plane (text reads left-to-right) and the detail is placed a
+    // fixed vertical gap BELOW the main label in the plane's own uv coords,
+    // so the separation no longer depends on any world direction.
     const midPoint = startPoint + offset * 0.5 + side2 * min(distance * 0.11, 9 * millimeter);
-    const labelPlane = plane(midPoint + side * (0.02 * millimeter), side);
+
+    var uAxis = cross(side, vector(0, 0, 1));
+    if (norm(uAxis) < 0.0001)
+    {
+        uAxis = cross(side, vector(0, 1, 0));
+    }
+    uAxis = normalize(uAxis);
+
+    const textSize = 5.0 * millimeter;
+    const detailSize = 2.8 * millimeter;
+    // Main half-height (textSize) + detail half-height + margin.
+    const stackGap = textSize + detailSize + 4 * millimeter;
+
+    const labelPlane = plane(midPoint + side * (0.02 * millimeter), side, uAxis);
     const labelUv = worldToPlane(labelPlane, midPoint);
     const labelSketch = newSketchOnPlane(context, id + "labelSketch", { "sketchPlane" : labelPlane });
-    const textSize = 5.0 * millimeter;
     skText(labelSketch, "label", {
             "text" : isOpen
                 ? "MOVE  Δ = ?"
@@ -385,20 +402,19 @@ function drawBigMoveArrow(
             "value" : color(0, 0, 0, 1.0)
     });
 
-    // Pushed well clear of the main label: both are now solid filled text
-    // (~10mm and ~5.6mm tall), so the old 7mm gap let them overlap.
-    const detailPoint = midPoint - side2 * (16 * millimeter);
-    const detailPlane = plane(detailPoint + side * (0.02 * millimeter), side);
-    const detailUv = worldToPlane(detailPlane, detailPoint);
+    // Detail row: SAME plane and orientation, placed one stackGap below the
+    // main label in the plane's vertical (uv) axis, nudged a hair further
+    // along the normal so the coplanar surfaces don't z-fight.
+    const detailPlane = plane(midPoint + side * (0.04 * millimeter), side, uAxis);
+    const detailUv = worldToPlane(detailPlane, midPoint);
     const detailSketch = newSketchOnPlane(context, id + "detailSketch", { "sketchPlane" : detailPlane });
-    const detailSize = 2.8 * millimeter;
     skText(detailSketch, "detail", {
             "text" : isOpen
                 ? "ΔX/ΔY/ΔZ  OPEN"
                 : "ΔX " ~ toString(round(moveX / millimeter, 1)) ~ "   ΔY " ~ toString(round(moveY / millimeter, 1)) ~ "   ΔZ " ~ toString(round(moveZ / millimeter, 1)),
             "fontName" : "OpenSans-Regular.ttf",
-            "firstCorner" : vector(detailUv[0] - 3.0 * detailSize, detailUv[1] - detailSize),
-            "secondCorner" : vector(detailUv[0] + 3.0 * detailSize, detailUv[1] + detailSize)
+            "firstCorner" : vector(detailUv[0] - 3.0 * detailSize, detailUv[1] - stackGap - detailSize),
+            "secondCorner" : vector(detailUv[0] + 3.0 * detailSize, detailUv[1] - stackGap + detailSize)
     });
     skSolve(detailSketch);
 
