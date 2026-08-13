@@ -336,6 +336,58 @@
   font-size: 11.5px;
 }
 
+/* Two-layer division of labor with Onshape's own native operation
+   panel: this tells a novice WHAT to do next in plain language, the
+   native panel handles HOW to do it (the actual picker, the actual
+   value field). Two steps only -- select geometry, then adjust the
+   value -- matching what selectionReady can actually detect. */
+.guidanceSteps {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 2px 0 2px;
+}
+
+.guidanceStep {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.guidanceStepMark {
+  flex-shrink: 0;
+  width: 14px;
+  text-align: center;
+  font-size: 11px;
+}
+
+.guidanceStepDone {
+  color: #16824f;
+}
+
+.guidanceStepDone .guidanceStepMark {
+  color: #16824f;
+}
+
+.guidanceStepActive {
+  color: #1c3fa0;
+  font-weight: 600;
+}
+
+.guidanceStepActive .guidanceStepMark {
+  color: #2452c8;
+}
+
+.guidanceStepPending {
+  color: #9a9dab;
+}
+
+.guidanceStepPending .guidanceStepMark {
+  color: #c7cad3;
+}
+
 .paramEditRow {
   display: flex;
   align-items: center;

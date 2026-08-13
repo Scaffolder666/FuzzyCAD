@@ -61,6 +61,7 @@ type FeatureGroup = {
   featureName: string;
   featureType: string;
   parameters: ValueParameterEntry[];
+  selectionReady: boolean | null;
 };
 
 /**
@@ -90,6 +91,12 @@ type DetectedCosmoFeature = {
   // insertToolbarMark can copy a real, already-working value instead of
   // guessing one.
   namespace: string | null;
+  // Whether this tool's own selectionParamId (see TOOLBAR_TOOLS) points
+  // at real geometry yet -- read straight off this same raw feature
+  // entry's own message.parameters, no separate API call. null when the
+  // featureType has no registered selectionParamId (a tool without
+  // step-by-step guidance, or an unrecognized featureType).
+  selectionReady: boolean | null;
 };
 
 /**
@@ -342,6 +349,35 @@ const TOOLBAR_TOOLS: {
   featureType: string;
   featureName: string;
   category: ToolbarToolCategory;
+  /**
+   * Task-level guidance, novice-facing rather than CAD-vocabulary --
+   * shared verbatim between the toolbar's post-insert status line and
+   * each card's own step-by-step guidance (see renderProposalCard /
+   * ToolGuidanceSteps below), so the two can't drift into different
+   * wording for the same tool. Two steps only, matching what
+   * selectionParamId can actually detect (that one Query field is
+   * empty vs not) -- "select geometry" then "adjust the value";
+   * nothing here tracks a third "value confirmed" state.
+   *   - select: step 1 prompt, shown while selectionParamId's query is
+   *     empty (e.g. "Select the face you want to extend")
+   *   - selectedLabel: step 1's own done-state label, replacing
+   *     `select` once that query is non-empty (e.g. "Face selected")
+   *   - adjust: step 2 prompt, shown once step 1 is done (e.g. "Adjust
+   *     the depth to explore how far it should extend")
+   * Omitted for "compare" -- its own guidance would need to describe a
+   * fundamentally different (multi-Part-Studio, not single-query)
+   * interaction, out of scope for this pass.
+   */
+  guidance?: { select: string; selectedLabel: string; adjust: string };
+  /**
+   * Which of this tool's own BTMParameterQueryList fields to read back
+   * from the raw feature tree to know whether "step 1" is done --
+   * matches the parameterId queryListParameter was given in
+   * buildCustomFeatureParameters above. Read by extractCosmoFeatures
+   * off data already fetched for detectedFeatures (paramsData.rawData),
+   * not a separate API call.
+   */
+  selectionParamId?: string;
 }[] = [
   {
     id: "move",
@@ -349,6 +385,12 @@ const TOOLBAR_TOOLS: {
     featureType: "fuzzycadNeedsInputMove",
     featureName: "FuzzyCAD Needs Input Move",
     category: "needsInput",
+    selectionParamId: "body",
+    guidance: {
+      select: "Select the object you want to move.",
+      selectedLabel: "Object selected.",
+      adjust: "Then drag the arrows to explore where it should go.",
+    },
   },
   {
     id: "extrude",
@@ -356,6 +398,12 @@ const TOOLBAR_TOOLS: {
     featureType: "fuzzycadNeedsInputExtrude",
     featureName: "FuzzyCAD Needs Input Extrude",
     category: "needsInput",
+    selectionParamId: "entities",
+    guidance: {
+      select: "Select the face you want to extend.",
+      selectedLabel: "Face selected.",
+      adjust: "Then adjust the depth to explore how far it should extend.",
+    },
   },
   {
     id: "chamfer",
@@ -363,6 +411,12 @@ const TOOLBAR_TOOLS: {
     featureType: "fuzzycadNeedsInputChamfer",
     featureName: "FuzzyCAD Needs Input Chamfer",
     category: "needsInput",
+    selectionParamId: "edge",
+    guidance: {
+      select: "Select the edge(s) you want to bevel.",
+      selectedLabel: "Edge(s) selected.",
+      adjust: "Then adjust the width.",
+    },
   },
   {
     id: "fillet",
@@ -370,6 +424,12 @@ const TOOLBAR_TOOLS: {
     featureType: "fuzzycadNeedsInputFillet",
     featureName: "FuzzyCAD Needs Input Fillet",
     category: "needsInput",
+    selectionParamId: "edge",
+    guidance: {
+      select: "Select the sharp edge(s) you want to round.",
+      selectedLabel: "Edge(s) selected.",
+      adjust: "Then adjust the radius to explore the rounding.",
+    },
   },
   {
     id: "scale",
@@ -377,6 +437,12 @@ const TOOLBAR_TOOLS: {
     featureType: "fuzzycadNeedsInputScale",
     featureName: "FuzzyCAD Needs Input Scale",
     category: "needsInput",
+    selectionParamId: "body",
+    guidance: {
+      select: "Select the object you want to resize.",
+      selectedLabel: "Object selected.",
+      adjust: "Then drag the handle to explore a larger or smaller size.",
+    },
   },
   {
     id: "rotate",
@@ -384,6 +450,12 @@ const TOOLBAR_TOOLS: {
     featureType: "fuzzycadNeedsInputRotate",
     featureName: "FuzzyCAD Needs Input Rotate",
     category: "needsInput",
+    selectionParamId: "body",
+    guidance: {
+      select: "Select the object you want to rotate.",
+      selectedLabel: "Object selected.",
+      adjust: "Choose an axis, then adjust the angle.",
+    },
   },
   {
     id: "stretch",
@@ -391,6 +463,12 @@ const TOOLBAR_TOOLS: {
     featureType: "fuzzycadNeedsInputStretch",
     featureName: "FuzzyCAD Needs Input Stretch",
     category: "needsInput",
+    selectionParamId: "face",
+    guidance: {
+      select: "Select the face that should stay fixed.",
+      selectedLabel: "Fixed face selected.",
+      adjust: "The object will stretch away from this face.",
+    },
   },
   {
     id: "note",
@@ -398,6 +476,12 @@ const TOOLBAR_TOOLS: {
     featureType: "fuzzycadNote",
     featureName: "FuzzyCAD Note",
     category: "markConstrain",
+    selectionParamId: "target",
+    guidance: {
+      select: "Select the point, edge, or face this note refers to.",
+      selectedLabel: "Location selected.",
+      adjust: "Then add your note.",
+    },
   },
   {
     id: "compare",
@@ -407,6 +491,13 @@ const TOOLBAR_TOOLS: {
     category: "conflict",
   },
 ];
+
+/**
+ * featureType -> tool lookup, built once -- extractCosmoFeatures needs
+ * selectionParamId per raw feature it reads, keyed by featureType (the
+ * only identifier a raw feature entry carries), not by ToolbarToolId.
+ */
+const TOOLBAR_TOOL_BY_FEATURE_TYPE = new Map(TOOLBAR_TOOLS.map((tool) => [tool.featureType, tool]));
 
 /**
  * Render order + per-category identity for the toolbar's three sections
@@ -1020,6 +1111,34 @@ function ParameterMarkPanelInner() {
     }
   }
 
+  /**
+   * Reads whether toolId's registered selectionParamId (see
+   * TOOLBAR_TOOLS) currently points at real geometry, straight off this
+   * feature's own raw message.parameters -- the same BTMParameterQueryList
+   * shape queryListParameter builds for inserts (message.queries: [...]),
+   * just read back instead of written. Returns null if this featureType
+   * has no registered selectionParamId, or the expected parameter/shape
+   * isn't present (an older feature instance, an unrecognized type).
+   */
+  function readSelectionReady(featureMessage: Record<string, unknown>, featureType: string): boolean | null {
+    const selectionParamId = TOOLBAR_TOOL_BY_FEATURE_TYPE.get(featureType)?.selectionParamId;
+    if (!selectionParamId) return null;
+
+    const parameters = featureMessage.parameters;
+    if (!Array.isArray(parameters)) return null;
+
+    for (const param of parameters) {
+      if (!param || typeof param !== "object") continue;
+      const paramMessage = (param as Record<string, unknown>).message;
+      if (!paramMessage || typeof paramMessage !== "object") continue;
+      const record = paramMessage as Record<string, unknown>;
+      if (record.parameterId !== selectionParamId) continue;
+      return Array.isArray(record.queries) && record.queries.length > 0;
+    }
+
+    return null;
+  }
+
   /** Every Cosmo Feature instance found in a raw features-list dump, however it got there -- always inserted directly in Onshape's own UI, never by this panel. */
   function extractCosmoFeatures(rawFeatures: unknown): DetectedCosmoFeature[] {
     if (!Array.isArray(rawFeatures)) return [];
@@ -1038,6 +1157,7 @@ function ParameterMarkPanelInner() {
           featureName: typeof name === "string" ? name : featureId,
           featureType,
           namespace: typeof namespace === "string" && namespace ? namespace : null,
+          selectionReady: readSelectionReady(message as Record<string, unknown>, featureType),
         });
       }
     }
@@ -1473,6 +1593,7 @@ function ParameterMarkPanelInner() {
       featureName: feature.featureName,
       featureType: feature.featureType,
       parameters: parametersByFeature.get(feature.featureId) ?? [],
+      selectionReady: feature.selectionReady,
     }));
   }, [detectedFeatures, parameters]);
 
@@ -2011,7 +2132,15 @@ function ParameterMarkPanelInner() {
       const newFeatureId = extractInsertedFeatureId(insertRes.data);
 
       if (newFeatureId) {
-        setStatus(`${tool.label} inserted -- pick geometry in the 3D view`);
+        // Reuses the exact same wording as this feature's own card
+        // guidance (see ToolGuidanceSteps/TOOLBAR_TOOLS) instead of a
+        // separate generic string -- one source of truth for "what to
+        // do next" so the two can't drift into different phrasing for
+        // the same tool. guidance.select is a full sentence ending in
+        // "." for the card; the trailing period is stripped here since
+        // this status line embeds it mid-sentence instead.
+        const nextStep = tool.guidance ? tool.guidance.select.replace(/\.$/, "") : "pick geometry";
+        setStatus(`${tool.label} inserted -- ${nextStep} in the 3D view`);
         openFeatureDialog(newFeatureId);
 
         // Give Onshape's own dialog a moment to actually take over the
@@ -2262,6 +2391,10 @@ function ParameterMarkPanelInner() {
           <span className={styles.cardTitle}>{group.featureName}</span>
           <span className={styles.cardTypeTag}>({group.featureType})</span>
         </div>
+
+        {!resolved ? (
+          <ToolGuidanceSteps featureType={group.featureType} selectionReady={group.selectionReady} />
+        ) : null}
 
         {group.parameters
           .filter((entry) => entry.typeName !== "BTMParameterBoolean" && !(isNote && entry.parameterId === "noteText"))
@@ -2838,6 +2971,54 @@ function AlternativeDiscussionThread({
         >
           Post comment
         </button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Task-level "what do I do next" guidance -- deliberately NOT a
+ * restatement of Onshape's own native operation panel (which already
+ * shows the real picker + the real value field once opened). Two-layer
+ * division of labor: this answers "what should I be doing right now",
+ * the native panel answers "how do I actually do it". Renders nothing
+ * for a tool with no registered guidance (see TOOLBAR_TOOLS), or once
+ * selectionReady comes back null (an older feature instance predating
+ * this field, or an unrecognized shape) -- degrading silently rather
+ * than showing a guess.
+ */
+function ToolGuidanceSteps({
+  featureType,
+  selectionReady,
+}: {
+  featureType: string;
+  selectionReady: boolean | null;
+}) {
+  const tool = TOOLBAR_TOOL_BY_FEATURE_TYPE.get(featureType);
+  if (!tool?.guidance || selectionReady === null) return null;
+  const { guidance } = tool;
+
+  return (
+    <div className={styles.guidanceSteps}>
+      <div
+        className={
+          selectionReady
+            ? `${styles.guidanceStep} ${styles.guidanceStepDone}`
+            : `${styles.guidanceStep} ${styles.guidanceStepActive}`
+        }
+      >
+        <span className={styles.guidanceStepMark}>{selectionReady ? "✓" : "●"}</span>
+        <span>{selectionReady ? guidance.selectedLabel : guidance.select}</span>
+      </div>
+      <div
+        className={
+          selectionReady
+            ? `${styles.guidanceStep} ${styles.guidanceStepActive}`
+            : `${styles.guidanceStep} ${styles.guidanceStepPending}`
+        }
+      >
+        <span className={styles.guidanceStepMark}>{selectionReady ? "●" : "○"}</span>
+        <span>{guidance.adjust}</span>
       </div>
     </div>
   );
