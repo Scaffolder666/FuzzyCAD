@@ -173,20 +173,26 @@ function drawNoteCallout(
     const textPoint = labelPoint + side2 * (11 * millimeter);
     const textSize = 6.0 * millimeter;
 
-    const halfW = 2.2 * textSize;
+    // Size the box to the ACTUAL text length (character count x an
+    // approximate per-glyph advance) so the whole note sits inside the
+    // panel instead of overflowing past the first word, then center the
+    // text block on the anchor so the leader meets the box's bottom edge.
+    const charCount = max(size(splitIntoCharacters(noteText)), 1);
+    const textWidth = charCount * 0.65 * textSize;
     const halfH = textSize;
     const fillPad = 0.6 * textSize;
     const borderPad = fillPad + 0.24 * textSize;
 
     const panelUv = worldToPlane(plane(textPoint, side, dir), textPoint);
+    const textLeft = panelUv[0] - textWidth / 2;
 
     // Border panel -- slightly larger, sits furthest back, colored the
     // callout blue so it shows as a frame around the lighter fill.
     const borderPlane = plane(textPoint + side * (0.02 * millimeter), side, dir);
     const borderSketch = newSketchOnPlane(context, id + "noteBorder", { "sketchPlane" : borderPlane });
     skRectangle(borderSketch, "borderRect", {
-            "firstCorner" : vector(panelUv[0] - halfW - borderPad, panelUv[1] - halfH - borderPad),
-            "secondCorner" : vector(panelUv[0] + halfW + borderPad, panelUv[1] + halfH + borderPad)
+            "firstCorner" : vector(textLeft - borderPad, panelUv[1] - halfH - borderPad),
+            "secondCorner" : vector(textLeft + textWidth + borderPad, panelUv[1] + halfH + borderPad)
     });
     skSolve(borderSketch);
     opExtractSurface(context, id + "noteBorderSurface", {
@@ -207,8 +213,8 @@ function drawNoteCallout(
     const fillPlane = plane(textPoint + side * (0.05 * millimeter), side, dir);
     const fillSketch = newSketchOnPlane(context, id + "noteFill", { "sketchPlane" : fillPlane });
     skRectangle(fillSketch, "fillRect", {
-            "firstCorner" : vector(panelUv[0] - halfW - fillPad, panelUv[1] - halfH - fillPad),
-            "secondCorner" : vector(panelUv[0] + halfW + fillPad, panelUv[1] + halfH + fillPad)
+            "firstCorner" : vector(textLeft - fillPad, panelUv[1] - halfH - fillPad),
+            "secondCorner" : vector(textLeft + textWidth + fillPad, panelUv[1] + halfH + fillPad)
     });
     skSolve(fillSketch);
     opExtractSurface(context, id + "noteFillSurface", {
@@ -231,8 +237,8 @@ function drawNoteCallout(
     skText(textSketch, "label", {
             "text" : noteText,
             "fontName" : "OpenSans-Regular.ttf",
-            "firstCorner" : vector(textUv[0] - 2.2 * textSize, textUv[1] - textSize),
-            "secondCorner" : vector(textUv[0] + 2.2 * textSize, textUv[1] + textSize)
+            "firstCorner" : vector(textLeft, textUv[1] - textSize),
+            "secondCorner" : vector(textLeft + textWidth, textUv[1] + textSize)
     });
 
     skSolve(textSketch);
