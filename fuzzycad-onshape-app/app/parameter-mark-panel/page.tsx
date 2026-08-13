@@ -1996,25 +1996,31 @@ function ParameterMarkPanelInner() {
     if (!tool) return;
 
     // Required even for a same-document custom featureType (confirmed
-    // live -- see addPartStudioCustomFeature's own comment). Tries a
-    // fresh namespace first (see resolveFreshNamespace -- current
-    // microversion of this tool's own Feature Studio element, no
-    // dependency on an existing instance anywhere), falling back to the
-    // original approach (copy a namespace off an already-inserted
-    // instance of the SAME featureType in THIS document) if that fails
-    // for any reason. Borrowing a DIFFERENT tool's namespace is not a
-    // fallback option at all -- confirmed live that it inserts
-    // "successfully" but then fails to regenerate with Onshape's own
-    // "No matching function for <namespace>::fuzzycadNeedsInputExtrude
-    // (Context, Id, map)" error: each needsInput*.fs is its own Feature
-    // Studio element with its own independent namespace/microversion,
-    // not one shared value, so there is no such thing as "close enough"
-    // between two different tools' namespaces.
-    const freshNamespace = await resolveFreshNamespace(tool, currentContext.server);
+    // live -- see addPartStudioCustomFeature's own comment).
+    //
+    // PRIMARY path: copy the namespace Onshape itself generated on an
+    // already-inserted instance of this SAME featureType in THIS document.
+    // That string is ground truth and is the approach that actually works.
+    // The constructed "fresh" namespace (resolveFreshNamespace, added to
+    // remove the manual bootstrap) has been rejected live by Onshape as
+    // "Feature ... has an invalid namespace" (documentId::m<element
+    // microversion> is not a namespace Onshape accepts for a custom-feature
+    // insert), so it is now only a LAST-RESORT bootstrap aid used when no
+    // instance of this tool exists yet -- not the primary path.
+    //
+    // Borrowing a DIFFERENT tool's namespace is not an option at all --
+    // confirmed live that it inserts "successfully" but then fails to
+    // regenerate with Onshape's own "No matching function for
+    // <namespace>::fuzzycadNeedsInputExtrude (Context, Id, map)" error:
+    // each needsInput*.fs is its own Feature Studio element with its own
+    // independent namespace, not one shared value.
     const fallbackNamespace = detectedFeatures.find(
       (feature) => feature.featureType === tool.featureType && feature.namespace,
     )?.namespace ?? undefined;
-    const namespace = freshNamespace ?? fallbackNamespace;
+    const freshNamespace = fallbackNamespace
+      ? undefined
+      : await resolveFreshNamespace(tool, currentContext.server);
+    const namespace = fallbackNamespace ?? freshNamespace;
 
     if (!namespace) {
       setStatus(
