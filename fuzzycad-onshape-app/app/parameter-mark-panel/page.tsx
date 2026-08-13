@@ -20,6 +20,7 @@ import {
   type ProposalGroup,
 } from "../lib/uncertainty/document";
 import {
+  addPartStudioCustomFeature,
   deletePartStudioFeature,
   fetchFeatureCreatedPartIds,
   fetchOnshapeElements,
@@ -28,6 +29,7 @@ import {
   saveFuzzycadProjectState,
   setOnshapePartAppearance,
   updatePartStudioFeatureSuppressed,
+  type BTMParameter,
   type OnshapeElement,
 } from "../lib/onshapeClient";
 import {
@@ -272,6 +274,189 @@ const ACCEPT_VIA_HIDDEN_PARAMETER_COSMO_FEATURE_TYPES = new Set([
   "fuzzycadCompareAlternatives",
 ]);
 
+/**
+ * The toolbar's "create a new mark" tools -- one per Needs Input
+ * FeatureScript type (Hole excluded for now, same as the interaction
+ * pass above). Each maps straight onto that feature's own precondition
+ * (see the matching needsInput*.fs file): `requiredEntityTypes` gates
+ * which button is enabled for the current 3D-view selection, matching
+ * that precondition's own Filter as closely as the SELECTION postMessage
+ * lets us check client-side. Move/Scale/Rotate want EntityType.BODY,
+ * which the SELECTION message may or may not report distinctly from a
+ * plain face click depending on how the geometry was selected in
+ * Onshape's own viewport -- this is the one part of the toolbar most
+ * likely to need a live-test correction, same caveat as
+ * buildAxialStretchTransform in needsInputStretch.fs.
+ */
+type ToolbarToolId = "move" | "extrude" | "chamfer" | "fillet" | "scale" | "rotate" | "stretch";
+
+const TOOLBAR_TOOLS: {
+  id: ToolbarToolId;
+  label: string;
+  icon: string;
+  featureType: string;
+  featureName: string;
+  requiredEntityTypes: string[];
+}[] = [
+  {
+    id: "move",
+    label: "Move",
+    icon: "⇄",
+    featureType: "fuzzycadNeedsInputMove",
+    featureName: "FuzzyCAD Needs Input Move",
+    requiredEntityTypes: ["BODY"],
+  },
+  {
+    id: "extrude",
+    label: "Extrude",
+    icon: "⬆",
+    featureType: "fuzzycadNeedsInputExtrude",
+    featureName: "FuzzyCAD Needs Input Extrude",
+    requiredEntityTypes: ["FACE"],
+  },
+  {
+    id: "chamfer",
+    label: "Chamfer",
+    icon: "◤",
+    featureType: "fuzzycadNeedsInputChamfer",
+    featureName: "FuzzyCAD Needs Input Chamfer",
+    requiredEntityTypes: ["EDGE", "FACE"],
+  },
+  {
+    id: "fillet",
+    label: "Fillet",
+    icon: "◗",
+    featureType: "fuzzycadNeedsInputFillet",
+    featureName: "FuzzyCAD Needs Input Fillet",
+    requiredEntityTypes: ["EDGE", "FACE"],
+  },
+  {
+    id: "scale",
+    label: "Scale",
+    icon: "⤢",
+    featureType: "fuzzycadNeedsInputScale",
+    featureName: "FuzzyCAD Needs Input Scale",
+    requiredEntityTypes: ["BODY"],
+  },
+  {
+    id: "rotate",
+    label: "Rotate",
+    icon: "↻",
+    featureType: "fuzzycadNeedsInputRotate",
+    featureName: "FuzzyCAD Needs Input Rotate",
+    requiredEntityTypes: ["BODY"],
+  },
+  {
+    id: "stretch",
+    label: "Stretch",
+    icon: "↔",
+    featureType: "fuzzycadNeedsInputStretch",
+    featureName: "FuzzyCAD Needs Input Stretch",
+    requiredEntityTypes: ["FACE"],
+  },
+];
+
+function queryListParameter(parameterId: string, geometryIds: string[]): BTMParameter {
+  return {
+    type: 148,
+    typeName: "BTMParameterQueryList",
+    message: {
+      parameterId,
+      queries: [
+        {
+          type: 138,
+          typeName: "BTMIndividualQuery",
+          message: { geometryIds },
+        },
+      ],
+    },
+  };
+}
+
+function quantityParameter(parameterId: string, expression: string): BTMParameter {
+  return {
+    type: 147,
+    typeName: "BTMParameterQuantity",
+    message: { parameterId, expression },
+  };
+}
+
+function booleanParameter(parameterId: string, value: boolean): BTMParameter {
+  return {
+    type: 144,
+    typeName: "BTMParameterBoolean",
+    message: { parameterId, value },
+  };
+}
+
+function enumParameter(parameterId: string, enumName: string, value: string): BTMParameter {
+  return {
+    type: 145,
+    typeName: "BTMParameterEnum",
+    message: { parameterId, enumName, value },
+  };
+}
+
+/**
+ * Builds the exact BTMParameter list each tool's own precondition
+ * expects, seeded from whatever's currently selected in the 3D view.
+ * Every numeric value starts at a plain placeholder with its own
+ * "needs input" flag left on (true) -- the point of a Needs Input mark
+ * is that the value isn't decided yet, so the toolbar never guesses one.
+ */
+function buildCustomFeatureParameters(tool: ToolbarToolId, geometryIds: string[]): BTMParameter[] {
+  switch (tool) {
+    case "move":
+      return [
+        queryListParameter("body", geometryIds),
+        quantityParameter("moveX", "0*mm"),
+        quantityParameter("moveY", "0*mm"),
+        quantityParameter("moveZ", "0*mm"),
+        booleanParameter("moveXNeedsInput", true),
+        booleanParameter("moveYNeedsInput", true),
+        booleanParameter("moveZNeedsInput", true),
+      ];
+    case "extrude":
+      return [
+        queryListParameter("entities", geometryIds),
+        quantityParameter("depth", "10*mm"),
+        booleanParameter("depthNeedsInput", true),
+        booleanParameter("oppositeDirection", false),
+      ];
+    case "chamfer":
+      return [
+        queryListParameter("edge", geometryIds),
+        quantityParameter("width", "3*mm"),
+        booleanParameter("widthNeedsInput", true),
+      ];
+    case "fillet":
+      return [
+        queryListParameter("edge", geometryIds),
+        quantityParameter("radius", "3*mm"),
+        booleanParameter("radiusNeedsInput", true),
+      ];
+    case "scale":
+      return [
+        queryListParameter("body", geometryIds),
+        quantityParameter("scaleFactor", "1.5"),
+        booleanParameter("scaleFactorNeedsInput", true),
+      ];
+    case "rotate":
+      return [
+        queryListParameter("body", geometryIds),
+        enumParameter("rotationAxisMode", "FuzzyCADRotationAxisMode", "Z"),
+        quantityParameter("angle", "0*deg"),
+        booleanParameter("angleNeedsInput", true),
+      ];
+    case "stretch":
+      return [
+        queryListParameter("face", geometryIds),
+        quantityParameter("stretchFactor", "1.5"),
+        booleanParameter("stretchFactorNeedsInput", true),
+      ];
+  }
+}
+
 function isValidUncertaintyDocument(value: unknown): value is FuzzyCADUncertaintyDocument {
   return (
     !!value &&
@@ -372,6 +557,22 @@ function ParameterMarkPanelInner() {
   // linking; the other half, card->viewport via openFeatureDialog, already
   // existed).
   const [selectedFeatureIds, setSelectedFeatureIds] = useState<Set<string>>(new Set());
+  // Raw geometry from the last SELECTION postMessage, kept separately from
+  // selectedFeatureIds -- that one only tracks matches against EXISTING
+  // Cosmo Features (for card highlighting); this is for the toolbar,
+  // which needs to insert a brand new feature seeded from whatever's
+  // currently picked in the 3D view, whether or not it belongs to an
+  // existing mark. State, not a ref: the toolbar's enabled/disabled
+  // buttons need to re-render when the selection changes.
+  const [lastSelection, setLastSelection] = useState<{
+    geometryIds: string[];
+    entityTypes: Set<string>;
+  } | null>(null);
+  // Which toolbar tool has an insert in flight -- disables every toolbar
+  // button the same way `saving`/`pendingAction` disable the card
+  // buttons during a save, and swaps that one tool's icon to a spinner
+  // label so it's clear which insert is running.
+  const [insertingTool, setInsertingTool] = useState<ToolbarToolId | null>(null);
   // entityId (Onshape's short transient selectionId, e.g. "KHNB") ->
   // featureId, built from partstudio-feature-created-parts's entities
   // field across every open Cosmo Feature. A ref, not state: it's read
@@ -599,12 +800,17 @@ function ParameterMarkPanelInner() {
       if (!Array.isArray(selections)) return;
 
       const matched = new Set<string>();
+      const geometryIds: string[] = [];
+      const entityTypes = new Set<string>();
       for (const selection of selections) {
         const selectionId = selection?.selectionId;
         if (typeof selectionId !== "string") continue;
+        geometryIds.push(selectionId);
+        if (typeof selection?.entityType === "string") entityTypes.add(selection.entityType);
         const featureId = entityToFeatureRef.current.get(selectionId);
         if (featureId) matched.add(featureId);
       }
+      setLastSelection(geometryIds.length > 0 ? { geometryIds, entityTypes } : null);
 
       console.debug("[FuzzyCAD] SELECTION received", {
         selections,
@@ -1358,6 +1564,66 @@ function ParameterMarkPanelInner() {
   }
 
   /**
+   * Whether a toolbar button should be clickable for the current
+   * selection. BODY-required tools (Move/Scale/Rotate) are left
+   * permissive -- see TOOLBAR_TOOLS's own comment on why the SELECTION
+   * message can't be trusted to reliably distinguish a whole-body pick
+   * from a face pick client-side; Onshape's own response surfaces a
+   * clear error if the geometry doesn't actually resolve to a body.
+   */
+  function isToolbarToolEnabled(tool: (typeof TOOLBAR_TOOLS)[number]): boolean {
+    if (!context || !lastSelection || insertingTool) return false;
+    if (tool.requiredEntityTypes.includes("BODY")) return true;
+    return tool.requiredEntityTypes.some((entityType) => lastSelection.entityTypes.has(entityType));
+  }
+
+  /**
+   * Toolbar "create a new mark" action -- inserts a fresh instance of
+   * the given tool's Cosmo Feature, seeded from whatever's currently
+   * selected in the 3D view (lastSelection). This is the create half of
+   * the app; the card list below is purely for reviewing/managing marks
+   * that already exist, never for making new ones.
+   *
+   * No confirmation dialog: inserting is cheap to undo (Reject deletes
+   * the feature outright, same as any other mark) and every value
+   * starts flagged "needs input" anyway, so there is nothing to
+   * accidentally commit.
+   */
+  async function insertToolbarMark(toolId: ToolbarToolId) {
+    if (!context || insertingTool) return;
+
+    const tool = TOOLBAR_TOOLS.find((entry) => entry.id === toolId);
+    if (!tool || !lastSelection) return;
+
+    setInsertingTool(toolId);
+    setStatus(`Inserting ${tool.label}...`);
+
+    try {
+      const parameters = buildCustomFeatureParameters(toolId, lastSelection.geometryIds);
+
+      const insertRes = await addPartStudioCustomFeature(
+        {
+          documentId: context.documentId,
+          workspaceId: context.workspaceId,
+          partStudioElementId: context.elementId,
+          server: context.server,
+        },
+        { featureType: tool.featureType, name: tool.featureName, parameters },
+      );
+
+      if (!insertRes.ok) {
+        setStatus(`failed to insert ${tool.label} (HTTP ${insertRes.status})`);
+        return;
+      }
+
+      setStatus(`${tool.label} inserted`);
+      await loadEverything({ manual: true });
+    } finally {
+      setInsertingTool(null);
+    }
+  }
+
+  /**
    * fuzzycadCompareAlternatives only: switches which candidate is shown
    * by patching "activeOption" (a plain BTMParameterString, see
    * compareAlternatives.fs) through the same generic parameterUpdates
@@ -1938,6 +2204,39 @@ function ParameterMarkPanelInner() {
           </div>
         </div>
         <p className={styles.status}>{status}</p>
+      </div>
+
+      {/*
+       * Create toolbar -- permanently docked above the card list, not
+       * folded into it. The card list below is a review/management
+       * surface for marks that already exist (Accept/Reject/comment);
+       * this row is the only place that CREATES a new one. Each button
+       * reads whatever is currently selected in Onshape's own 3D view
+       * (lastSelection, from the SELECTION postMessage) and inserts that
+       * tool's Cosmo Feature seeded from it -- see insertToolbarMark.
+       */}
+      <div className={styles.toolbar}>
+        {TOOLBAR_TOOLS.map((tool) => {
+          const enabled = isToolbarToolEnabled(tool);
+          const isInserting = insertingTool === tool.id;
+          return (
+            <button
+              key={tool.id}
+              type="button"
+              className={styles.toolbarButton}
+              disabled={!enabled}
+              title={
+                lastSelection
+                  ? `Insert ${tool.featureName} from the current selection`
+                  : `Select ${tool.requiredEntityTypes.join(" or ").toLowerCase()} geometry in the 3D view first`
+              }
+              onClick={() => void insertToolbarMark(tool.id)}
+            >
+              <span className={styles.toolbarIcon}>{isInserting ? "…" : tool.icon}</span>
+              <span className={styles.toolbarLabel}>{tool.label}</span>
+            </button>
+          );
+        })}
       </div>
 
       {parameters === null ? null : featureGroups.length === 0 ? (

@@ -347,6 +347,34 @@ export async function updatePartStudioFeatureSuppressed(
   return res.json() as Promise<ApiResult>;
 }
 
+export type BTMParameter = {
+  type: number;
+  typeName: string;
+  message: Record<string, unknown>;
+};
+
+/**
+ * Inserts a new instance of a FuzzyCAD custom feature (any
+ * fuzzycadNeedsInput*, fuzzycadProposed*, or fuzzycadNote type) into the
+ * Part Studio -- the toolbar's "create a new mark" path. `parameters` must
+ * already be the exact BTMParameter* envelopes that feature's own
+ * precondition expects (see buildCustomFeatureParameters in
+ * parameter-mark-panel/page.tsx for the per-tool mapping); the route
+ * itself is generic and just forwards them.
+ */
+export async function addPartStudioCustomFeature(
+  query: PartStudioQuery,
+  body: { featureType: string; name: string; parameters: BTMParameter[] },
+): Promise<ApiResult> {
+  const res = await fetch(`/api/onshape/partstudio-add-custom-feature`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...query, ...body }),
+  });
+
+  return res.json() as Promise<ApiResult>;
+}
+
 /** Removes one feature (e.g. a rejected Cosmo Feature proposal) from a Part Studio's feature tree in place. */
 export async function deletePartStudioFeature(
   query: PartStudioQuery,
