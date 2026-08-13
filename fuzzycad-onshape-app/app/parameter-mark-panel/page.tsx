@@ -539,6 +539,38 @@ function buildCustomFeatureParameters(tool: ToolbarToolId, geometryIds: string[]
   }
 }
 
+/**
+ * Pulls the newly-created feature's featureId back out of a
+ * POST .../features response so insertToolbarMark can immediately call
+ * openFeatureDialog on it. Every other feature envelope this codebase
+ * reads (GET .../features, partstudio-feature-parameters-debug) nests
+ * featureId at message.featureId inside a {type, typeName, message}
+ * triple, so that's the shape checked first; a flat top-level featureId
+ * is checked as a fallback in case the add-feature response differs.
+ * Returns null (never throws) if neither matches -- insertToolbarMark
+ * falls back to today's "sits in the tree until double-clicked" behavior
+ * rather than breaking the insert itself.
+ */
+function extractInsertedFeatureId(data: unknown): string | null {
+  if (!data || typeof data !== "object") return null;
+  const record = data as Record<string, unknown>;
+
+  const feature = record.feature;
+  if (feature && typeof feature === "object") {
+    const message = (feature as Record<string, unknown>).message;
+    if (message && typeof message === "object") {
+      const featureId = (message as Record<string, unknown>).featureId;
+      if (typeof featureId === "string" && featureId) return featureId;
+    }
+  }
+
+  if (typeof record.featureId === "string" && record.featureId) {
+    return record.featureId;
+  }
+
+  return null;
+}
+
 function isValidUncertaintyDocument(value: unknown): value is FuzzyCADUncertaintyDocument {
   return (
     !!value &&
@@ -1664,24 +1696,20 @@ function ParameterMarkPanelInner() {
   }
 
   /**
-   * Toolbar "arm" click -- SketchUp-style: pick the tool FIRST, then
-   * click the object it applies to in the 3D view (the opposite order
-   * from this toolbar's first version). Clicking the already-armed tool
-   * again cancels; clicking a different one re-arms to that instead.
-   * The actual insert happens later, from the SELECTION handler, once
-   * the next pick comes in.
-   */
-  /**
    * Toolbar "create a new mark" action -- inserts a fresh instance of
    * the given tool's Cosmo Feature with no geometry pre-filled (see
    * queryListParameter's own comment for why: geometryIds is always []
-   * from here). The new feature shows up exactly like one freshly
-   * inserted from Onshape's own Insert menu before its first pick --
-   * opening it drops straight into Onshape's native "click body/edge/
-   * face in the 3D view" flow, no separate dialog step needed.
-   * This is the create half of the app; the card list below is purely
-   * for reviewing/managing marks that already exist, never for making
-   * new ones.
+   * from here). Once inserted, we open it via openFeatureDialog (same
+   * call the card list uses) so it drops straight into Onshape's native
+   * "click body/edge/face in the 3D view" pick flow immediately --
+   * without this, the new feature just sits silently in the feature
+   * tree until manually double-clicked there (confirmed live, and
+   * explicitly rejected by the project owner as the wrong flow: "you
+   * shouldn't just appear in the feature tree -- I should directly
+   * click Move and then click the corresponding face"). This is the
+   * create half of the app; the card list below is purely for
+   * reviewing/managing marks that already exist, never for making new
+   * ones.
    *
    * No confirmation dialog: inserting is cheap to undo (Reject deletes
    * the feature outright, same as any other mark) and every value
@@ -1746,7 +1774,28 @@ function ParameterMarkPanelInner() {
         return;
       }
 
-      setStatus(`${tool.label} inserted`);
+      // Onshape's POST .../features response echoes the inserted feature
+      // back with its real featureId filled in -- logged raw here since
+      // the exact response envelope hasn't been captured live yet for
+      // this route (unlike e.g. partstudio-add-feature's confirmed
+      // shape); extractInsertedFeatureId covers the shape we expect
+      // (data.feature.message.featureId, matching every other feature
+      // envelope this codebase already reads) plus a flat fallback, and
+      // degrades to "still works, just no auto-open" if neither matches.
+      console.debug("[FuzzyCAD] toolbar insert response", insertRes.data);
+      const newFeatureId = extractInsertedFeatureId(insertRes.data);
+
+      if (newFeatureId) {
+        setStatus(`${tool.label} inserted -- pick geometry in the 3D view`);
+        openFeatureDialog(newFeatureId);
+      } else {
+        setStatus(`${tool.label} inserted`);
+        console.warn(
+          "[FuzzyCAD] couldn't find featureId on toolbar insert response, not auto-opening",
+          insertRes.data,
+        );
+      }
+
       await loadEverything({ manual: true });
     } finally {
       setInsertingTool(null);
