@@ -703,20 +703,30 @@ function buildCustomFeatureParameters(tool: ToolbarToolId, geometryIds: string[]
       return [queryListParameter("target", geometryIds), stringParameter("noteText", "")];
     case "compare":
       // compareAlternatives.fs's precondition also declares
-      // comparisonSlot/currentOption/alternativeA (all required) and
-      // alternativeB (only required when hasAlternativeB is true) --
-      // deliberately NOT included here at all (see TOOLBAR_TOOLS's own
-      // comment on the "conflict" category for why: their real wire
-      // shape, PartStudioData for the three Part Studio references, has
-      // never been captured live). Every scalar/boolean field IS
-      // included explicitly, matching this codebase's established
-      // practice everywhere else of never relying on a FeatureScript
-      // "Default" annotation being applied for an omitted parameter.
-      // alternativeB's own move/rotate fields are skipped too --
-      // compareAlternatives.fs's own precondition only declares them
-      // inside `if (definition.hasAlternativeB)`, so they're not
-      // required while it's false.
+      // comparisonSlot (plain Query, required) and currentOption/
+      // alternativeA (PartStudioData, required) and alternativeB
+      // (PartStudioData, only required when hasAlternativeB is true).
+      // Confirmed live elsewhere in this same insert path (Extrude's
+      // "Precondition failed (definition.accepted is boolean)") that a
+      // declared "Default" does NOT save an omitted parameter from
+      // precondition failure -- and comparisonSlot/currentOption/
+      // alternativeA have no Default at all, so omitting them can only
+      // fail the same way. comparisonSlot is a plain Query though, same
+      // as body/edge/face/target on every other tool above -- sent as a
+      // well-formed EMPTY query list via queryListParameter, exactly
+      // like those, not omitted. currentOption/alternativeA/alternativeB
+      // are PartStudioData, not Query -- there is no queryListParameter
+      // equivalent for that type (its wire shape has never been
+      // captured live), so those three are still omitted; if that turns
+      // out to also fail precondition, the fallback is the setup-flow
+      // approach discussed but not yet built. Every scalar/boolean field
+      // IS included explicitly, matching this codebase's established
+      // practice everywhere else. alternativeB's own move/rotate fields
+      // are skipped too -- compareAlternatives.fs's own precondition
+      // only declares them inside `if (definition.hasAlternativeB)`, so
+      // they're not required while it's false.
       return [
+        queryListParameter("comparisonSlot", geometryIds),
         booleanParameter("hasAlternativeB", false),
         quantityParameter("currentMoveX", "0*mm"),
         quantityParameter("currentMoveY", "0*mm"),
