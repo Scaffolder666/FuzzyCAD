@@ -253,6 +253,13 @@
   color: #44465a;
 }
 
+.toolbarDivider {
+  align-self: stretch;
+  width: 1px;
+  margin: 4px 2px;
+  background: #e4e6ec;
+}
+
 .emptyState {
   color: #7a7d8a;
   padding: 36px 16px;
