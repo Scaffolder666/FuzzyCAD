@@ -1003,7 +1003,7 @@ function drawEngineeringCurvedArrow(
     setProperty(context, {
             "entities" : qCreatedBy(id + "labelSurface", EntityType.BODY),
             "propertyType" : PropertyType.APPEARANCE,
-            "value" : arcColor
+            "value" : color(0, 0, 0, 1.0)
     });
 }
 
@@ -1307,7 +1307,7 @@ function drawVeryLightGhostOutline(
     // one -- the faint version read as "unfinished/greyed out"; a crisp
     // attention-colored silhouette matches the warning "!" and the red
     // angle callout, so the mark is impossible to miss at a glance.
-    const outlineColor = color(0.88, 0.16, 0.12, 0.9);
+    const outlineColor = color(0.1, 0.1, 0.1, 0.9);
     const sampleSpacing = 5 * millimeter;
 
     const bodyEdges = evaluateQuery(

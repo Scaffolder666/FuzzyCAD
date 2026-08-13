@@ -468,7 +468,7 @@ function drawEngineeringLinearArrow(
     setProperty(context, {
             "entities" : qCreatedBy(id + "labelSketchSurface", EntityType.BODY),
             "propertyType" : PropertyType.APPEARANCE,
-            "value" : arrowColor
+            "value" : color(0, 0, 0, 1.0)
     });
 }
 function RandomNumberFunction(id)

@@ -201,7 +201,7 @@ function drawNoteCallout(
         setProperty(context, {
                 "entities" : qCreatedBy(id + "labelSurface", EntityType.BODY),
                 "propertyType" : PropertyType.APPEARANCE,
-                "value" : calloutColor
+                "value" : color(0, 0, 0, 1.0)
         });
     }
 }

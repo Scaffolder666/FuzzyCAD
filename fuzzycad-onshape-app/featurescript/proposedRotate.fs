@@ -395,7 +395,7 @@ function drawEngineeringCurvedArrow(
     setProperty(context, {
             "entities" : qCreatedBy(id + "labelSurface", EntityType.BODY),
             "propertyType" : PropertyType.APPEARANCE,
-            "value" : arcColor
+            "value" : color(0, 0, 0, 1.0)
     });
 }
 

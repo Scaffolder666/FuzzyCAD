@@ -176,7 +176,7 @@ returns map
 
 function drawVeryLightGhostOutline(context is Context, id is Id, body is Query)
 {
-    const outlineColor = color(0.88, 0.16, 0.12, 0.9);
+    const outlineColor = color(0.1, 0.1, 0.1, 0.9);
     const sampleSpacing = 5 * millimeter;
 
     const bodyEdges = evaluateQuery(context, qOwnedByBody(qEverything(EntityType.EDGE), body));
@@ -702,7 +702,7 @@ function drawEngineeringLinearArrow(
     setProperty(context, {
             "entities" : qCreatedBy(id + "labelSketchSurface", EntityType.BODY),
             "propertyType" : PropertyType.APPEARANCE,
-            "value" : arrowColor
+            "value" : color(0, 0, 0, 1.0)
     });
 }
 function drawDashedReferenceLine(

@@ -257,7 +257,7 @@ function drawBigMoveArrow(
     setProperty(context, {
             "entities" : qCreatedBy(id + "labelSurface", EntityType.BODY),
             "propertyType" : PropertyType.APPEARANCE,
-            "value" : markerColor
+            "value" : color(0, 0, 0, 1.0)
     });
 
     const detailPoint = midPoint - side2 * (7 * millimeter);
@@ -284,7 +284,7 @@ function drawBigMoveArrow(
     setProperty(context, {
             "entities" : qCreatedBy(id + "detailSurface", EntityType.BODY),
             "propertyType" : PropertyType.APPEARANCE,
-            "value" : markerColor
+            "value" : color(0, 0, 0, 1.0)
     });
 }
 
