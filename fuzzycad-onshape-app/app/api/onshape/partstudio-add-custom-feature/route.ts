@@ -87,13 +87,19 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "parameters must be an array" }, { status: 400 });
   }
 
-  // /api/v6/ specifically -- confirmed on Onshape's own forum that the
-  // unversioned /api/partstudios path does not support the
-  // queryString/qTransient(...) query form the toolbar's per-tool
-  // parameter builders rely on (see queryListParameter in
-  // parameter-mark-panel/page.tsx) to reference whatever's currently
-  // selected in the 3D view.
-  const endpoint = `${server}/api/v6/partstudios/d/${documentId}/w/${workspaceId}/e/${partStudioElementId}/features`;
+  // Unversioned path, not /api/v6/ -- the toolbar no longer pre-fills
+  // any geometry (see queryListParameter's own comment: geometryIds is
+  // always [] now), so the queryString/qTransient(...) form that
+  // motivated switching to /v6/ isn't used here anymore. Reverted back
+  // to match partstudio-add-custom-feature-debug, the harness that
+  // already confirmed live insertion of a custom featureType +
+  // namespace works on this exact path (task: "Verify API-driven insert
+  // of fuzzycadProposedExtrude via debug page") -- /v6/ was producing
+  // "Feature has invalid type" even with a namespace copied from a
+  // real, matching-featureType existing instance, so whatever /v6/
+  // needs differently for custom-type resolution, this app doesn't
+  // currently know it.
+  const endpoint = `${server}/api/partstudios/d/${documentId}/w/${workspaceId}/e/${partStudioElementId}/features`;
 
   const feature = {
     type: 134,
