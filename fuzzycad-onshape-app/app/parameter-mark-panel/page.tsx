@@ -2799,17 +2799,21 @@ function ParameterMarkPanelInner() {
           const tools = TOOLBAR_TOOLS.filter((tool) => tool.category === category);
           if (tools.length === 0) return null;
           const meta = TOOLBAR_CATEGORY_META[category];
+          const creationCategory = activeCreation
+            ? TOOLBAR_TOOLS.find((entry) => entry.id === activeCreation.toolId)?.category
+            : undefined;
           return (
             <div key={category} className={`${styles.toolbarSection} ${meta.sectionClass}`}>
               <div className={styles.toolbarSectionLabel}>{meta.label}</div>
               <div className={styles.toolbarSectionButtons}>
                 {tools.map((tool) => {
                   const isInserting = insertingTool === tool.id;
+                  const isCreating = activeCreation?.toolId === tool.id;
                   return (
                     <button
                       key={tool.id}
                       type="button"
-                      className={styles.toolbarButton}
+                      className={`${styles.toolbarButton} ${isCreating ? styles.toolbarButtonActive : ""}`}
                       disabled={insertingTool !== null}
                       title={`Insert ${tool.featureName}`}
                       onClick={() => void insertToolbarMark(tool.id, [])}
@@ -2822,19 +2826,24 @@ function ParameterMarkPanelInner() {
                   );
                 })}
               </div>
+              {/*
+               * Creation guide is nested INSIDE the category section its
+               * tool belongs to (Move -> under NEEDS INPUT), not rendered
+               * as a fourth peer card, so it reads as subordinate to the
+               * specific tool being created rather than a sibling level.
+               */}
+              {activeCreation && creationCategory === category ? (
+                <ToolCreationGuide
+                  toolId={activeCreation.toolId}
+                  busy={creationActionBusy}
+                  onConfirm={confirmActiveCreation}
+                  onCancel={() => void cancelActiveCreation()}
+                />
+              ) : null}
             </div>
           );
         })}
       </div>
-      ) : null}
-
-      {activeCreation ? (
-        <ToolCreationGuide
-          toolId={activeCreation.toolId}
-          busy={creationActionBusy}
-          onConfirm={confirmActiveCreation}
-          onCancel={() => void cancelActiveCreation()}
-        />
       ) : null}
 
       {activeTab !== "cards" ? null : parameters === null ? null : featureGroups.length === 0 ? (
@@ -3048,10 +3057,9 @@ function ToolCreationGuide({
   const tool = TOOLBAR_TOOLS.find((entry) => entry.id === toolId);
   if (!tool?.guidance) return null;
   const { guidance } = tool;
-  const sectionClass = TOOLBAR_CATEGORY_META[tool.category].sectionClass;
 
   return (
-    <div className={`${styles.toolbarSection} ${sectionClass} ${styles.creationGuide}`}>
+    <div className={styles.creationGuide}>
       <div className={styles.creationGuideHeader}>
         <span className={styles.toolbarSectionLabel}>Creating {tool.label}</span>
         <button

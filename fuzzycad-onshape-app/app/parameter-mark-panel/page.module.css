@@ -314,6 +314,16 @@
   opacity: 0.35;
 }
 
+/* The tool currently mid-creation -- kept fully lit (overriding the
+   disabled dim) and boxed so it's clear which tool the nested creation
+   guide below belongs to. */
+.toolbarButtonActive,
+.toolbarButtonActive:disabled {
+  background: rgba(255, 255, 255, 0.95);
+  border-color: rgba(0, 0, 0, 0.22);
+  opacity: 1;
+}
+
 .toolbarIcon {
   display: flex;
   align-items: center;
@@ -400,13 +410,16 @@
   color: #45485a;
 }
 
-/* Creation guide -- dismissible panel shown under the toolbar for the
-   duration of a creation session (see ToolCreationGuide). Reuses a
-   category section's own tint/rail so it visually continues the
-   toolbar button the user just clicked, instead of looking like a
-   fourth, unrelated section. */
+/* Creation guide -- nested INSIDE the category section its tool belongs
+   to (see ToolCreationGuide's JSX). Rendered as a subtle inset panel
+   below that category's buttons so it reads as subordinate to the tool
+   being created, one level down from the three peer category cards. */
 .creationGuide {
-  margin-bottom: 6px;
+  margin: 8px 2px 2px;
+  padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.62);
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  border-radius: 8px;
 }
 
 .creationGuideHeader {
