@@ -336,6 +336,20 @@ type ToolbarToolId =
   | "compare";
 type ToolbarToolCategory = "needsInput" | "markConstrain" | "conflict";
 
+/**
+ * The one Onshape document all 9 FuzzyCAD custom feature types are
+ * published from (confirmed live -- see /api/onshape/elements against
+ * this exact document/workspace, which listed all 9 as separate
+ * FEATURESTUDIO elements). Fixed identifiers, not per-target-document
+ * state: unlike a target Part Studio (which may or may not have ever
+ * referenced a given FuzzyCAD featureType before), this pair never
+ * changes no matter which document the toolbar is inserting into --
+ * it is the SOURCE the custom feature types are defined in, not the
+ * destination.
+ */
+const FUZZYCAD_FEATURE_STUDIO_DOCUMENT_ID = "4d1fc0e64de952a27aa017f9";
+const FUZZYCAD_FEATURE_STUDIO_WORKSPACE_ID = "7c76b2cb448de6692dd140f0";
+
 const TOOLBAR_TOOLS: {
   id: ToolbarToolId;
   label: string;
@@ -343,24 +357,19 @@ const TOOLBAR_TOOLS: {
   featureName: string;
   category: ToolbarToolCategory;
   /**
-   * Task-level guidance, novice-facing rather than CAD-vocabulary --
-   * shared verbatim between the toolbar's post-insert status line and
-   * each card's own step-by-step guidance (see renderProposalCard /
-   * ToolGuidanceSteps below), so the two can't drift into different
-   * wording for the same tool. Two steps only, matching what
-   * selectionParamId can actually detect (that one Query field is
-   * empty vs not) -- "select geometry" then "adjust the value";
-   * nothing here tracks a third "value confirmed" state.
-   *   - select: step 1 prompt, shown while selectionParamId's query is
-   *     empty (e.g. "Select the face you want to extend")
-   *   - selectedLabel: step 1's own done-state label, replacing
-   *     `select` once that query is non-empty (e.g. "Face selected")
-   *   - adjust: step 2 prompt, shown once step 1 is done (e.g. "Adjust
-   *     the depth to explore how far it should extend")
-   * Omitted for "compare" -- its own guidance would need to describe a
-   * fundamentally different (multi-Part-Studio, not single-query)
-   * interaction, out of scope for this pass.
+   * This tool's own Feature Studio element (tab) inside the shared
+   * FuzzyCAD Feature Studio document (see FUZZYCAD_FEATURE_STUDIO_*
+   * above) -- confirmed live via /api/onshape/elements against that
+   * document/workspace, which listed each featureType as its own
+   * FEATURESTUDIO element with its own microversionId. Combined with
+   * that element's CURRENT microversionId (fetched fresh at insert
+   * time, see resolveFreshNamespace), this builds the "namespace" value
+   * an insert needs without requiring an already-existing instance of
+   * this featureType in the target document -- unlike the fallback path
+   * below, this works even the very first time a featureType is ever
+   * used anywhere.
    */
+  featureStudioElementId: string;
   /**
    * Task-level guidance for the CREATION session only (see
    * ToolCreationGuide/ActiveCreation below) -- shown in a dismissible
@@ -396,6 +405,7 @@ const TOOLBAR_TOOLS: {
     featureType: "fuzzycadNeedsInputMove",
     featureName: "FuzzyCAD Needs Input Move",
     category: "needsInput",
+    featureStudioElementId: "62ae097dc5b05657ecf08f1f",
     guidance: {
       select: "Select the object you want to move in the 3D view.",
       adjust:
@@ -408,6 +418,7 @@ const TOOLBAR_TOOLS: {
     featureType: "fuzzycadNeedsInputExtrude",
     featureName: "FuzzyCAD Needs Input Extrude",
     category: "needsInput",
+    featureStudioElementId: "a6fcee0685d67f8c715165cc",
     guidance: {
       select: "Select the face you want to extend in the 3D view.",
       adjust:
@@ -420,6 +431,7 @@ const TOOLBAR_TOOLS: {
     featureType: "fuzzycadNeedsInputChamfer",
     featureName: "FuzzyCAD Needs Input Chamfer",
     category: "needsInput",
+    featureStudioElementId: "2c1a5eda9eb6014d69ec5ed4",
     guidance: {
       select: "Select the edge(s) you want to bevel in the 3D view.",
       adjust: "Use the preview to mark the intended bevel. The exact width can stay unresolved for a collaborator to decide.",
@@ -431,6 +443,7 @@ const TOOLBAR_TOOLS: {
     featureType: "fuzzycadNeedsInputFillet",
     featureName: "FuzzyCAD Needs Input Fillet",
     category: "needsInput",
+    featureStudioElementId: "cb758ec9b791fd7958269ffd",
     guidance: {
       select: "Select the sharp edge(s) you want to round in the 3D view.",
       adjust:
@@ -443,6 +456,7 @@ const TOOLBAR_TOOLS: {
     featureType: "fuzzycadNeedsInputScale",
     featureName: "FuzzyCAD Needs Input Scale",
     category: "needsInput",
+    featureStudioElementId: "d2709b30837bb4adf6628cb2",
     guidance: {
       select: "Select the object you want to resize in the 3D view.",
       adjust:
@@ -455,6 +469,7 @@ const TOOLBAR_TOOLS: {
     featureType: "fuzzycadNeedsInputRotate",
     featureName: "FuzzyCAD Needs Input Rotate",
     category: "needsInput",
+    featureStudioElementId: "66c464c278d8cf6478b7ea03",
     guidance: {
       select: "Select the object you want to rotate in the 3D view.",
       adjust:
@@ -467,6 +482,7 @@ const TOOLBAR_TOOLS: {
     featureType: "fuzzycadNeedsInputStretch",
     featureName: "FuzzyCAD Needs Input Stretch",
     category: "needsInput",
+    featureStudioElementId: "d6a330bef33fffa871e8116a",
     guidance: {
       select: "Select the face that should stay fixed in the 3D view.",
       adjust:
@@ -479,6 +495,7 @@ const TOOLBAR_TOOLS: {
     featureType: "fuzzycadNote",
     featureName: "FuzzyCAD Note",
     category: "markConstrain",
+    featureStudioElementId: "16536cd9a691d6185c9bd9c3",
     guidance: {
       select: "Select the point, edge, or face this note refers to in the 3D view.",
       adjust: "Type the note you want collaborators to see.",
@@ -490,6 +507,7 @@ const TOOLBAR_TOOLS: {
     featureType: "fuzzycadCompareAlternatives",
     featureName: "FuzzyCAD Compare Alternatives",
     category: "conflict",
+    featureStudioElementId: "f1ce99bbe0067d51911bc942",
   },
 ];
 
@@ -2003,6 +2021,54 @@ function ParameterMarkPanelInner() {
   }
 
   /**
+   * Builds a fresh "namespace" for tool's own custom featureType,
+   * without requiring an already-inserted instance anywhere. Confirmed
+   * live (2026-08-13, /api/onshape/elements against
+   * FUZZYCAD_FEATURE_STUDIO_DOCUMENT_ID/_WORKSPACE_ID) that this shared
+   * Feature Studio document lists each of the 9 FuzzyCAD featureTypes
+   * as its own FEATURESTUDIO element, and that each element's own
+   * microversionId in that response genuinely differs per element (not
+   * one value repeated for the whole document) -- exactly the
+   * element-scoped microversion partstudio-add-derive-debug had to
+   * fetch with a SEPARATE currentmicroversion call for a different
+   * (importDerived) cross-document reference, available here for free
+   * in the same /elements call this panel already has a client wrapper
+   * for. "m" prefix on the microversion segment matches that same
+   * confirmed convention (documentId::m<microversionId>).
+   *
+   * NOT yet confirmed live for a custom-feature insert specifically
+   * (only for importDerived) -- insertToolbarMark below falls back to
+   * the old detectedFeatures-scan approach if this returns null, so an
+   * unexpected failure here degrades to the previous (working, but
+   * bootstrap-gated) behavior rather than breaking every insert.
+   */
+  async function resolveFreshNamespace(
+    tool: (typeof TOOLBAR_TOOLS)[number],
+    server: string,
+  ): Promise<string | null> {
+    try {
+      const result = await fetchOnshapeElements({
+        documentId: FUZZYCAD_FEATURE_STUDIO_DOCUMENT_ID,
+        workspaceId: FUZZYCAD_FEATURE_STUDIO_WORKSPACE_ID,
+        server,
+      });
+
+      if (!Array.isArray(result.data)) return null;
+
+      const elements = result.data as OnshapeElement[];
+      const element = elements.find((entry) => entry.id === tool.featureStudioElementId);
+      const microversionId = element?.microversionId;
+
+      if (typeof microversionId !== "string" || !microversionId) return null;
+
+      return `${FUZZYCAD_FEATURE_STUDIO_DOCUMENT_ID}::m${microversionId}`;
+    } catch (error) {
+      console.warn("[FuzzyCAD] resolveFreshNamespace failed, falling back to detectedFeatures scan", error);
+      return null;
+    }
+  }
+
+  /**
    * Toolbar "create a new mark" action -- inserts a fresh instance of
    * the given tool's Cosmo Feature with no geometry pre-filled (see
    * queryListParameter's own comment for why: geometryIds is always []
@@ -2035,18 +2101,25 @@ function ParameterMarkPanelInner() {
     if (!tool) return;
 
     // Required even for a same-document custom featureType (confirmed
-    // live -- see addPartStudioCustomFeature's own comment). MUST come
-    // from an already-inserted instance of the SAME featureType --
-    // confirmed live that borrowing another tool's namespace (tried as
-    // a fallback) inserts "successfully" but then fails to regenerate
-    // with Onshape's own "No matching function for
-    // <namespace>::fuzzycadNeedsInputExtrude(Context, Id, map)" error:
-    // each needsInput*.fs is evidently its OWN Feature Studio element
-    // with its own independent namespace/microversion, not one shared
-    // Feature Studio, so there is no such thing as "close enough" here.
-    const namespace = detectedFeatures.find(
+    // live -- see addPartStudioCustomFeature's own comment). Tries a
+    // fresh namespace first (see resolveFreshNamespace -- current
+    // microversion of this tool's own Feature Studio element, no
+    // dependency on an existing instance anywhere), falling back to the
+    // original approach (copy a namespace off an already-inserted
+    // instance of the SAME featureType in THIS document) if that fails
+    // for any reason. Borrowing a DIFFERENT tool's namespace is not a
+    // fallback option at all -- confirmed live that it inserts
+    // "successfully" but then fails to regenerate with Onshape's own
+    // "No matching function for <namespace>::fuzzycadNeedsInputExtrude
+    // (Context, Id, map)" error: each needsInput*.fs is its own Feature
+    // Studio element with its own independent namespace/microversion,
+    // not one shared value, so there is no such thing as "close enough"
+    // between two different tools' namespaces.
+    const freshNamespace = await resolveFreshNamespace(tool, currentContext.server);
+    const fallbackNamespace = detectedFeatures.find(
       (feature) => feature.featureType === tool.featureType && feature.namespace,
     )?.namespace ?? undefined;
+    const namespace = freshNamespace ?? fallbackNamespace;
 
     if (!namespace) {
       setStatus(
