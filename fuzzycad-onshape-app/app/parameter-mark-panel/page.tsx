@@ -727,17 +727,17 @@ function stringParameter(parameterId: string, value: string): BTMParameter {
  */
 function buildCustomFeatureParameters(tool: ToolbarToolId, geometryIds: string[]): BTMParameter[] {
   switch (tool) {
-    // Every needsInput*.fs precondition below also declares accepted/
-    // expanded (both UIHint.ALWAYS_HIDDEN, both "Default": false) --
-    // confirmed live that a "Default" annotation does NOT save a
-    // REST-inserted feature from a precondition failure when the
-    // parameter is omitted entirely (Onshape returned "Precondition
-    // failed (definition.accepted is boolean)" for a toolbar-inserted
-    // Extrude that omitted it). Every needsInput case below must include
-    // both explicitly, same as every other scalar/boolean field already
-    // does -- omission is only safe for Query/PartStudioData reference
-    // parameters (see the "compare" case below), not for plain
-    // is-boolean/is-string ones, regardless of their declared Default.
+    // Every needsInput*.fs precondition below also declares accepted
+    // (UIHint.ALWAYS_HIDDEN, "Default": false) -- confirmed live that a
+    // "Default" annotation does NOT save a REST-inserted feature from a
+    // precondition failure when the parameter is omitted entirely
+    // (Onshape returned "Precondition failed (definition.accepted is
+    // boolean)" for a toolbar-inserted Extrude that omitted it). Every
+    // needsInput case below must include it explicitly, same as every
+    // other scalar/boolean field already does -- omission is only safe
+    // for Query/PartStudioData reference parameters (see the "compare"
+    // case below), not for plain is-boolean/is-string ones, regardless
+    // of their declared Default.
     case "move":
       return [
         queryListParameter("body", geometryIds),
@@ -748,7 +748,6 @@ function buildCustomFeatureParameters(tool: ToolbarToolId, geometryIds: string[]
         booleanParameter("moveYNeedsInput", true),
         booleanParameter("moveZNeedsInput", true),
         booleanParameter("accepted", false),
-        booleanParameter("expanded", false),
       ];
     case "extrude":
       return [
@@ -757,7 +756,6 @@ function buildCustomFeatureParameters(tool: ToolbarToolId, geometryIds: string[]
         booleanParameter("depthNeedsInput", true),
         booleanParameter("oppositeDirection", false),
         booleanParameter("accepted", false),
-        booleanParameter("expanded", false),
       ];
     case "chamfer":
       return [
@@ -765,7 +763,6 @@ function buildCustomFeatureParameters(tool: ToolbarToolId, geometryIds: string[]
         quantityParameter("width", "3*mm"),
         booleanParameter("widthNeedsInput", true),
         booleanParameter("accepted", false),
-        booleanParameter("expanded", false),
       ];
     case "fillet":
       return [
@@ -773,7 +770,6 @@ function buildCustomFeatureParameters(tool: ToolbarToolId, geometryIds: string[]
         quantityParameter("radius", "3*mm"),
         booleanParameter("radiusNeedsInput", true),
         booleanParameter("accepted", false),
-        booleanParameter("expanded", false),
       ];
     case "scale":
       return [
@@ -781,7 +777,6 @@ function buildCustomFeatureParameters(tool: ToolbarToolId, geometryIds: string[]
         quantityParameter("scaleFactor", "1.5"),
         booleanParameter("scaleFactorNeedsInput", true),
         booleanParameter("accepted", false),
-        booleanParameter("expanded", false),
       ];
     case "rotate":
       return [
@@ -790,7 +785,6 @@ function buildCustomFeatureParameters(tool: ToolbarToolId, geometryIds: string[]
         quantityParameter("angle", "0*deg"),
         booleanParameter("angleNeedsInput", true),
         booleanParameter("accepted", false),
-        booleanParameter("expanded", false),
       ];
     case "stretch":
       return [
@@ -798,7 +792,6 @@ function buildCustomFeatureParameters(tool: ToolbarToolId, geometryIds: string[]
         quantityParameter("stretchFactor", "1.5"),
         booleanParameter("stretchFactorNeedsInput", true),
         booleanParameter("accepted", false),
-        booleanParameter("expanded", false),
       ];
     case "note":
       // note.fs's precondition: `definition.target is Query` (single
@@ -1054,32 +1047,6 @@ function ParameterMarkPanelInner() {
   // bookkeeping for setTimeout/clearTimeout and shouldn't itself cause
   // a re-render.
   const selectionRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Which Needs Input mark (if any) currently has its full coherent
-  // hand-drawn line revealed (definition.expanded === true in the
-  // FeatureScript). Set by focusNeedsInputMark below, either from a
-  // SELECTION match or a card click; cleared (and the previous mark
-  // collapsed back to transparent) whenever selection moves to
-  // something else. A ref, not state: it's just bookkeeping for the
-  // REST toggle, never rendered directly.
-  const expandedFeatureIdRef = useRef<string | null>(null);
-  // Serializes every setMarkExpanded call (see enqueueMarkExpanded
-  // below) through one promise chain, so completion order always
-  // matches issue order. Without this, two overlapping "expand"/
-  // "collapse" REST round trips for different features (each its own
-  // GET-then-POST, see partstudio-update-feature's own comment) can
-  // finish out of order -- e.g. clicking mark A then quickly clicking
-  // mark B fires [A->true], then [A->false, B->true], and if the
-  // network happens to land the stale [A->true] LAST, mark A's sketchy
-  // line stays visible (or reappears) even though B is now the one
-  // actually focused. This was very likely what "the sketchy line
-  // timing seems wrong" was actually seeing.
-  const markExpandQueueRef = useRef<Promise<unknown>>(Promise.resolve());
-  // featureId -> featureType, kept in sync with featureGroups below via a
-  // dedicated effect so the SELECTION handler (which only resubscribes on
-  // [hasUrlContext, urlServer], not on every featureGroups change) can
-  // still always read the current type through this ref instead of
-  // closing over a stale featureGroups snapshot.
-  const featureTypeByIdRef = useRef<Map<string, string>>(new Map());
   // Proposal grouping (see document.ts's ProposalGroup): a purely
   // cosmetic cluster of cards a reviewer thinks belong to the same
   // design intent. groupSelectMode toggles a checkbox on every card;
@@ -1285,25 +1252,6 @@ function ParameterMarkPanelInner() {
 
       setSelectedFeatureIds(matched);
 
-      // Needs Input "expanded" auto-reveal/auto-collapse: clicking a
-      // Needs Input mark's geometry in the 3D view reveals its full
-      // sketchy line the same way clicking its card does (see
-      // focusNeedsInputMark); clicking away (or clicking something that
-      // isn't a Needs Input mark) collapses whatever was expanded.
-      let matchedNeedsInputId: string | null = null;
-      for (const featureId of matched) {
-        const featureType = featureTypeByIdRef.current.get(featureId);
-        if (featureType && NEEDS_INPUT_COSMO_FEATURE_TYPES.has(featureType)) {
-          matchedNeedsInputId = featureId;
-          break;
-        }
-      }
-      if (matchedNeedsInputId) {
-        focusNeedsInputMark(matchedNeedsInputId);
-      } else {
-        collapseExpandedMark();
-      }
-
       if (selectionRefreshTimerRef.current !== null) {
         clearTimeout(selectionRefreshTimerRef.current);
       }
@@ -1365,13 +1313,12 @@ function ParameterMarkPanelInner() {
    */
   async function loadEverything(options?: { manual?: boolean }) {
     // contextRef, not the outer `context` state variable directly: this
-    // function is called (via insertToolbarMark, focusNeedsInputMark's
-    // setMarkExpanded, and the debounced post-SELECTION refresh below)
-    // from inside the SELECTION handler's stale useEffect closure, which
-    // only ever sees whatever `context` was at mount (null). Shadowing
-    // the name here makes every `context.xxx` reference in the rest of
-    // this function read the always-current ref instead, with no other
-    // changes needed.
+    // function is called (via insertToolbarMark and the debounced
+    // post-SELECTION refresh below) from inside the SELECTION handler's
+    // stale useEffect closure, which only ever sees whatever `context`
+    // was at mount (null). Shadowing the name here makes every
+    // `context.xxx` reference in the rest of this function read the
+    // always-current ref instead, with no other changes needed.
     const context = contextRef.current;
     if (!context) return;
 
@@ -1600,10 +1547,6 @@ function ParameterMarkPanelInner() {
       parameters: parametersByFeature.get(feature.featureId) ?? [],
     }));
   }, [detectedFeatures, parameters]);
-
-  useEffect(() => {
-    featureTypeByIdRef.current = new Map(featureGroups.map((group) => [group.featureId, group.featureType]));
-  }, [featureGroups]);
 
   /**
    * Buckets featureGroups (one per card) into render blocks: either a
@@ -1970,81 +1913,6 @@ function ParameterMarkPanelInner() {
               : parameter,
           ),
     );
-  }
-
-  /**
-   * Toggles a Needs Input mark's hidden "expanded" boolean -- gates
-   * whether the FeatureScript draws the full coherent hand-drawn line
-   * (drawSketchyFaceFill / drawNeedsInputSketch) on top of the
-   * always-on simple ghost outline + warning icon. Same generic
-   * parameterUpdates path as saveNoteText/setActiveOption above; the
-   * regen this triggers is real (it's a geometry-drawing branch, not a
-   * pure appearance patch) but scoped to a single feature.
-   */
-  async function setMarkExpanded(featureId: string, expanded: boolean) {
-    // contextRef, not context -- called from the SELECTION handler's
-    // stale closure via focusNeedsInputMark/collapseExpandedMark. See
-    // loadEverything's identical comment.
-    const context = contextRef.current;
-    if (!context) return;
-    await updatePartStudioFeatureSuppressed(
-      {
-        documentId: context.documentId,
-        workspaceId: context.workspaceId,
-        partStudioElementId: context.elementId,
-        server: context.server,
-      },
-      {
-        featureId,
-        parameterUpdates: [{ parameterId: "expanded", value: expanded }],
-      },
-    );
-  }
-
-  /**
-   * Runs a setMarkExpanded call only after every previously enqueued
-   * one has actually finished, so completion order can never diverge
-   * from issue order -- see markExpandQueueRef's own comment for the
-   * out-of-order race this closes. A failed call doesn't break the
-   * chain for whatever's queued after it.
-   */
-  function enqueueMarkExpanded(featureId: string, expanded: boolean) {
-    const next = markExpandQueueRef.current
-      .catch(() => undefined)
-      .then(() => setMarkExpanded(featureId, expanded));
-    markExpandQueueRef.current = next;
-    return next;
-  }
-
-  /**
-   * Reveals one Needs Input mark's full sketchy line and collapses
-   * whichever one was previously revealed, if different -- the
-   * "click the object in the 3D view OR its card, sketchy line
-   * appears; click something else, it auto-collapses" behavior. A
-   * no-op if featureId is already the expanded one. Only meaningful
-   * for Needs Input cards (the other Cosmo Feature types have no
-   * "expanded" parameter at all).
-   */
-  function focusNeedsInputMark(featureId: string) {
-    if (expandedFeatureIdRef.current === featureId) return;
-    const previous = expandedFeatureIdRef.current;
-    expandedFeatureIdRef.current = featureId;
-    if (previous) {
-      void enqueueMarkExpanded(previous, false);
-    }
-    void enqueueMarkExpanded(featureId, true);
-  }
-
-  /**
-   * Collapses whichever Needs Input mark is currently expanded, if
-   * any -- used when a SELECTION event matches nothing (clicking away
-   * in the 3D view) or matches only non-Needs-Input geometry.
-   */
-  function collapseExpandedMark() {
-    const previous = expandedFeatureIdRef.current;
-    if (!previous) return;
-    expandedFeatureIdRef.current = null;
-    void enqueueMarkExpanded(previous, false);
   }
 
   /**
@@ -2514,7 +2382,6 @@ function ParameterMarkPanelInner() {
           className={styles.proposalHeader}
           onClick={() => {
             openFeatureDialog(group.featureId);
-            if (isQuestion) focusNeedsInputMark(group.featureId);
           }}
           title="Click to highlight this feature in Onshape"
         >
