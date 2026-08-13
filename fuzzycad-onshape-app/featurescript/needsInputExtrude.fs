@@ -16,7 +16,7 @@ export const fuzzycadNeedsInputExtrude = defineFeature(function(context is Conte
         // single face below; multiple non-coplanar faces would extrude the
         // whole query in only the first one's direction, silently wrong for
         // the rest. Single planar face keeps this unambiguous.
-        annotation { "Name" : "Face to extrude", "Filter" : EntityType.FACE, "MaxNumberOfPicks" : 1 }
+        annotation { "Name" : "Select face", "Filter" : EntityType.FACE, "MaxNumberOfPicks" : 1 }
         definition.entities is Query;
 
         annotation { "Name" : "Depth" }

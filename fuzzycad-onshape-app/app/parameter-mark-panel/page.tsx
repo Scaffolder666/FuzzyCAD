@@ -2804,7 +2804,23 @@ function ParamValueRow({
 }) {
   const currentValueLabel = formatFeatureParameterValue(entry.typeName, entry.message);
   const currentMagnitude = parseNumericMagnitude(currentValueLabel);
-  const serverValue = currentMagnitude !== null ? String(currentMagnitude) : "";
+
+  // scaleFactor/stretchFactor are dimensionless multipliers -- "1.5" reads
+  // as genuinely ambiguous (+1.5? +50%? 150% of original?) to anyone who
+  // doesn't already know the FeatureScript convention. Displayed/edited
+  // here as "Resize to <percent>%" instead, which is what the multiplier
+  // actually means; converted back to the raw multiplier the
+  // FeatureScript parameter itself stores on commit. Every other
+  // parameter (moveX, angle, depth, radius, width, ...) is unaffected.
+  const isPercentFactor = entry.parameterId === "scaleFactor" || entry.parameterId === "stretchFactor";
+  const displayLabel = isPercentFactor ? "Resize to" : entry.parameterId;
+
+  const serverValue =
+    currentMagnitude === null
+      ? ""
+      : isPercentFactor
+        ? String(Math.round(currentMagnitude * 1000) / 10)
+        : String(currentMagnitude);
 
   const [draft, setDraft] = useState(serverValue);
   const lastCommittedRef = useRef(serverValue);
@@ -2829,32 +2845,52 @@ function ParamValueRow({
     const trimmed = draft.trim();
     if (disabled || !trimmed || trimmed === lastCommittedRef.current) return;
     lastCommittedRef.current = trimmed;
+
+    if (isPercentFactor) {
+      const percent = Number(trimmed);
+      if (Number.isFinite(percent)) {
+        onLivePreview(String(percent / 100));
+        return;
+      }
+    }
+
     onLivePreview(trimmed);
   }
 
+  const input = (
+    <input
+      type="text"
+      className={styles.valueInput}
+      value={draft}
+      disabled={disabled}
+      onChange={(event) => setDraft(event.target.value)}
+      onFocus={() => {
+        isFocusedRef.current = true;
+      }}
+      onBlur={() => {
+        isFocusedRef.current = false;
+        commit();
+      }}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") {
+          event.currentTarget.blur();
+        }
+      }}
+      onClick={(event) => event.stopPropagation()}
+    />
+  );
+
   return (
     <div className={styles.paramEditRow}>
-      <span className={styles.paramEditLabel}>{entry.parameterId}</span>
-      <input
-        type="text"
-        className={styles.valueInput}
-        value={draft}
-        disabled={disabled}
-        onChange={(event) => setDraft(event.target.value)}
-        onFocus={() => {
-          isFocusedRef.current = true;
-        }}
-        onBlur={() => {
-          isFocusedRef.current = false;
-          commit();
-        }}
-        onKeyDown={(event) => {
-          if (event.key === "Enter") {
-            event.currentTarget.blur();
-          }
-        }}
-        onClick={(event) => event.stopPropagation()}
-      />
+      <span className={styles.paramEditLabel}>{displayLabel}</span>
+      {isPercentFactor ? (
+        <div className={styles.valueInputWithSuffix}>
+          {input}
+          <span className={styles.valueInputSuffix}>%</span>
+        </div>
+      ) : (
+        input
+      )}
     </div>
   );
 }

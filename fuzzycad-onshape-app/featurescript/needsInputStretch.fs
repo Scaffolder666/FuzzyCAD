@@ -22,7 +22,7 @@ export const fuzzycadNeedsInputStretch = defineFeature(function(context is Conte
     precondition
     {
         annotation {
-            "Name" : "Anchor face (stays fixed)",
+            "Name" : "Select the side that stays fixed",
             "Filter" : EntityType.FACE && BodyType.SOLID,
             "MaxNumberOfPicks" : 1
         }

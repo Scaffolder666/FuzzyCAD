@@ -484,6 +484,27 @@
   background: #f7f8fa;
 }
 
+/* scaleFactor/stretchFactor's percentage display (see ParamValueRow) --
+   the raw multiplier field wrapped with a fixed "%" suffix instead of
+   the unit being typed inline, since it's not user-editable text. */
+.valueInputWithSuffix {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.valueInputWithSuffix .valueInput {
+  flex: 1;
+}
+
+.valueInputSuffix {
+  color: #8a8d99;
+  font-size: 12.5px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
 .noteInput {
   flex: 1;
   width: auto;

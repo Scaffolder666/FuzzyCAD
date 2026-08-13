@@ -8,7 +8,7 @@ annotation {
 export const fuzzycadNeedsInputMove = defineFeature(function(context is Context, id is Id, definition is map)
     precondition
     {
-        annotation { "Name" : "Body to move", "Filter" : EntityType.BODY }
+        annotation { "Name" : "Select object", "Filter" : EntityType.BODY, "MaxNumberOfPicks" : 1 }
         definition.body is Query;
 
         annotation { "Name" : "Move X" }

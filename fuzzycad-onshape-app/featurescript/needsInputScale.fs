@@ -12,7 +12,7 @@ annotation {
 export const fuzzycadNeedsInputScale = defineFeature(function(context is Context, id is Id, definition is map)
     precondition
     {
-        annotation { "Name" : "Body to scale", "Filter" : EntityType.BODY }
+        annotation { "Name" : "Select object", "Filter" : EntityType.BODY, "MaxNumberOfPicks" : 1 }
         definition.body is Query;
 
         annotation { "Name" : "Scale factor" }

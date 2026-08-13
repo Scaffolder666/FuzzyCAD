@@ -13,7 +13,7 @@ export const fuzzycadNeedsInputChamfer = defineFeature(function(context is Conte
     precondition
     {
         annotation {
-            "Name" : "Edges or faces to chamfer",
+            "Name" : "Select edges to bevel",
             "Filter" : (EntityType.EDGE || EntityType.FACE) && BodyType.SOLID
         }
         definition.edge is Query;
@@ -122,7 +122,7 @@ export const fuzzycadNeedsInputChamfer = defineFeature(function(context is Conte
         if (isQueryEmpty(context, copiedSelection))
         {
             throw regenError(
-                "Could not track the selected chamfer edge onto the proposal copy.",
+                "I couldn't preview this edge. Try selecting one solid edge or face.",
                 definition.edge
             );
         }
