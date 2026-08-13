@@ -1703,14 +1703,18 @@ function ParameterMarkPanelInner() {
 
     // Required even for a same-document custom featureType (confirmed
     // live -- see addPartStudioCustomFeature's own comment). Copied from
-    // whichever already-inserted FuzzyCAD mark happens to be open right
-    // now, since they all share the one Feature Studio that defines
-    // every fuzzycadNeedsInput*/fuzzycadProposed*/fuzzycadNote type.
-    const namespace = detectedFeatures.find((feature) => feature.namespace)?.namespace ?? undefined;
+    // an already-inserted instance of the SAME featureType, not just any
+    // FuzzyCAD mark -- different needsInput*.fs files may not all live in
+    // the same Feature Studio, and reusing a mismatched namespace fails
+    // with this exact same "Feature has invalid type" error, just for a
+    // different reason (right featureType, wrong Feature Studio).
+    const namespace = detectedFeatures.find(
+      (feature) => feature.featureType === tool.featureType && feature.namespace,
+    )?.namespace ?? undefined;
 
     if (!namespace) {
       setStatus(
-        `Can't insert ${tool.label} yet: no existing FuzzyCAD mark open to copy a namespace from. Insert one from Onshape's own Insert menu first.`,
+        `Can't insert ${tool.label} yet: no existing ${tool.featureName} open to copy a namespace from. Insert one from Onshape's own Insert menu first.`,
       );
       return;
     }
@@ -1736,6 +1740,7 @@ function ParameterMarkPanelInner() {
         console.error("[FuzzyCAD] toolbar insert failed", {
           tool: toolId,
           featureType: tool.featureType,
+          namespace,
           geometryIds,
           parameters,
           insertRes,
