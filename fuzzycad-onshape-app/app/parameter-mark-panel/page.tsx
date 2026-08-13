@@ -1728,40 +1728,22 @@ function ParameterMarkPanelInner() {
     if (!tool) return;
 
     // Required even for a same-document custom featureType (confirmed
-    // live -- see addPartStudioCustomFeature's own comment). Prefer an
-    // already-inserted instance of the SAME featureType, since that's
-    // guaranteed correct -- but the exact-match requirement turned out
-    // to be too strict in practice: confirmed live that a Move insert
-    // works, and once it exists in the document, its namespace ALSO
-    // works for inserting Extrude (a different featureType) even though
-    // no Extrude instance existed yet. All fuzzycadNeedsInput*.fs
-    // features share one Feature Studio in practice, so any detected
-    // FuzzyCAD feature's namespace is a reasonable fallback rather than
-    // blocking the insert outright -- logged so a real per-featureType
-    // Feature Studio split (if one ever exists) is diagnosable from a
-    // "Feature has invalid type" 400 instead of silently miscopying.
-    const exactMatch = detectedFeatures.find(
+    // live -- see addPartStudioCustomFeature's own comment). MUST come
+    // from an already-inserted instance of the SAME featureType --
+    // confirmed live that borrowing another tool's namespace (tried as
+    // a fallback) inserts "successfully" but then fails to regenerate
+    // with Onshape's own "No matching function for
+    // <namespace>::fuzzycadNeedsInputExtrude(Context, Id, map)" error:
+    // each needsInput*.fs is evidently its OWN Feature Studio element
+    // with its own independent namespace/microversion, not one shared
+    // Feature Studio, so there is no such thing as "close enough" here.
+    const namespace = detectedFeatures.find(
       (feature) => feature.featureType === tool.featureType && feature.namespace,
-    );
-    const fallbackMatch = detectedFeatures.find((feature) => feature.namespace);
-    const namespace = exactMatch?.namespace ?? fallbackMatch?.namespace ?? undefined;
-
-    if (exactMatch) {
-      console.debug("[FuzzyCAD] toolbar insert: exact-featureType namespace match", {
-        tool: toolId,
-        namespace,
-      });
-    } else if (fallbackMatch) {
-      console.debug("[FuzzyCAD] toolbar insert: falling back to another feature's namespace", {
-        tool: toolId,
-        borrowedFrom: fallbackMatch.featureType,
-        namespace,
-      });
-    }
+    )?.namespace ?? undefined;
 
     if (!namespace) {
       setStatus(
-        `Can't insert ${tool.label} yet: no existing FuzzyCAD mark open to copy a namespace from. Insert one from Onshape's own Insert menu first.`,
+        `Can't insert ${tool.label} yet: this document has no existing ${tool.featureName} to copy a namespace from. Insert one once from Onshape's own Insert menu, then the toolbar can insert more of it.`,
       );
       return;
     }
