@@ -116,7 +116,9 @@ function drawNoteCallout(
     const side = normalize(cross(dir, ref));
     const side2 = normalize(cross(dir, side));
 
-    const leaderLength = 22 * millimeter;
+    // Long leader so the note floats well clear of the part instead of
+    // sitting on top of the geometry it points at.
+    const leaderLength = 45 * millimeter;
     const labelPoint = anchorPoint + dir * leaderLength;
     const calloutColor = color(0.12, 0.40, 0.82, 1.0);
 
@@ -163,75 +165,19 @@ function drawNoteCallout(
             "value" : calloutColor
     });
 
-    // Boxed callout: a filled panel + colored border sit behind the note
-    // text, like a proper annotation balloon, so the note reads as a
-    // deliberate label rather than characters floating in space. The panel,
-    // border and text share the leader's tangent-perpendicular plane basis
-    // (NOT a fixed world axis, which read sideways in practice on the
-    // warning icon), and are each nudged a hair apart along the shared
-    // normal so the three coincident faces don't z-fight.
-    const textPoint = labelPoint + side2 * (11 * millimeter);
+    // Plain solid-black note text at the end of the leader -- no panel or
+    // border box (it read as clutter and crowded the geometry). Text sits
+    // just past the leader tip, on the leader's tangent-perpendicular plane
+    // (NOT a fixed world axis, which read sideways on the warning icon).
+    const textPoint = labelPoint + dir * (4 * millimeter);
     const textSize = 6.0 * millimeter;
 
-    // Size the box to the ACTUAL text length (character count x an
-    // approximate per-glyph advance) so the whole note sits inside the
-    // panel instead of overflowing past the first word, then center the
-    // text block on the anchor so the leader meets the box's bottom edge.
-    const charCount = max(size(splitIntoCharacters(noteText)), 1);
-    const textWidth = charCount * 0.65 * textSize;
-    const halfH = textSize;
-    const fillPad = 0.6 * textSize;
-    const borderPad = fillPad + 0.24 * textSize;
-
-    const panelUv = worldToPlane(plane(textPoint, side, dir), textPoint);
-    const textLeft = panelUv[0] - textWidth / 2;
-
-    // Border panel -- slightly larger, sits furthest back, colored the
-    // callout blue so it shows as a frame around the lighter fill.
-    const borderPlane = plane(textPoint + side * (0.02 * millimeter), side, dir);
-    const borderSketch = newSketchOnPlane(context, id + "noteBorder", { "sketchPlane" : borderPlane });
-    skRectangle(borderSketch, "borderRect", {
-            "firstCorner" : vector(textLeft - borderPad, panelUv[1] - halfH - borderPad),
-            "secondCorner" : vector(textLeft + textWidth + borderPad, panelUv[1] + halfH + borderPad)
-    });
-    skSolve(borderSketch);
-    opExtractSurface(context, id + "noteBorderSurface", {
-            "faces" : qSketchRegion(id + "noteBorder"),
-            "offset" : 0 * meter,
-            "useFacesAroundToTrimOffset" : false
-    });
-    opDeleteBodies(context, id + "deleteNoteBorder", { "entities" : qCreatedBy(id + "noteBorder") });
-    setProperty(context, {
-            "entities" : qCreatedBy(id + "noteBorderSurface", EntityType.BODY),
-            "propertyType" : PropertyType.APPEARANCE,
-            "value" : calloutColor
-    });
-
-    // Fill panel -- inset, sits in front of the border, light so the black
-    // note text stays legible on top of it.
-    const fillColor = color(0.93, 0.96, 1.0, 1.0);
-    const fillPlane = plane(textPoint + side * (0.05 * millimeter), side, dir);
-    const fillSketch = newSketchOnPlane(context, id + "noteFill", { "sketchPlane" : fillPlane });
-    skRectangle(fillSketch, "fillRect", {
-            "firstCorner" : vector(textLeft - fillPad, panelUv[1] - halfH - fillPad),
-            "secondCorner" : vector(textLeft + textWidth + fillPad, panelUv[1] + halfH + fillPad)
-    });
-    skSolve(fillSketch);
-    opExtractSurface(context, id + "noteFillSurface", {
-            "faces" : qSketchRegion(id + "noteFill"),
-            "offset" : 0 * meter,
-            "useFacesAroundToTrimOffset" : false
-    });
-    opDeleteBodies(context, id + "deleteNoteFill", { "entities" : qCreatedBy(id + "noteFill") });
-    setProperty(context, {
-            "entities" : qCreatedBy(id + "noteFillSurface", EntityType.BODY),
-            "propertyType" : PropertyType.APPEARANCE,
-            "value" : fillColor
-    });
-
-    // Text on top, nudged furthest along the normal.
-    const textPlane = plane(textPoint + side * (0.08 * millimeter), side, dir);
+    // Left-align the text starting at the leader tip so it reads outward,
+    // away from the part, however long the note is.
+    const textPlane = plane(textPoint + side * (0.02 * millimeter), side, dir);
     const textUv = worldToPlane(textPlane, textPoint);
+    const textLeft = textUv[0];
+    const textWidth = max(size(splitIntoCharacters(noteText)), 1) * 0.65 * textSize;
     const textSketch = newSketchOnPlane(context, id + "labelSketch", { "sketchPlane" : textPlane });
 
     skText(textSketch, "label", {
