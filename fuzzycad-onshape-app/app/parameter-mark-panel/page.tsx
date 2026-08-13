@@ -624,6 +624,17 @@ function stringParameter(parameterId: string, value: string): BTMParameter {
  */
 function buildCustomFeatureParameters(tool: ToolbarToolId, geometryIds: string[]): BTMParameter[] {
   switch (tool) {
+    // Every needsInput*.fs precondition below also declares accepted/
+    // expanded (both UIHint.ALWAYS_HIDDEN, both "Default": false) --
+    // confirmed live that a "Default" annotation does NOT save a
+    // REST-inserted feature from a precondition failure when the
+    // parameter is omitted entirely (Onshape returned "Precondition
+    // failed (definition.accepted is boolean)" for a toolbar-inserted
+    // Extrude that omitted it). Every needsInput case below must include
+    // both explicitly, same as every other scalar/boolean field already
+    // does -- omission is only safe for Query/PartStudioData reference
+    // parameters (see the "compare" case below), not for plain
+    // is-boolean/is-string ones, regardless of their declared Default.
     case "move":
       return [
         queryListParameter("body", geometryIds),
@@ -633,6 +644,8 @@ function buildCustomFeatureParameters(tool: ToolbarToolId, geometryIds: string[]
         booleanParameter("moveXNeedsInput", true),
         booleanParameter("moveYNeedsInput", true),
         booleanParameter("moveZNeedsInput", true),
+        booleanParameter("accepted", false),
+        booleanParameter("expanded", false),
       ];
     case "extrude":
       return [
@@ -640,24 +653,32 @@ function buildCustomFeatureParameters(tool: ToolbarToolId, geometryIds: string[]
         quantityParameter("depth", "10*mm"),
         booleanParameter("depthNeedsInput", true),
         booleanParameter("oppositeDirection", false),
+        booleanParameter("accepted", false),
+        booleanParameter("expanded", false),
       ];
     case "chamfer":
       return [
         queryListParameter("edge", geometryIds),
         quantityParameter("width", "3*mm"),
         booleanParameter("widthNeedsInput", true),
+        booleanParameter("accepted", false),
+        booleanParameter("expanded", false),
       ];
     case "fillet":
       return [
         queryListParameter("edge", geometryIds),
         quantityParameter("radius", "3*mm"),
         booleanParameter("radiusNeedsInput", true),
+        booleanParameter("accepted", false),
+        booleanParameter("expanded", false),
       ];
     case "scale":
       return [
         queryListParameter("body", geometryIds),
         quantityParameter("scaleFactor", "1.5"),
         booleanParameter("scaleFactorNeedsInput", true),
+        booleanParameter("accepted", false),
+        booleanParameter("expanded", false),
       ];
     case "rotate":
       return [
@@ -665,12 +686,16 @@ function buildCustomFeatureParameters(tool: ToolbarToolId, geometryIds: string[]
         enumParameter("rotationAxisMode", "FuzzyCADRotationAxisMode", "Z"),
         quantityParameter("angle", "0*deg"),
         booleanParameter("angleNeedsInput", true),
+        booleanParameter("accepted", false),
+        booleanParameter("expanded", false),
       ];
     case "stretch":
       return [
         queryListParameter("face", geometryIds),
         quantityParameter("stretchFactor", "1.5"),
         booleanParameter("stretchFactorNeedsInput", true),
+        booleanParameter("accepted", false),
+        booleanParameter("expanded", false),
       ];
     case "note":
       // note.fs's precondition: `definition.target is Query` (single
@@ -727,15 +752,29 @@ function extractInsertedFeatureId(data: unknown): string | null {
   if (!data || typeof data !== "object") return null;
   const record = data as Record<string, unknown>;
 
+  // { feature: { message: { featureId: "..." } } } -- matches every other
+  // feature envelope this codebase already reads.
   const feature = record.feature;
   if (feature && typeof feature === "object") {
-    const message = (feature as Record<string, unknown>).message;
-    if (message && typeof message === "object") {
-      const featureId = (message as Record<string, unknown>).featureId;
+    const featureRecord = feature as Record<string, unknown>;
+    if (typeof featureRecord.featureId === "string" && featureRecord.featureId) {
+      return featureRecord.featureId;
+    }
+    const featureMessage = featureRecord.message;
+    if (featureMessage && typeof featureMessage === "object") {
+      const featureId = (featureMessage as Record<string, unknown>).featureId;
       if (typeof featureId === "string" && featureId) return featureId;
     }
   }
 
+  // { message: { featureId: "..." } } -- no outer "feature" wrapper.
+  const message = record.message;
+  if (message && typeof message === "object") {
+    const featureId = (message as Record<string, unknown>).featureId;
+    if (typeof featureId === "string" && featureId) return featureId;
+  }
+
+  // Flat fallback: { featureId: "..." }
   if (typeof record.featureId === "string" && record.featureId) {
     return record.featureId;
   }
@@ -1953,23 +1992,34 @@ function ParameterMarkPanelInner() {
       // back with its real featureId filled in -- logged raw here since
       // the exact response envelope hasn't been captured live yet for
       // this route (unlike e.g. partstudio-add-feature's confirmed
-      // shape); extractInsertedFeatureId covers the shape we expect
-      // (data.feature.message.featureId, matching every other feature
-      // envelope this codebase already reads) plus a flat fallback, and
-      // degrades to "still works, just no auto-open" if neither matches.
+      // shape); extractInsertedFeatureId covers every shape seen so far
+      // across this codebase's other feature envelopes
+      // (feature.featureId, feature.message.featureId, message.featureId,
+      // and a flat featureId), and degrades to "still works, just no
+      // auto-open" if none match.
       console.debug("[FuzzyCAD] toolbar insert response", insertRes.data);
       const newFeatureId = extractInsertedFeatureId(insertRes.data);
 
       if (newFeatureId) {
         setStatus(`${tool.label} inserted -- pick geometry in the 3D view`);
         openFeatureDialog(newFeatureId);
-      } else {
-        setStatus(`${tool.label} inserted`);
-        console.warn(
-          "[FuzzyCAD] couldn't find featureId on toolbar insert response, not auto-opening",
-          insertRes.data,
-        );
+
+        // Give Onshape's own dialog a moment to actually take over the
+        // UI before this panel starts a GET-everything refresh -- firing
+        // both at once raced the dialog open against a fetch neither of
+        // them needed to win, and stacked an extra round of API calls
+        // right on top of the insert we just made.
+        window.setTimeout(() => {
+          void loadEverything({ manual: true });
+        }, 1000);
+        return;
       }
+
+      setStatus(`${tool.label} inserted`);
+      console.warn(
+        "[FuzzyCAD] couldn't find featureId on toolbar insert response, not auto-opening",
+        insertRes.data,
+      );
 
       await loadEverything({ manual: true });
     } finally {
