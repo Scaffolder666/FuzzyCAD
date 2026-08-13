@@ -32,18 +32,6 @@ export const fuzzycadNeedsInputMove = defineFeature(function(context is Context,
             "UIHint" : UIHint.ALWAYS_HIDDEN
         }
         definition.accepted is boolean;
-
-        // Controlled internally by the FuzzyCAD right panel: whether the
-        // coherent hand-drawn line is currently revealed for this mark
-        // (clicked in the 3D view or on its card) -- see drawSketchyFaceFill
-        // below. Everything else (simple outline + warning icon) is always
-        // visible regardless of this flag.
-        annotation {
-            "Name" : "Expanded",
-            "Default" : false,
-            "UIHint" : UIHint.ALWAYS_HIDDEN
-        }
-        definition.expanded is boolean;
     }
     {
         if (isQueryEmpty(context, definition.body))
@@ -77,21 +65,14 @@ export const fuzzycadNeedsInputMove = defineFeature(function(context is Context,
 
         const proposedBody = qCreatedBy(id + "duplicate", EntityType.BODY);
 
-        // Always-on: a simple faint frame + warning icon are enough to spot
-        // a mark at a glance. The coherent hand-drawn line only appears
-        // once "expanded" -- clicked in the 3D view or on its card in the
-        // right panel -- and collapses again once something else is
-        // clicked, so the viewport doesn't stay cluttered with every mark's
-        // full line at once.
+        // Always-on: faint frame + warning icon + the coherent hand-drawn
+        // line all draw unconditionally, no click-to-reveal step.
         drawVeryLightGhostOutline(context, id + "ghostOutline", proposedBody);
 
         // Makes the mark impossible to miss at a glance.
         drawWarningIcon(context, id + "warningIcon", proposedBody);
 
-        if (definition.expanded)
-        {
-            drawSketchyFaceFill(context, id + "faceFill", proposedBody);
-        }
+        drawSketchyFaceFill(context, id + "faceFill", proposedBody);
 
         const bbox = evBox3d(context, { "topology" : originalBody, "tight" : true });
         const startPoint = vector(
