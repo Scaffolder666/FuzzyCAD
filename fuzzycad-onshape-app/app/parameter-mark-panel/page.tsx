@@ -1037,6 +1037,12 @@ function ParameterMarkPanelInner() {
   // just the newly added one. Reusing already-fetched features here means a
   // rebuild only has to fetch the actual delta.
   const entityMapCacheRef = useRef<Map<string, string[]>>(new Map());
+  // Last-attempt timestamp per featureId for the created-parts fetch.
+  // Doubles as an in-flight guard (a feature attempted moments ago is
+  // skipped by overlapping effect runs) and a 429 backoff: a failed fetch
+  // is NOT retried until the cooldown elapses, which breaks the request
+  // storm a rate-limited (429, never-cached) fetch used to feed back into.
+  const entityMapAttemptRef = useRef<Map<string, number>>(new Map());
   // DOM nodes for each proposal card, keyed by featureId, so a SELECTION
   // match can scrollIntoView the right one.
   const cardNodesRef = useRef<Map<string, HTMLDivElement>>(new Map());
@@ -1626,10 +1632,29 @@ function ParameterMarkPanelInner() {
           entityMapCacheRef.current.delete(cachedFeatureId);
         }
       }
+      for (const attemptedFeatureId of entityMapAttemptRef.current.keys()) {
+        if (!currentFeatureIds.has(attemptedFeatureId)) {
+          entityMapAttemptRef.current.delete(attemptedFeatureId);
+        }
+      }
 
-      const groupsToFetch = featureGroups.filter(
-        (group) => !entityMapCacheRef.current.has(group.featureId),
-      );
+      // Fetch only features that are neither cached nor attempted within
+      // the cooldown. The cooldown both dedups overlapping effect runs and
+      // backs off after a 429 instead of instantly refetching (which is
+      // what fed the request storm).
+      const now = Date.now();
+      const RETRY_COOLDOWN_MS = 15000;
+      const groupsToFetch = featureGroups.filter((group) => {
+        if (entityMapCacheRef.current.has(group.featureId)) return false;
+        const lastAttempt = entityMapAttemptRef.current.get(group.featureId);
+        return lastAttempt === undefined || now - lastAttempt >= RETRY_COOLDOWN_MS;
+      });
+
+      // Mark every to-fetch feature as attempted NOW, synchronously before
+      // any await, so a run that starts before these resolve skips them.
+      for (const group of groupsToFetch) {
+        entityMapAttemptRef.current.set(group.featureId, now);
+      }
 
       // Small-concurrency batches instead of one Promise.all across every
       // uncached feature -- firing all of them at once is exactly the burst
