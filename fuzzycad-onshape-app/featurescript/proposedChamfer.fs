@@ -71,7 +71,7 @@ export const fuzzycadProposedChamfer = defineFeature(function(context is Context
         if (isQueryEmpty(context, copiedSelection))
         {
             throw regenError(
-                "Could not track the selected chamfer edge onto the proposal copy.",
+                "I couldn't preview this edge. Try selecting one solid edge or face.",
                 definition.edge
             );
         }

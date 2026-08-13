@@ -22,7 +22,7 @@ export const fuzzycadNeedsInputFillet = defineFeature(function(context is Contex
     precondition
     {
         annotation {
-            "Name" : "Edges or faces to fillet",
+            "Name" : "Select edges to round",
             "Filter" : (EntityType.EDGE || EntityType.FACE) && BodyType.SOLID
         }
         definition.edge is Query;
@@ -100,7 +100,7 @@ export const fuzzycadNeedsInputFillet = defineFeature(function(context is Contex
         if (isQueryEmpty(context, copiedSelection))
         {
             throw regenError(
-                    "Could not track the selected fillet geometry onto the proposal copy.",
+                    "I couldn't preview this edge. Try selecting one solid edge or face.",
                     definition.edge
             );
         }

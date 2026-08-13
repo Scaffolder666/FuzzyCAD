@@ -341,7 +341,7 @@ export const fuzzycadCompareAlternatives = defineFeature(function(context is Con
         if (isQueryEmpty(context, candidateQuery))
         {
             throw regenError(
-                "The selected candidate Part Studio has no solid bodies to instantiate.",
+                "This alternative does not contain a solid object. Choose another design.",
                 [parameterName]
             );
         }

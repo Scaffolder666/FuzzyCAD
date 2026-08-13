@@ -20,7 +20,7 @@ export const fuzzycadNote = defineFeature(function(context is Context, id is Id,
     precondition
     {
         annotation {
-            "Name" : "Point at",
+            "Name" : "Attach note to",
             "Filter" : EntityType.VERTEX || EntityType.EDGE || EntityType.FACE,
             "MaxNumberOfPicks" : 1
         }
@@ -33,7 +33,12 @@ export const fuzzycadNote = defineFeature(function(context is Context, id is Id,
         definition.noteText is string;
     }
     {
-        if (isQueryEmpty(context, definition.target) || definition.noteText == "")
+        // Draw as soon as a target is picked, independent of noteText --
+        // requiring both meant picking a location gave no feedback at all
+        // until text was also typed, leaving "did my pick register?"
+        // unanswered in between. An empty note now still shows the pin +
+        // leader with a placeholder, confirming the pick landed.
+        if (isQueryEmpty(context, definition.target))
         {
             return;
         }
@@ -80,7 +85,9 @@ export const fuzzycadNote = defineFeature(function(context is Context, id is Id,
             return;
         }
 
-        drawNoteCallout(context, id + "noteCallout", anchorPoint, anchorDir, definition.noteText);
+        const displayText = (definition.noteText == "") ? "Add note..." : definition.noteText;
+
+        drawNoteCallout(context, id + "noteCallout", anchorPoint, anchorDir, displayText);
     });
 
 

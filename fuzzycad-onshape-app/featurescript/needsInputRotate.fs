@@ -43,7 +43,7 @@ FuzzyCADRotationAxisMode
     annotation
     {
         "Name" :
-            "Custom (pick a reference)"
+            "Around a selected edge or hole"
     }
     CUSTOM
 }
@@ -115,10 +115,13 @@ defineFeature(function(
         annotation
         {
             "Name" :
-                "Body to rotate",
+                "Select object",
 
             "Filter" :
-                EntityType.BODY
+                EntityType.BODY,
+
+            "MaxNumberOfPicks" :
+                1
         }
         definition.body is Query;
 
@@ -392,9 +395,20 @@ defineFeature(function(
         //
         // PENDING STATE
         //
-        // Create a complete rotated candidate body.
+        // Create a complete rotated candidate body -- unless the angle
+        // itself is still a placeholder (angleNeedsInput), in which case
+        // rotating the duplicate by definition.angle would silently show
+        // a specific numeric rotation the user never actually chose. Use
+        // an identity rotation (same axis, zero angle) instead, so the
+        // duplicate sits exactly on the original and only the theta = ?
+        // gesture below communicates "rotate here, amount still unknown".
         //
         //////////////////////////////////////////////////////////////////
+
+        const previewRotation =
+            definition.angleNeedsInput
+            ? rotationAround(rotationAxis, 0 * degree)
+            : rotation;
 
         opPattern(
             context,
@@ -405,7 +419,7 @@ defineFeature(function(
 
                 "transforms" :
                     [
-                        rotation
+                        previewRotation
                     ],
 
                 "instanceNames" :
