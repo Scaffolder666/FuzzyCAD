@@ -12,7 +12,10 @@ annotation {
 export const fuzzycadNeedsInputChamfer = defineFeature(function(context is Context, id is Id, definition is map)
     precondition
     {
-        annotation { "Name" : "Edge to chamfer", "Filter" : EntityType.EDGE }
+        annotation {
+            "Name" : "Edges or faces to chamfer",
+            "Filter" : (EntityType.EDGE || EntityType.FACE) && BodyType.SOLID
+        }
         definition.edge is Query;
 
         annotation { "Name" : "Width" }
@@ -52,12 +55,6 @@ export const fuzzycadNeedsInputChamfer = defineFeature(function(context is Conte
         // which uses the same qOwnerBody derivation for the identical
         // reason).
         const originalBody = qOwnerBody(definition.edge);
-        const edgeLine = evEdgeTangentLine(context, {
-                "edge" : definition.edge,
-                "parameter" : 0.5
-        });
-        const midpoint = edgeLine.origin;
-        const tangentDir = edgeLine.direction;
 
         if (definition.accepted)
         {
@@ -69,6 +66,44 @@ export const fuzzycadNeedsInputChamfer = defineFeature(function(context is Conte
             });
             return;
         }
+
+        // "Edges or faces to chamfer" (see the widened Filter above) --
+        // same anchor-edge derivation as needsInputFillet.fs: a picked
+        // edge is used directly, a picked face falls back to its own
+        // boundary loop. Only used to position the width dimension
+        // arrow/manipulator below; opChamfer itself accepts either an
+        // edge or face query natively (chamfering every edge of a
+        // picked face), same as opFillet.
+        const selectedEdges = qEntityFilter(definition.edge, EntityType.EDGE);
+        const selectedFaces = qEntityFilter(definition.edge, EntityType.FACE);
+
+        var anchorEdge = qNothing();
+
+        if (!isQueryEmpty(context, selectedEdges))
+        {
+            anchorEdge = qNthElement(selectedEdges, 0);
+        }
+        else if (!isQueryEmpty(context, selectedFaces))
+        {
+            const faceBoundaryEdges = qLoopEdges(selectedFaces);
+
+            if (!isQueryEmpty(context, faceBoundaryEdges))
+            {
+                anchorEdge = qNthElement(faceBoundaryEdges, 0);
+            }
+        }
+
+        if (isQueryEmpty(context, anchorEdge))
+        {
+            return;
+        }
+
+        const edgeLine = evEdgeTangentLine(context, {
+                "edge" : anchorEdge,
+                "parameter" : 0.5
+        });
+        const midpoint = edgeLine.origin;
+        const tangentDir = edgeLine.direction;
 
         const trackedSelection = startTracking(context, definition.edge);
 

@@ -1,25 +1,38 @@
 FeatureScript 3044;
 import(path : "onshape/std/common.fs", version : "3044.0");
 
-// Needs Input Scale
-// Sparse/incomplete scale candidate + faint outline.
-// Reference distance is gray; scale action remains clean red.
+// FuzzyCAD Needs Input Stretch
+//
+// Directional (single-axis) scale: pick a face, that face's plane
+// stays fixed, and the body stretches away from it along the face's
+// own normal by a factor. Deliberately a separate tool from
+// "FuzzyCAD Needs Input Scale" (uniform, scales from the body's own
+// bounding-box center) -- stretching along one direction is a
+// different design decision from resizing everything proportionally,
+// and picking the anchor face is the natural way to express "which
+// side stays put" without a separate reference selector: it mirrors
+// the same "pick a face, direction comes from its normal" pattern
+// FuzzyCAD Needs Input Extrude already uses.
 
 annotation {
-    "Feature Type Name" : "FuzzyCAD Needs Input Scale",
-    "Manipulator Change Function" : "fuzzycadNeedsInputScaleManipulatorChange"
+    "Feature Type Name" : "FuzzyCAD Needs Input Stretch",
+    "Manipulator Change Function" : "fuzzycadNeedsInputStretchManipulatorChange"
 }
-export const fuzzycadNeedsInputScale = defineFeature(function(context is Context, id is Id, definition is map)
+export const fuzzycadNeedsInputStretch = defineFeature(function(context is Context, id is Id, definition is map)
     precondition
     {
-        annotation { "Name" : "Body to scale", "Filter" : EntityType.BODY }
-        definition.body is Query;
+        annotation {
+            "Name" : "Anchor face (stays fixed)",
+            "Filter" : EntityType.FACE && BodyType.SOLID,
+            "MaxNumberOfPicks" : 1
+        }
+        definition.face is Query;
 
-        annotation { "Name" : "Scale factor" }
-        isReal(definition.scaleFactor, POSITIVE_REAL_BOUNDS);
+        annotation { "Name" : "Stretch factor" }
+        isReal(definition.stretchFactor, POSITIVE_REAL_BOUNDS);
 
-        annotation { "Name" : "Scale factor needs input", "Default" : true }
-        definition.scaleFactorNeedsInput is boolean;
+        annotation { "Name" : "Stretch factor needs input", "Default" : true }
+        definition.stretchFactorNeedsInput is boolean;
 
         annotation {
             "Name" : "Accepted",
@@ -41,46 +54,41 @@ export const fuzzycadNeedsInputScale = defineFeature(function(context is Context
         definition.expanded is boolean;
     }
     {
-        if (isQueryEmpty(context, definition.body))
+        if (isQueryEmpty(context, definition.face))
         {
             return;
         }
 
-        const originalBody = definition.body;
+        // Derived from the face, not a separate selector -- same
+        // qOwnerBody pattern already used by needsInputChamfer.fs and
+        // needsInputFillet.fs for the identical reason (an unfilled
+        // separate "pick the body too" selector silently leaves a
+        // feature with no preview geometry at all).
+        const originalBody = qOwnerBody(definition.face);
 
-        const bbox =
-            evBox3d(context, {
-                    "topology" : originalBody,
-                    "tight" : true
-            });
+        const tangentPlane = evFaceTangentPlane(context, {
+                "face" : definition.face,
+                "parameter" : vector(0.5, 0.5)
+        });
 
-        // Scale center: the body's own bounding-box center, not a
-        // required vertex pick -- most "make this bigger/smaller" edits
-        // are meant uniformly from the middle, not from whichever corner
-        // happens to get clicked.
-        const pivot =
-            (bbox.minCorner + bbox.maxCorner) / 2;
+        const facePoint = tangentPlane.origin;
+        const faceNormal = tangentPlane.normal;
 
-        const scaleTransform =
-            scaleNonuniformly(
-                definition.scaleFactor,
-                definition.scaleFactor,
-                definition.scaleFactor,
-                pivot
-            );
+        const stretchTransform =
+            buildAxialStretchTransform(facePoint, faceNormal, definition.stretchFactor);
 
         if (definition.accepted)
         {
-            opTransform(context, id + "acceptedScale", {
+            opTransform(context, id + "acceptedStretch", {
                     "bodies" : originalBody,
-                    "transform" : scaleTransform
+                    "transform" : stretchTransform
             });
             return;
         }
 
         opPattern(context, id + "duplicate", {
                 "entities" : originalBody,
-                "transforms" : [scaleTransform],
+                "transforms" : [stretchTransform],
                 "instanceNames" : ["proposed"]
         });
 
@@ -109,89 +117,116 @@ export const fuzzycadNeedsInputScale = defineFeature(function(context is Context
             drawNeedsInputSketch(context, id + "needsSketch", proposedBody);
         }
 
-        const farCorner = bbox.maxCorner;
-        const originalOffset = farCorner - pivot;
-        const originalDistance = norm(originalOffset);
+        const bbox = evBox3d(context, { "topology" : originalBody, "tight" : true });
+        const bboxDiagonal = norm(bbox.maxCorner - bbox.minCorner);
+        const referenceLength = max(bboxDiagonal * 0.5, 25 * millimeter);
 
-        if (originalDistance / millimeter > 0.001)
-        {
-            const direction = normalize(originalOffset);
+        const shownTarget =
+            definition.stretchFactorNeedsInput
+            ? facePoint + faceNormal * referenceLength * 1.3
+            : facePoint + faceNormal * referenceLength * definition.stretchFactor;
 
-            drawDashedReferenceLine(
-                context,
-                id + "originalScaleReference",
-                pivot,
-                farCorner
-            );
+        const labelText =
+            definition.stretchFactorNeedsInput
+            ? "STRETCH  ×?"
+            : "STRETCH  ×" ~ toString(round(definition.stretchFactor, 2));
 
-            const shownTarget =
-                definition.scaleFactorNeedsInput
-                ? pivot + direction * max(originalDistance * 1.18, 25 * millimeter)
-                : pivot + originalOffset * definition.scaleFactor;
+        drawEngineeringLinearArrow(
+            context,
+            id + "stretchArrow",
+            facePoint,
+            shownTarget,
+            labelText,
+            true
+        );
 
-            const labelText =
-                definition.scaleFactorNeedsInput
-                ? "SCALE  ×?"
-                : "SCALE  ×" ~ toString(round(definition.scaleFactor, 2));
-
-            drawEngineeringLinearArrow(
-                context,
-                id + "scaleArrow",
-                pivot,
-                shownTarget,
-                labelText,
-                true
-            );
-
-            addManipulators(context, id, {
-                    "scaleManipulator" : linearManipulator({
-                            "base" : pivot,
-                            "direction" : direction,
-                            "offset" : originalDistance * definition.scaleFactor,
-                            "primaryParameterId" : "scaleFactor"
-                    })
-            });
-        }
+        addManipulators(context, id, {
+                "stretchManipulator" : linearManipulator({
+                        "base" : facePoint,
+                        "direction" : faceNormal,
+                        "offset" : referenceLength * definition.stretchFactor,
+                        "primaryParameterId" : "stretchFactor"
+                })
+        });
 
         opDeleteBodies(context, id + "deleteTemporaryProposal", {
                 "entities" : proposedBody
         });
     });
 
-export function fuzzycadNeedsInputScaleManipulatorChange(
+export function fuzzycadNeedsInputStretchManipulatorChange(
     context is Context,
     definition is map,
     newManipulators is map)
 returns map
 {
-    if (newManipulators["scaleManipulator"] == undefined)
+    if (newManipulators["stretchManipulator"] == undefined)
     {
         return definition;
     }
 
-    const bbox =
-        evBox3d(context, {
-                "topology" : definition.body,
-                "tight" : true
-        });
+    const originalBody = qOwnerBody(definition.face);
 
-    const pivot =
-        (bbox.minCorner + bbox.maxCorner) / 2;
+    const bbox = evBox3d(context, { "topology" : originalBody, "tight" : true });
+    const bboxDiagonal = norm(bbox.maxCorner - bbox.minCorner);
+    const referenceLength = max(bboxDiagonal * 0.5, 25 * millimeter);
 
-    const originalDistance =
-        norm(bbox.maxCorner - pivot);
-
-    if (originalDistance / millimeter > 0.001)
+    if (referenceLength / millimeter > 0.001)
     {
-        const newFactor =
-            newManipulators["scaleManipulator"].offset /
-            originalDistance;
-
-        definition.scaleFactor =
-            max(newFactor, 0.01);
+        const newFactor = newManipulators["stretchManipulator"].offset / referenceLength;
+        definition.stretchFactor = max(newFactor, 0.01);
     }
 
     return definition;
+}
+
+
+//////////////////////////////////////////////////////////////////////
+//
+// AXIAL STRETCH TRANSFORM
+//
+// scaleNonuniformly() only scales along the WORLD X/Y/Z axes. To
+// stretch along an arbitrary picked face's normal instead: rotate
+// that normal onto world X, apply a world-X-only scale pivoted at the
+// anchor point, then rotate back onto the original normal direction.
+// Both rotations share the same origin (the anchor point itself), so
+// the anchor point -- and every other point on the anchor face's own
+// plane -- is a fixed point of the rotation, and stays exactly where
+// the scale step pivots from.
+//
+//////////////////////////////////////////////////////////////////////
+
+function buildAxialStretchTransform(
+    anchorPoint is Vector,
+    axisDirection is Vector,
+    factor is number)
+returns Transform
+{
+    const worldX = vector(1, 0, 0);
+    const normal = normalize(axisDirection);
+    const rotationAxis = cross(normal, worldX);
+
+    if (norm(rotationAxis) < 0.0001)
+    {
+        // Normal is already parallel (or antiparallel) to world X --
+        // no alignment rotation needed, or a straight 180 degree flip
+        // about any axis perpendicular to it.
+        if (dot(normal, worldX) > 0)
+        {
+            return scaleNonuniformly(factor, 1, 1, anchorPoint);
+        }
+
+        const flip = rotationAround(line(anchorPoint, vector(0, 1, 0)), 180 * degree);
+        return flip * scaleNonuniformly(factor, 1, 1, anchorPoint) * flip;
+    }
+
+    const axis = normalize(rotationAxis);
+    const angle = acos(clamp(dot(normal, worldX), -1, 1));
+
+    const toWorldX = rotationAround(line(anchorPoint, axis), angle);
+    const backToNormal = rotationAround(line(anchorPoint, -axis), angle);
+
+    return backToNormal * scaleNonuniformly(factor, 1, 1, anchorPoint) * toWorldX;
 }
 
 
@@ -263,7 +298,7 @@ function drawVeryLightGhostOutline(context is Context, id is Id, body is Query)
 // drawProposedSketch/handDrawProposedEdge -- full-coverage, low-jitter,
 // 2 passes per edge -- just recolored black instead of blue. Needs
 // Input no longer looks visually "unfinished"; the mark itself is
-// signaled by the red scale callout + warning icon instead of by
+// signaled by the red stretch callout + warning icon instead of by
 // sparse/incomplete candidate geometry.
 //
 //////////////////////////////////////////////////////////////////////
@@ -723,69 +758,6 @@ function drawEngineeringLinearArrow(
 
     skSolve(labelSketch);
 }
-function drawDashedReferenceLine(
-    context is Context,
-    id is Id,
-    startPoint is Vector,
-    endPoint is Vector)
-{
-    const total = endPoint - startPoint;
-    const length = norm(total);
-
-    if (length / millimeter < 0.001)
-    {
-        return;
-    }
-
-    const dashCount = 10;
-    const dashRatio = 0.55;
-    var bodies = qNothing();
-
-    for (var i = 0; i < dashCount; i += 1)
-    {
-        const t0 = i / dashCount;
-        const t1 = t0 + dashRatio / dashCount;
-        const segId = id + ("dash" ~ toString(i));
-
-        opFitSpline(
-            context,
-            segId,
-            {
-                "points" : [
-                    startPoint + total * t0,
-                    startPoint + total * t1
-                ]
-            }
-        );
-
-        bodies = qUnion(
-            bodies,
-            qCreatedBy(segId, EntityType.BODY)
-        );
-    }
-
-    if (!isQueryEmpty(context, bodies))
-    {
-        opCreateCompositePart(
-            context,
-            id + "composite",
-            {
-                "bodies" : bodies,
-                "closed" : false
-            }
-        );
-
-        setProperty(
-            context,
-            {
-                "entities" :
-                    qCreatedBy(id + "composite", EntityType.BODY),
-                "propertyType" : PropertyType.APPEARANCE,
-                "value" : color(0.18, 0.18, 0.18, 0.55)
-            }
-        );
-    }
-}
 
 
 function RandomNumberFunctionWithSalt(id, salt)
@@ -845,4 +817,3 @@ returns function
         return state[];
     };
 }
-
