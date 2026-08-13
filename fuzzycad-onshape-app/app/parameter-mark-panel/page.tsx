@@ -293,7 +293,6 @@ type ToolbarToolId = "move" | "extrude" | "chamfer" | "fillet" | "scale" | "rota
 const TOOLBAR_TOOLS: {
   id: ToolbarToolId;
   label: string;
-  icon: string;
   featureType: string;
   featureName: string;
   requiredEntityTypes: string[];
@@ -301,7 +300,6 @@ const TOOLBAR_TOOLS: {
   {
     id: "move",
     label: "Move",
-    icon: "⇄",
     featureType: "fuzzycadNeedsInputMove",
     featureName: "FuzzyCAD Needs Input Move",
     requiredEntityTypes: ["BODY"],
@@ -309,7 +307,6 @@ const TOOLBAR_TOOLS: {
   {
     id: "extrude",
     label: "Extrude",
-    icon: "⬆",
     featureType: "fuzzycadNeedsInputExtrude",
     featureName: "FuzzyCAD Needs Input Extrude",
     requiredEntityTypes: ["FACE"],
@@ -317,7 +314,6 @@ const TOOLBAR_TOOLS: {
   {
     id: "chamfer",
     label: "Chamfer",
-    icon: "◤",
     featureType: "fuzzycadNeedsInputChamfer",
     featureName: "FuzzyCAD Needs Input Chamfer",
     requiredEntityTypes: ["EDGE", "FACE"],
@@ -325,7 +321,6 @@ const TOOLBAR_TOOLS: {
   {
     id: "fillet",
     label: "Fillet",
-    icon: "◗",
     featureType: "fuzzycadNeedsInputFillet",
     featureName: "FuzzyCAD Needs Input Fillet",
     requiredEntityTypes: ["EDGE", "FACE"],
@@ -333,7 +328,6 @@ const TOOLBAR_TOOLS: {
   {
     id: "scale",
     label: "Scale",
-    icon: "⤢",
     featureType: "fuzzycadNeedsInputScale",
     featureName: "FuzzyCAD Needs Input Scale",
     requiredEntityTypes: ["BODY"],
@@ -341,7 +335,6 @@ const TOOLBAR_TOOLS: {
   {
     id: "rotate",
     label: "Rotate",
-    icon: "↻",
     featureType: "fuzzycadNeedsInputRotate",
     featureName: "FuzzyCAD Needs Input Rotate",
     requiredEntityTypes: ["BODY"],
@@ -349,12 +342,85 @@ const TOOLBAR_TOOLS: {
   {
     id: "stretch",
     label: "Stretch",
-    icon: "↔",
     featureType: "fuzzycadNeedsInputStretch",
     featureName: "FuzzyCAD Needs Input Stretch",
     requiredEntityTypes: ["FACE"],
   },
 ];
+
+/**
+ * Clean stroke-based line icons, one per tool -- deliberately not the
+ * single-glyph Unicode symbols this toolbar used at first (◤, ⤢, etc):
+ * those render inconsistently across systems/fonts and were reported
+ * illegible in practice. Plain SVG paths render pixel-identically
+ * everywhere and can be sized as large as the toolbar needs.
+ */
+function ToolbarIcon({ tool }: { tool: ToolbarToolId }) {
+  const common = {
+    width: 22,
+    height: 22,
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: 1.8,
+    strokeLinecap: "round" as const,
+    strokeLinejoin: "round" as const,
+  };
+
+  switch (tool) {
+    case "move":
+      return (
+        <svg {...common}>
+          <path d="M12 2v20M2 12h20" />
+          <path d="M12 2l-3 3M12 2l3 3M12 22l-3-3M12 22l3-3" />
+          <path d="M2 12l3-3M2 12l3 3M22 12l-3-3M22 12l-3 3" />
+        </svg>
+      );
+    case "extrude":
+      return (
+        <svg {...common}>
+          <rect x="5" y="11" width="14" height="9" rx="1" />
+          <path d="M12 8V2M12 2l-3 3M12 2l3 3" />
+        </svg>
+      );
+    case "chamfer":
+      return (
+        <svg {...common}>
+          <path d="M9 4h11v16H4V9L9 4z" />
+          <path d="M4 9L9 4" strokeDasharray="0" />
+        </svg>
+      );
+    case "fillet":
+      return (
+        <svg {...common}>
+          <path d="M4 20V10a6 6 0 0 1 6-6h10v16H4z" />
+        </svg>
+      );
+    case "scale":
+      return (
+        <svg {...common}>
+          <rect x="4" y="4" width="12" height="12" />
+          <path d="M14 20h6v-6" />
+          <path d="M20 20L13 13" />
+        </svg>
+      );
+    case "rotate":
+      return (
+        <svg {...common}>
+          <path d="M4 12a8 8 0 1 1 2.7 6" />
+          <path d="M3 16l1.7-4.5L9 13" />
+        </svg>
+      );
+    case "stretch":
+      return (
+        <svg {...common}>
+          <rect x="7" y="7" width="10" height="10" />
+          <path d="M2 12h4M2 12l3-3M2 12l3 3" />
+          <path d="M22 12h-4M22 12l-3-3M22 12l-3 3" />
+        </svg>
+      );
+  }
+}
 
 function queryListParameter(parameterId: string, geometryIds: string[]): BTMParameter {
   return {
@@ -557,22 +623,28 @@ function ParameterMarkPanelInner() {
   // linking; the other half, card->viewport via openFeatureDialog, already
   // existed).
   const [selectedFeatureIds, setSelectedFeatureIds] = useState<Set<string>>(new Set());
-  // Raw geometry from the last SELECTION postMessage, kept separately from
-  // selectedFeatureIds -- that one only tracks matches against EXISTING
-  // Cosmo Features (for card highlighting); this is for the toolbar,
-  // which needs to insert a brand new feature seeded from whatever's
-  // currently picked in the 3D view, whether or not it belongs to an
-  // existing mark. State, not a ref: the toolbar's enabled/disabled
-  // buttons need to re-render when the selection changes.
-  const [lastSelection, setLastSelection] = useState<{
-    geometryIds: string[];
-    entityTypes: Set<string>;
-  } | null>(null);
+  // Toolbar "arm, then pick" state (SketchUp-style: choose the tool
+  // first, THEN click the object it applies to -- not the other way
+  // round). Clicking a toolbar button arms it; the NEXT SELECTION
+  // postMessage received while armed triggers the insert and disarms.
+  // Clicking the same armed button again cancels; clicking a different
+  // one re-arms to that tool instead.
+  const [armedTool, setArmedTool] = useState<ToolbarToolId | null>(null);
+  // Ref mirror of armedTool -- the SELECTION handler below lives inside
+  // a useEffect that only resubscribes on [hasUrlContext, urlServer], so
+  // it would otherwise see a stale armedTool from whatever render set up
+  // that listener. Kept in sync by a dedicated effect right after
+  // armedTool's declaration.
+  const armedToolRef = useRef<ToolbarToolId | null>(null);
   // Which toolbar tool has an insert in flight -- disables every toolbar
   // button the same way `saving`/`pendingAction` disable the card
   // buttons during a save, and swaps that one tool's icon to a spinner
   // label so it's clear which insert is running.
   const [insertingTool, setInsertingTool] = useState<ToolbarToolId | null>(null);
+
+  useEffect(() => {
+    armedToolRef.current = armedTool;
+  }, [armedTool]);
   // entityId (Onshape's short transient selectionId, e.g. "KHNB") ->
   // featureId, built from partstudio-feature-created-parts's entities
   // field across every open Cosmo Feature. A ref, not state: it's read
@@ -810,13 +882,29 @@ function ParameterMarkPanelInner() {
         const featureId = entityToFeatureRef.current.get(selectionId);
         if (featureId) matched.add(featureId);
       }
-      setLastSelection(geometryIds.length > 0 ? { geometryIds, entityTypes } : null);
-
       console.debug("[FuzzyCAD] SELECTION received", {
         selections,
         matchedFeatureIds: Array.from(matched),
         entityToFeatureRefSize: entityToFeatureRef.current.size,
+        armedTool: armedToolRef.current,
       });
+
+      // Toolbar "arm, then pick": this SELECTION is the pick for
+      // whichever tool is currently armed. Fires the insert straight
+      // from this event's own geometryIds (not from any separately
+      // stored state, to avoid any race with a stale snapshot) and
+      // disarms either way -- a failed/mismatched pick shouldn't leave
+      // the tool silently armed forever.
+      if (armedToolRef.current) {
+        const toolId = armedToolRef.current;
+        armedToolRef.current = null;
+        setArmedTool(null);
+        if (geometryIds.length > 0) {
+          void insertToolbarMark(toolId, geometryIds);
+        } else {
+          setStatus("Nothing selected -- tool cancelled");
+        }
+      }
 
       setSelectedFeatureIds(matched);
 
@@ -1564,42 +1652,54 @@ function ParameterMarkPanelInner() {
   }
 
   /**
-   * Whether a toolbar button should be clickable for the current
-   * selection. BODY-required tools (Move/Scale/Rotate) are left
-   * permissive -- see TOOLBAR_TOOLS's own comment on why the SELECTION
-   * message can't be trusted to reliably distinguish a whole-body pick
-   * from a face pick client-side; Onshape's own response surfaces a
-   * clear error if the geometry doesn't actually resolve to a body.
+   * Toolbar "arm" click -- SketchUp-style: pick the tool FIRST, then
+   * click the object it applies to in the 3D view (the opposite order
+   * from this toolbar's first version). Clicking the already-armed tool
+   * again cancels; clicking a different one re-arms to that instead.
+   * The actual insert happens later, from the SELECTION handler, once
+   * the next pick comes in.
    */
-  function isToolbarToolEnabled(tool: (typeof TOOLBAR_TOOLS)[number]): boolean {
-    if (!context || !lastSelection || insertingTool) return false;
-    if (tool.requiredEntityTypes.includes("BODY")) return true;
-    return tool.requiredEntityTypes.some((entityType) => lastSelection.entityTypes.has(entityType));
+  function toggleArmedTool(toolId: ToolbarToolId) {
+    setArmedTool((prev) => {
+      if (prev === toolId) {
+        setStatus("Tool cancelled");
+        return null;
+      }
+      const tool = TOOLBAR_TOOLS.find((entry) => entry.id === toolId);
+      setStatus(
+        tool
+          ? `Select ${tool.requiredEntityTypes.join(" or ").toLowerCase()} geometry for ${tool.label}...`
+          : "",
+      );
+      return toolId;
+    });
   }
 
   /**
    * Toolbar "create a new mark" action -- inserts a fresh instance of
-   * the given tool's Cosmo Feature, seeded from whatever's currently
-   * selected in the 3D view (lastSelection). This is the create half of
-   * the app; the card list below is purely for reviewing/managing marks
-   * that already exist, never for making new ones.
+   * the given tool's Cosmo Feature, seeded from the geometryIds of
+   * whatever was just picked while the tool was armed (see the
+   * SELECTION handler above, which is this function's only caller).
+   * This is the create half of the app; the card list below is purely
+   * for reviewing/managing marks that already exist, never for making
+   * new ones.
    *
    * No confirmation dialog: inserting is cheap to undo (Reject deletes
    * the feature outright, same as any other mark) and every value
    * starts flagged "needs input" anyway, so there is nothing to
    * accidentally commit.
    */
-  async function insertToolbarMark(toolId: ToolbarToolId) {
+  async function insertToolbarMark(toolId: ToolbarToolId, geometryIds: string[]) {
     if (!context || insertingTool) return;
 
     const tool = TOOLBAR_TOOLS.find((entry) => entry.id === toolId);
-    if (!tool || !lastSelection) return;
+    if (!tool) return;
 
     setInsertingTool(toolId);
     setStatus(`Inserting ${tool.label}...`);
 
     try {
-      const parameters = buildCustomFeatureParameters(toolId, lastSelection.geometryIds);
+      const parameters = buildCustomFeatureParameters(toolId, geometryIds);
 
       const insertRes = await addPartStudioCustomFeature(
         {
@@ -2210,34 +2310,45 @@ function ParameterMarkPanelInner() {
        * Create toolbar -- permanently docked above the card list, not
        * folded into it. The card list below is a review/management
        * surface for marks that already exist (Accept/Reject/comment);
-       * this row is the only place that CREATES a new one. Each button
-       * reads whatever is currently selected in Onshape's own 3D view
-       * (lastSelection, from the SELECTION postMessage) and inserts that
-       * tool's Cosmo Feature seeded from it -- see insertToolbarMark.
+       * this row is the only place that CREATES a new one.
+       *
+       * SketchUp-style "arm, then pick": click a tool to arm it (it
+       * highlights), then click the object it applies to in Onshape's
+       * own 3D view -- the NEXT SELECTION received while armed triggers
+       * the insert (see the SELECTION handler above and
+       * insertToolbarMark). Click the same tool again to cancel.
        */}
       <div className={styles.toolbar}>
         {TOOLBAR_TOOLS.map((tool) => {
-          const enabled = isToolbarToolEnabled(tool);
+          const isArmed = armedTool === tool.id;
           const isInserting = insertingTool === tool.id;
           return (
             <button
               key={tool.id}
               type="button"
-              className={styles.toolbarButton}
-              disabled={!enabled}
+              className={isArmed ? `${styles.toolbarButton} ${styles.toolbarButtonArmed}` : styles.toolbarButton}
+              disabled={insertingTool !== null}
               title={
-                lastSelection
-                  ? `Insert ${tool.featureName} from the current selection`
-                  : `Select ${tool.requiredEntityTypes.join(" or ").toLowerCase()} geometry in the 3D view first`
+                isArmed
+                  ? `Click ${tool.requiredEntityTypes.join(" or ").toLowerCase()} geometry in the 3D view to insert ${tool.featureName}`
+                  : `Select ${tool.label}`
               }
-              onClick={() => void insertToolbarMark(tool.id)}
+              onClick={() => toggleArmedTool(tool.id)}
             >
-              <span className={styles.toolbarIcon}>{isInserting ? "…" : tool.icon}</span>
+              <span className={styles.toolbarIcon}>
+                {isInserting ? <span className={styles.toolbarSpinner} /> : <ToolbarIcon tool={tool.id} />}
+              </span>
               <span className={styles.toolbarLabel}>{tool.label}</span>
             </button>
           );
         })}
       </div>
+      {armedTool ? (
+        <p className={styles.toolbarHint}>
+          Click {TOOLBAR_TOOLS.find((entry) => entry.id === armedTool)?.requiredEntityTypes.join(" or ").toLowerCase()}{" "}
+          geometry in the 3D view to place it.
+        </p>
+      ) : null}
 
       {parameters === null ? null : featureGroups.length === 0 ? (
         <p className={styles.emptyState}>
