@@ -996,6 +996,9 @@ function ParameterMarkPanelInner() {
   // buttons during a save, and swaps that one tool's icon to a spinner
   // label so it's clear which insert is running.
   const [insertingTool, setInsertingTool] = useState<ToolbarToolId | null>(null);
+  // Split the panel into two tabs: "tools" is the create toolbar, "cards"
+  // is the review/manage list of existing marks.
+  const [activeTab, setActiveTab] = useState<"tools" | "cards">("tools");
   // The mark currently being created, from the moment its toolbar insert
   // succeeds until Confirm/Cancel (see ToolCreationGuide/
   // confirmActiveCreation/cancelActiveCreation). Deliberately NOT derived
@@ -2725,7 +2728,7 @@ function ParameterMarkPanelInner() {
         <div className={styles.titleRow}>
           <h1 className={styles.title}>Overall</h1>
           <div style={{ display: "flex", gap: 6 }}>
-            {groupSelectMode && groupSelectionIds.size >= 2 ? (
+            {activeTab === "cards" && groupSelectMode && groupSelectionIds.size >= 2 ? (
               <button
                 type="button"
                 className={styles.acceptButton}
@@ -2735,7 +2738,7 @@ function ParameterMarkPanelInner() {
                 Group selected ({groupSelectionIds.size})
               </button>
             ) : null}
-            {featureGroups.length >= 2 ? (
+            {activeTab === "cards" && featureGroups.length >= 2 ? (
               <button
                 type="button"
                 className={styles.secondaryButton}
@@ -2756,11 +2759,32 @@ function ParameterMarkPanelInner() {
         <p className={styles.status}>{status}</p>
       </div>
 
+      <div className={styles.tabBar} role="tablist">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === "tools"}
+          className={`${styles.tab} ${activeTab === "tools" ? styles.tabActive : ""}`}
+          onClick={() => setActiveTab("tools")}
+        >
+          Tools
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === "cards"}
+          className={`${styles.tab} ${activeTab === "cards" ? styles.tabActive : ""}`}
+          onClick={() => setActiveTab("cards")}
+        >
+          Cards{featureGroups.length > 0 ? ` (${featureGroups.length})` : ""}
+        </button>
+      </div>
+
       {/*
-       * Create toolbar -- permanently docked above the card list, not
-       * folded into it. The card list below is a review/management
-       * surface for marks that already exist (Accept/Reject/comment);
-       * this row is the only place that CREATES a new one.
+       * Create toolbar -- lives on the "Tools" tab. The card list on the
+       * "Cards" tab is a review/management surface for marks that already
+       * exist (Accept/Reject/comment); this toolbar is the only place that
+       * CREATES a new one.
        *
        * Click a tool to insert a fresh, not-yet-picked instance of it
        * (see insertToolbarMark/queryListParameter). Open the new card
@@ -2769,6 +2793,7 @@ function ParameterMarkPanelInner() {
        * 3D" step here, since that's exactly what opening an incomplete
        * feature already does on its own.
        */}
+      {activeTab === "tools" ? (
       <div className={styles.toolbar}>
         {TOOLBAR_CATEGORY_ORDER.map((category) => {
           const tools = TOOLBAR_TOOLS.filter((tool) => tool.category === category);
@@ -2801,6 +2826,7 @@ function ParameterMarkPanelInner() {
           );
         })}
       </div>
+      ) : null}
 
       {activeCreation ? (
         <ToolCreationGuide
@@ -2811,9 +2837,9 @@ function ParameterMarkPanelInner() {
         />
       ) : null}
 
-      {parameters === null ? null : featureGroups.length === 0 ? (
+      {activeTab !== "cards" ? null : parameters === null ? null : featureGroups.length === 0 ? (
         <p className={styles.emptyState}>
-          No FuzzyCAD marks yet. Choose a Needs Input, Mark, or Conflict tool above to create one.
+          No FuzzyCAD marks yet. Switch to the Tools tab to create one.
         </p>
       ) : (
         <div className={styles.proposalList}>
