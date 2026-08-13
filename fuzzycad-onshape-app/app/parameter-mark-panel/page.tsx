@@ -422,7 +422,25 @@ function ToolbarIcon({ tool }: { tool: ToolbarToolId }) {
   }
 }
 
+/**
+ * geometryIds here are the SELECTION postMessage's own selectionId
+ * values (e.g. "KFti") -- short, transient, viewer-session-only IDs.
+ * They are NOT the persistent/deterministic geometryIds a plain
+ * BTMIndividualQuery.geometryIds field expects (confirmed live: using
+ * them there produced a real feature with a "not found" regen error,
+ * even though the insert itself succeeded). Onshape's own forum
+ * confirms the fix: wrap each transient ID in qTransient(...) inside a
+ * queryString instead -- FeatureScript resolves it against the live
+ * viewer session, no ID conversion needed. Requires the /api/v6/
+ * partstudios endpoint (see partstudio-add-custom-feature/route.ts);
+ * the unversioned path doesn't support queryString-based queries.
+ */
 function queryListParameter(parameterId: string, geometryIds: string[]): BTMParameter {
+  const transientQueries = geometryIds.map((id) => `qTransient("${id}")`);
+  const queryExpression = transientQueries.reduce((combined, next) =>
+    combined ? `qUnion(${combined}, ${next})` : next,
+  );
+
   return {
     type: 148,
     typeName: "BTMParameterQueryList",
@@ -432,7 +450,7 @@ function queryListParameter(parameterId: string, geometryIds: string[]): BTMPara
         {
           type: 138,
           typeName: "BTMIndividualQuery",
-          message: { geometryIds },
+          message: { queryString: `query = ${queryExpression};` },
         },
       ],
     },

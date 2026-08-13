@@ -80,7 +80,13 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "parameters must be an array" }, { status: 400 });
   }
 
-  const endpoint = `${server}/api/partstudios/d/${documentId}/w/${workspaceId}/e/${partStudioElementId}/features`;
+  // /api/v6/ specifically -- confirmed on Onshape's own forum that the
+  // unversioned /api/partstudios path does not support the
+  // queryString/qTransient(...) query form the toolbar's per-tool
+  // parameter builders rely on (see queryListParameter in
+  // parameter-mark-panel/page.tsx) to reference whatever's currently
+  // selected in the 3D view.
+  const endpoint = `${server}/api/v6/partstudios/d/${documentId}/w/${workspaceId}/e/${partStudioElementId}/features`;
 
   const feature = {
     type: 134,
