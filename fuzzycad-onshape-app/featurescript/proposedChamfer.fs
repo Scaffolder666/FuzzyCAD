@@ -328,7 +328,7 @@ function drawEngineeringLeader(
             { "sketchPlane" : textPlane }
         );
 
-    const textSize = 3.6 * millimeter;
+    const textSize = 5.0 * millimeter;
 
     skText(
         textSketch,
@@ -350,6 +350,23 @@ function drawEngineeringLeader(
     );
 
     skSolve(textSketch);
+
+    // Solid, filled glyphs instead of bare sketch text -- thin outline
+    // letters read as faint; extracting the letter regions to a colored
+    // surface makes the label bold and legible.
+    opExtractSurface(context, id + "labelSketchSurface", {
+            "faces" : qSketchRegion(id + "labelSketch"),
+            "offset" : 0 * meter,
+            "useFacesAroundToTrimOffset" : false
+    });
+    opDeleteBodies(context, id + "delete_labelSketch", {
+            "entities" : qCreatedBy(id + "labelSketch")
+    });
+    setProperty(context, {
+            "entities" : qCreatedBy(id + "labelSketchSurface", EntityType.BODY),
+            "propertyType" : PropertyType.APPEARANCE,
+            "value" : arrowColor
+    });
 }
 function RandomNumberFunction(id)
 returns function

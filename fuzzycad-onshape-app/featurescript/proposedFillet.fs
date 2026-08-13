@@ -274,7 +274,7 @@ function drawDimensionArrow(
     const labelSketch = newSketchOnPlane(context, id + "labelSketch", { "sketchPlane" : arrowPlane });
     const labelUv = worldToPlane(arrowPlane, midPoint);
     const labelOffset = headWidth / 2 + 1.5 * millimeter;
-    const textHeight = 2.5 * millimeter;
+    const textHeight = 5.0 * millimeter;
 
     skText(labelSketch, "labelText", {
             "text" : labelText,
@@ -284,6 +284,23 @@ function drawDimensionArrow(
     });
 
     skSolve(labelSketch);
+
+    // Solid, filled glyphs instead of bare sketch text -- thin outline
+    // letters read as faint; extracting the letter regions to a colored
+    // surface makes the label bold and legible.
+    opExtractSurface(context, id + "labelSketchSurface", {
+            "faces" : qSketchRegion(id + "labelSketch"),
+            "offset" : 0 * meter,
+            "useFacesAroundToTrimOffset" : false
+    });
+    opDeleteBodies(context, id + "delete_labelSketch", {
+            "entities" : qCreatedBy(id + "labelSketch")
+    });
+    setProperty(context, {
+            "entities" : qCreatedBy(id + "labelSketchSurface", EntityType.BODY),
+            "propertyType" : PropertyType.APPEARANCE,
+            "value" : arrowColor
+    });
 }
 
 //////////////////////////////////////////////////////////////////////

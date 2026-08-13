@@ -171,7 +171,7 @@ function drawNoteCallout(
     const textPlane = plane(textPoint + side * (0.02 * millimeter), side, dir);
     const textUv = worldToPlane(textPlane, textPoint);
     const textSketch = newSketchOnPlane(context, id + "labelSketch", { "sketchPlane" : textPlane });
-    const textSize = 3.6 * millimeter;
+    const textSize = 6.0 * millimeter;
 
     skText(textSketch, "label", {
             "text" : noteText,
@@ -181,4 +181,27 @@ function drawNoteCallout(
     });
 
     skSolve(textSketch);
+
+    // Solid, filled glyphs instead of bare sketch text -- thin outline
+    // letters read as faint/unclear; extracting the letter regions to a
+    // colored surface makes the note bold and legible. Guarded on a
+    // non-empty region set because the note is arbitrary user text: a
+    // whitespace-only note yields no fillable glyph regions, and extracting
+    // an empty face set would raise a regen error.
+    if (!isQueryEmpty(context, qSketchRegion(id + "labelSketch")))
+    {
+        opExtractSurface(context, id + "labelSurface", {
+                "faces" : qSketchRegion(id + "labelSketch"),
+                "offset" : 0 * meter,
+                "useFacesAroundToTrimOffset" : false
+        });
+        opDeleteBodies(context, id + "deleteLabelSketch", {
+                "entities" : qCreatedBy(id + "labelSketch")
+        });
+        setProperty(context, {
+                "entities" : qCreatedBy(id + "labelSurface", EntityType.BODY),
+                "propertyType" : PropertyType.APPEARANCE,
+                "value" : calloutColor
+        });
+    }
 }

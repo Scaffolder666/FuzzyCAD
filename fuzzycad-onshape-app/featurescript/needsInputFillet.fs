@@ -337,7 +337,7 @@ function drawDimensionArrow(
     const labelSketch = newSketchOnPlane(context, id + "labelSketch", { "sketchPlane" : arrowPlane });
     const labelUv = worldToPlane(arrowPlane, midPoint);
     const labelOffset = headWidth / 2 + 1.5 * millimeter;
-    const textHeight = 2.5 * millimeter;
+    const textHeight = 5.0 * millimeter;
 
     skText(labelSketch, "labelText", {
             "text" : labelText,
@@ -347,6 +347,20 @@ function drawDimensionArrow(
     });
 
     skSolve(labelSketch);
+
+    opExtractSurface(context, id + "labelSketchSurface", {
+            "faces" : qSketchRegion(id + "labelSketch"),
+            "offset" : 0 * meter,
+            "useFacesAroundToTrimOffset" : false
+    });
+    opDeleteBodies(context, id + "delete_labelSketch", {
+            "entities" : qCreatedBy(id + "labelSketch")
+    });
+    setProperty(context, {
+            "entities" : qCreatedBy(id + "labelSketchSurface", EntityType.BODY),
+            "propertyType" : PropertyType.APPEARANCE,
+            "value" : arrowColor
+    });
 }
 
 //////////////////////////////////////////////////////////////////////
@@ -715,7 +729,7 @@ function drawVeryLightGhostOutline(
     id is Id,
     body is Query)
 {
-    const outlineColor = color(0.38, 0.38, 0.38, 0.14);
+    const outlineColor = color(0.88, 0.16, 0.12, 0.9);
     const sampleSpacing = 5 * millimeter;
 
     const bodyEdges = evaluateQuery(

@@ -237,7 +237,7 @@ function drawBigMoveArrow(
     const labelPlane = plane(midPoint + side * (0.02 * millimeter), side);
     const labelUv = worldToPlane(labelPlane, midPoint);
     const labelSketch = newSketchOnPlane(context, id + "labelSketch", { "sketchPlane" : labelPlane });
-    const textSize = 4.2 * millimeter;
+    const textSize = 5.0 * millimeter;
     skText(labelSketch, "label", {
             "text" : "MOVE  Δ = " ~ toString(round(distance / millimeter, 1)) ~ " mm",
             "fontName" : "OpenSans-Regular.ttf",
@@ -245,6 +245,20 @@ function drawBigMoveArrow(
             "secondCorner" : vector(labelUv[0] + 2.5 * textSize, labelUv[1] + textSize)
     });
     skSolve(labelSketch);
+
+    opExtractSurface(context, id + "labelSurface", {
+            "faces" : qSketchRegion(id + "labelSketch"),
+            "offset" : 0 * meter,
+            "useFacesAroundToTrimOffset" : false
+    });
+    opDeleteBodies(context, id + "deleteLabelSketch", {
+            "entities" : qCreatedBy(id + "labelSketch")
+    });
+    setProperty(context, {
+            "entities" : qCreatedBy(id + "labelSurface", EntityType.BODY),
+            "propertyType" : PropertyType.APPEARANCE,
+            "value" : markerColor
+    });
 
     const detailPoint = midPoint - side2 * (7 * millimeter);
     const detailPlane = plane(detailPoint + side * (0.02 * millimeter), side);
@@ -258,6 +272,20 @@ function drawBigMoveArrow(
             "secondCorner" : vector(detailUv[0] + 3.0 * detailSize, detailUv[1] + detailSize)
     });
     skSolve(detailSketch);
+
+    opExtractSurface(context, id + "detailSurface", {
+            "faces" : qSketchRegion(id + "detailSketch"),
+            "offset" : 0 * meter,
+            "useFacesAroundToTrimOffset" : false
+    });
+    opDeleteBodies(context, id + "deleteDetailSketch", {
+            "entities" : qCreatedBy(id + "detailSketch")
+    });
+    setProperty(context, {
+            "entities" : qCreatedBy(id + "detailSurface", EntityType.BODY),
+            "propertyType" : PropertyType.APPEARANCE,
+            "value" : markerColor
+    });
 }
 
 function handDrawEdgeSketchy(

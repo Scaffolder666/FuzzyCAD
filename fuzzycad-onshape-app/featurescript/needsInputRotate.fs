@@ -377,20 +377,19 @@ defineFeature(function(
         //
         // PENDING STATE
         //
-        // Create a complete rotated candidate body -- unless the angle
-        // itself is still a placeholder (angleNeedsInput), in which case
-        // rotating the duplicate by definition.angle would silently show
-        // a specific numeric rotation the user never actually chose. Use
-        // an identity rotation (same axis, zero angle) instead, so the
-        // duplicate sits exactly on the original and only the theta = ?
-        // gesture below communicates "rotate here, amount still unknown".
+        // Create a complete rotated candidate body at the ACTUAL rotated-to
+        // position -- the same way the Move tool puts its ghost at the
+        // destination rather than on top of the original. Rotate the
+        // duplicate by definition.angle even while the angle still "needs
+        // input": the sketchy ghost then reads as "this is where it lands,"
+        // which is the whole point of a rotation preview. The amount still
+        // being unknown is communicated by the theta = ? callout below, not
+        // by leaving the ghost un-rotated (which read as "nothing moved").
         //
         //////////////////////////////////////////////////////////////////
 
         const previewRotation =
-            definition.angleNeedsInput
-            ? rotationAround(rotationAxis, 0 * degree)
-            : rotation;
+            rotation;
 
         opPattern(
             context,
@@ -979,7 +978,7 @@ function drawEngineeringCurvedArrow(
     const labelPlane = plane(midPt + axisDirection * eps, axisDirection);
     const labelSketch = newSketchOnPlane(context, id + "labelSketch", { "sketchPlane" : labelPlane });
     const labelUv = worldToPlane(labelPlane, midPt);
-    const textSize = 4.2 * millimeter;
+    const textSize = 5.0 * millimeter;
 
     skText(labelSketch, "labelText", {
             "text" : labelText,
@@ -988,6 +987,24 @@ function drawEngineeringCurvedArrow(
             "secondCorner" : vector(labelUv[0] + 1.8 * textSize, labelUv[1] + textSize)
     });
     skSolve(labelSketch);
+
+    // Solid, filled glyphs instead of bare sketch text -- thin outline
+    // letters read as faint/unclear; extracting the letter regions to a
+    // colored surface makes the label bold and legible, matching the
+    // filled warning "!" icon.
+    opExtractSurface(context, id + "labelSurface", {
+            "faces" : qSketchRegion(id + "labelSketch"),
+            "offset" : 0 * meter,
+            "useFacesAroundToTrimOffset" : false
+    });
+    opDeleteBodies(context, id + "deleteLabelSketch", {
+            "entities" : qCreatedBy(id + "labelSketch")
+    });
+    setProperty(context, {
+            "entities" : qCreatedBy(id + "labelSurface", EntityType.BODY),
+            "propertyType" : PropertyType.APPEARANCE,
+            "value" : arcColor
+    });
 }
 
 function drawDashedEngineeringLine(
@@ -1286,7 +1303,11 @@ function drawVeryLightGhostOutline(
     id is Id,
     body is Query)
 {
-    const outlineColor = color(0.38, 0.38, 0.38, 0.14);
+    // Solid, eye-catching red frame instead of a barely-there light-gray
+    // one -- the faint version read as "unfinished/greyed out"; a crisp
+    // attention-colored silhouette matches the warning "!" and the red
+    // angle callout, so the mark is impossible to miss at a glance.
+    const outlineColor = color(0.88, 0.16, 0.12, 0.9);
     const sampleSpacing = 5 * millimeter;
 
     const bodyEdges = evaluateQuery(

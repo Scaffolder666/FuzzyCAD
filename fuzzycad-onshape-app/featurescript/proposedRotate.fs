@@ -370,7 +370,7 @@ function drawEngineeringCurvedArrow(
     const labelPlane = plane(midPt + axisDirection * eps, axisDirection);
     const labelSketch = newSketchOnPlane(context, id + "labelSketch", { "sketchPlane" : labelPlane });
     const labelUv = worldToPlane(labelPlane, midPt);
-    const textSize = 4.2 * millimeter;
+    const textSize = 5.0 * millimeter;
 
     skText(labelSketch, "labelText", {
             "text" : labelText,
@@ -379,6 +379,24 @@ function drawEngineeringCurvedArrow(
             "secondCorner" : vector(labelUv[0] + 1.8 * textSize, labelUv[1] + textSize)
     });
     skSolve(labelSketch);
+
+    // Solid, filled glyphs instead of bare sketch text -- thin outline
+    // letters read as faint/unclear; extracting the letter regions to a
+    // colored surface makes the label bold and legible, matching the
+    // filled warning "!" icon.
+    opExtractSurface(context, id + "labelSurface", {
+            "faces" : qSketchRegion(id + "labelSketch"),
+            "offset" : 0 * meter,
+            "useFacesAroundToTrimOffset" : false
+    });
+    opDeleteBodies(context, id + "deleteLabelSketch", {
+            "entities" : qCreatedBy(id + "labelSketch")
+    });
+    setProperty(context, {
+            "entities" : qCreatedBy(id + "labelSurface", EntityType.BODY),
+            "propertyType" : PropertyType.APPEARANCE,
+            "value" : arcColor
+    });
 }
 
 function drawDashedEngineeringLine(

@@ -427,7 +427,7 @@ function drawVeryLightGhostOutline(
     id is Id,
     body is Query)
 {
-    const outlineColor = color(0.38, 0.38, 0.38, 0.14);
+    const outlineColor = color(0.88, 0.16, 0.12, 0.9);
     const sampleSpacing = 5 * millimeter;
 
     const bodyEdges = evaluateQuery(
@@ -583,7 +583,7 @@ function drawEngineeringLeader(
             { "sketchPlane" : textPlane }
         );
 
-    const textSize = 3.6 * millimeter;
+    const textSize = 5.0 * millimeter;
 
     skText(
         textSketch,
@@ -605,6 +605,20 @@ function drawEngineeringLeader(
     );
 
     skSolve(textSketch);
+
+    opExtractSurface(context, id + "labelSketchSurface", {
+            "faces" : qSketchRegion(id + "labelSketch"),
+            "offset" : 0 * meter,
+            "useFacesAroundToTrimOffset" : false
+    });
+    opDeleteBodies(context, id + "delete_labelSketch", {
+            "entities" : qCreatedBy(id + "labelSketch")
+    });
+    setProperty(context, {
+            "entities" : qCreatedBy(id + "labelSketchSurface", EntityType.BODY),
+            "propertyType" : PropertyType.APPEARANCE,
+            "value" : arrowColor
+    });
 }
 
 function RandomNumberFunctionWithSalt(id, salt)
