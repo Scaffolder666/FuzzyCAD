@@ -305,6 +305,26 @@ defineFeature(function(
         //
         //////////////////////////////////////////////////////////////////
 
+        // Chosen direction for X/Y/Z mode, computed as its own value first
+        // instead of inline inside the line() call below -- FeatureScript's
+        // ?: is left-associative (confirmed live: a ? b : c ? d : e groups
+        // as (a ? b : c) ? d : e, NOT a ? b : (c ? d : e) the way C/JS
+        // would), so a chained ternary written inline as a function
+        // argument silently mis-grouped and fed a Vector in as a
+        // condition. Splitting each comparison into its own fully
+        // parenthesized step sidesteps the associativity question
+        // entirely instead of relying on precedence.
+        var worldAxisDirection = vector(0, 0, 1);
+
+        if (definition.rotationAxisMode == FuzzyCADRotationAxisMode.X)
+        {
+            worldAxisDirection = vector(1, 0, 0);
+        }
+        else if (definition.rotationAxisMode == FuzzyCADRotationAxisMode.Y)
+        {
+            worldAxisDirection = vector(0, 1, 0);
+        }
+
         const rotationAxis =
             (definition.rotationAxisMode == FuzzyCADRotationAxisMode.CUSTOM)
             ?
@@ -318,11 +338,7 @@ defineFeature(function(
             :
             line(
                 bboxCenter,
-                (definition.rotationAxisMode == FuzzyCADRotationAxisMode.X)
-                ? vector(1, 0, 0)
-                : (definition.rotationAxisMode == FuzzyCADRotationAxisMode.Y)
-                    ? vector(0, 1, 0)
-                    : vector(0, 0, 1)
+                worldAxisDirection
             );
 
 
