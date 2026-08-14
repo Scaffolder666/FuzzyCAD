@@ -349,13 +349,6 @@ type ToolbarToolCategory = "needsInput" | "markConstrain" | "conflict";
  */
 const FUZZYCAD_FEATURE_STUDIO_DOCUMENT_ID = "4d1fc0e64de952a27aa017f9";
 const FUZZYCAD_FEATURE_STUDIO_WORKSPACE_ID = "7c76b2cb448de6692dd140f0";
-// The document a WORKING custom-feature namespace actually names -- captured
-// live from an already-inserted instance (fuzzycadNote's own namespace is
-// "e16536cd9a691d6185c9bd9c3::m..."). The /elements call above (against the
-// DOCUMENT_ID) is only how we read each feature's current microversion; the
-// namespace STRING must name this library document, because Onshape rejects
-// the working-document form ("4d1fc0e...::m...") live as "invalid namespace".
-const FUZZYCAD_FEATURE_STUDIO_NAMESPACE_DOCUMENT_ID = "e16536cd9a691d6185c9bd9c3";
 
 const TOOLBAR_TOOLS: {
   id: ToolbarToolId;
@@ -2013,7 +2006,12 @@ function ParameterMarkPanelInner() {
 
       if (typeof microversionId !== "string" || !microversionId) return null;
 
-      return `${FUZZYCAD_FEATURE_STUDIO_NAMESPACE_DOCUMENT_ID}::m${microversionId}`;
+      // Onshape's custom-feature namespace names the Feature Studio ELEMENT,
+      // not a document: "e<featureStudioElementId>::m<microversionId>". Live
+      // confirmed by real inserted instances -- fuzzycadNote's namespace is
+      // "e" + its element id 16536cd9a691d6185c9bd9c3 + "::m...", and
+      // fuzzycadNeedsInputRotate's is "e" + its element id 66c464c... + "::m...".
+      return `e${tool.featureStudioElementId}::m${microversionId}`;
     } catch (error) {
       console.warn("[FuzzyCAD] resolveFreshNamespace failed, falling back to detectedFeatures scan", error);
       return null;
