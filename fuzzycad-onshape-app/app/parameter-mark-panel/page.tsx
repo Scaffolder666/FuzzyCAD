@@ -2090,6 +2090,17 @@ function ParameterMarkPanelInner() {
     try {
       const parameters = buildCustomFeatureParameters(toolId, geometryIds);
 
+      // A custom-enum parameter (rotate's rotationAxisMode is an enum
+      // DEFINED IN the Feature Studio, FuzzyCADRotationAxisMode) needs that
+      // Feature Studio's namespace so Onshape can resolve the enum type --
+      // without it the insert 400s with "<param> does not match its feature
+      // spec". Inject the resolved namespace into every enum param.
+      for (const parameter of parameters) {
+        if (parameter.typeName === "BTMParameterEnum") {
+          parameter.message.namespace = namespace;
+        }
+      }
+
       const insertRes = await addPartStudioCustomFeature(
         {
           documentId: currentContext.documentId,
