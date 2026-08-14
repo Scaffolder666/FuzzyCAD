@@ -2197,15 +2197,43 @@ function ParameterMarkPanelInner() {
    * it is not the same action as Accept/"Mark Answered" on the
    * resulting card, which is a separate, later, explicit decision.
    */
-  function confirmActiveCreation() {
-    if (!activeCreation) return;
-    postCloseFeatureDialog(true);
-    setActiveCreation(null);
-    // A beat for Onshape to actually process the accept server-side
-    // before this panel's own GET would otherwise race it.
-    window.setTimeout(() => {
-      void loadEverything({ manual: true });
-    }, 500);
+  async function confirmActiveCreation(updates: CreationParameterUpdate[] = []) {
+    if (!activeCreation || !context) return;
+    const featureId = activeCreation.featureId;
+    setCreationActionBusy(true);
+    try {
+      // Commit the native dialog's geometry picks / manipulator first --
+      // accept:true saves exactly what's live there (see the doc comment
+      // above), which is where the body/edge/face pick happened.
+      postCloseFeatureDialog(true);
+
+      // Then patch the values the user filled IN THE PANEL (note text,
+      // rotation axis, angle, ...). A short beat first so Onshape has
+      // finished processing the accept before this patch lands.
+      if (updates.length > 0) {
+        await new Promise((resolve) => window.setTimeout(resolve, 400));
+        const updateRes = await updatePartStudioFeatureSuppressed(
+          {
+            documentId: context.documentId,
+            workspaceId: context.workspaceId,
+            partStudioElementId: context.elementId,
+            server: context.server,
+          },
+          { featureId, parameterUpdates: updates },
+        );
+        if (!updateRes.ok) {
+          setStatus(`Created it, but couldn't save the details (HTTP ${updateRes.status})`);
+        }
+      }
+
+      setActiveCreation(null);
+      // A beat for Onshape to actually process the writes server-side
+      // before this panel's own GET would otherwise race them.
+      await new Promise((resolve) => window.setTimeout(resolve, updates.length > 0 ? 150 : 500));
+      await loadEverything({ manual: true });
+    } finally {
+      setCreationActionBusy(false);
+    }
   }
 
   /**
@@ -3111,6 +3139,39 @@ function AlternativeDiscussionThread({
  * for a collaborator to resolve later, not something the creator has
  * to nail down before Confirm.
  */
+// One parameter patch collected from the creation form, sent through
+// updatePartStudioFeatureSuppressed's generic parameterUpdates path.
+type CreationParameterUpdate = { parameterId: string; expression?: string; value?: boolean | string | number };
+
+// Which fields the panel collects IN THE PANEL for a given tool (geometry
+// is always picked in the 3D view, never here). Only the tools listed here
+// get an in-panel form; every other tool keeps the plain two-step guide.
+type CreationField =
+  | { kind: "text"; parameterId: string; label: string; placeholder: string }
+  | { kind: "enum"; parameterId: string; label: string; defaultValue: string; options: { value: string; label: string }[] }
+  | { kind: "angle"; parameterId: string; needsInputParameterId: string; label: string };
+
+const CREATION_FORM_FIELDS: Partial<Record<ToolbarToolId, CreationField[]>> = {
+  note: [
+    { kind: "text", parameterId: "noteText", label: "Note", placeholder: "What should a collaborator know about this spot?" },
+  ],
+  rotate: [
+    {
+      kind: "enum",
+      parameterId: "rotationAxisMode",
+      label: "Rotate about",
+      defaultValue: "Z",
+      options: [
+        { value: "X", label: "X axis" },
+        { value: "Y", label: "Y axis" },
+        { value: "Z", label: "Z axis" },
+        { value: "CUSTOM", label: "Selected edge / hole" },
+      ],
+    },
+    { kind: "angle", parameterId: "angle", needsInputParameterId: "angleNeedsInput", label: "Angle" },
+  ],
+};
+
 function ToolCreationGuide({
   toolId,
   busy,
@@ -3119,12 +3180,50 @@ function ToolCreationGuide({
 }: {
   toolId: ToolbarToolId;
   busy: boolean;
-  onConfirm: () => void;
+  onConfirm: (updates: CreationParameterUpdate[]) => void;
   onCancel: () => void;
 }) {
   const tool = TOOLBAR_TOOLS.find((entry) => entry.id === toolId);
+  const fields = CREATION_FORM_FIELDS[toolId] ?? null;
+
+  const [values, setValues] = useState<Record<string, string>>(() => {
+    const initial: Record<string, string> = {};
+    for (const field of CREATION_FORM_FIELDS[toolId] ?? []) {
+      initial[field.parameterId] = field.kind === "enum" ? field.defaultValue : "";
+    }
+    return initial;
+  });
+  // Angle fields default to "decide later" (needs input) -- the whole point
+  // of a Needs Input mark is that the exact value can stay open.
+  const [angleUnknown, setAngleUnknown] = useState<Record<string, boolean>>(() => {
+    const initial: Record<string, boolean> = {};
+    for (const field of CREATION_FORM_FIELDS[toolId] ?? []) {
+      if (field.kind === "angle") initial[field.parameterId] = true;
+    }
+    return initial;
+  });
+
   if (!tool?.guidance) return null;
   const { guidance } = tool;
+
+  function collectUpdates(): CreationParameterUpdate[] {
+    const updates: CreationParameterUpdate[] = [];
+    for (const field of fields ?? []) {
+      if (field.kind === "text") {
+        updates.push({ parameterId: field.parameterId, value: values[field.parameterId] ?? "" });
+      } else if (field.kind === "enum") {
+        updates.push({ parameterId: field.parameterId, value: values[field.parameterId] ?? field.defaultValue });
+      } else {
+        const unknown = angleUnknown[field.parameterId] ?? true;
+        updates.push({ parameterId: field.needsInputParameterId, value: unknown });
+        const typed = (values[field.parameterId] ?? "").trim();
+        if (!unknown && typed !== "") {
+          updates.push({ parameterId: field.parameterId, expression: `${typed} deg` });
+        }
+      }
+    }
+    return updates;
+  }
 
   return (
     <div className={styles.creationGuide}>
@@ -3140,18 +3239,108 @@ function ToolCreationGuide({
           Cancel
         </button>
       </div>
+
+      {/* Geometry is always picked in the 3D view; the panel only collects
+          the values/text below. Tools without a form keep both steps. */}
       <div className={styles.guidanceSteps}>
         <div className={styles.guidanceStep}>
           <span className={styles.guidanceStepMark}>1</span>
           <span>{guidance.select}</span>
         </div>
-        <div className={styles.guidanceStep}>
-          <span className={styles.guidanceStepMark}>2</span>
-          <span>{guidance.adjust}</span>
-        </div>
+        {!fields ? (
+          <div className={styles.guidanceStep}>
+            <span className={styles.guidanceStepMark}>2</span>
+            <span>{guidance.adjust}</span>
+          </div>
+        ) : null}
       </div>
+
+      {fields ? (
+        <div className={styles.creationForm}>
+          {fields.map((field) => {
+            if (field.kind === "text") {
+              return (
+                <label key={field.parameterId} className={styles.creationField}>
+                  <span className={styles.creationFieldLabel}>{field.label}</span>
+                  <textarea
+                    className={styles.creationTextarea}
+                    rows={2}
+                    placeholder={field.placeholder}
+                    value={values[field.parameterId] ?? ""}
+                    disabled={busy}
+                    onChange={(event) =>
+                      setValues((current) => ({ ...current, [field.parameterId]: event.target.value }))
+                    }
+                  />
+                </label>
+              );
+            }
+
+            if (field.kind === "enum") {
+              const selected = values[field.parameterId] ?? field.defaultValue;
+              return (
+                <div key={field.parameterId} className={styles.creationField}>
+                  <span className={styles.creationFieldLabel}>{field.label}</span>
+                  <div className={styles.creationChips}>
+                    {field.options.map((option) => (
+                      <button
+                        key={option.value}
+                        type="button"
+                        className={`${styles.creationChip} ${selected === option.value ? styles.creationChipActive : ""}`}
+                        disabled={busy}
+                        onClick={() =>
+                          setValues((current) => ({ ...current, [field.parameterId]: option.value }))
+                        }
+                      >
+                        {option.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              );
+            }
+
+            const unknown = angleUnknown[field.parameterId] ?? true;
+            return (
+              <div key={field.parameterId} className={styles.creationField}>
+                <span className={styles.creationFieldLabel}>{field.label}</span>
+                <div className={styles.creationAngleRow}>
+                  <input
+                    type="number"
+                    className={styles.creationNumber}
+                    placeholder="e.g. 30"
+                    value={values[field.parameterId] ?? ""}
+                    disabled={busy || unknown}
+                    onChange={(event) =>
+                      setValues((current) => ({ ...current, [field.parameterId]: event.target.value }))
+                    }
+                  />
+                  <span className={styles.creationUnit}>°</span>
+                  <label className={styles.creationCheck}>
+                    <input
+                      type="checkbox"
+                      checked={unknown}
+                      disabled={busy}
+                      onChange={(event) =>
+                        setAngleUnknown((current) => ({ ...current, [field.parameterId]: event.target.checked }))
+                      }
+                    />
+                    Decide later
+                  </label>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      ) : null}
+
       <div className={styles.creationGuideActions}>
-        <button type="button" className={styles.acceptButton} disabled={busy} onClick={onConfirm}>
+        <button
+          type="button"
+          className={styles.acceptButton}
+          disabled={busy}
+          onClick={() => onConfirm(collectUpdates())}
+        >
           {busy ? "Saving..." : "Confirm"}
         </button>
       </div>
