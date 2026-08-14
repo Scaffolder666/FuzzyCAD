@@ -3,16 +3,24 @@ import(path : "onshape/std/common.fs", version : "3044.0");
 
 // FuzzyCAD Needs Input Stretch
 //
-// Directional (single-axis) scale: pick a face, that face's plane
-// stays fixed, and the body stretches away from it along the face's
-// own normal by a factor. Deliberately a separate tool from
-// "FuzzyCAD Needs Input Scale" (uniform, scales from the body's own
-// bounding-box center) -- stretching along one direction is a
-// different design decision from resizing everything proportionally,
-// and picking the anchor face is the natural way to express "which
-// side stays put" without a separate reference selector: it mirrors
-// the same "pick a face, direction comes from its normal" pattern
-// FuzzyCAD Needs Input Extrude already uses.
+// A single-axis (non-uniform) scale of a WHOLE BODY -- the directional
+// sibling of "FuzzyCAD Needs Input Scale" (which scales all three axes
+// uniformly). Pick the object, choose which world axis to stretch along
+// (X / Y / Z, exactly like the Rotate tool's axis choice), and give a
+// factor; the body scales along that one axis, symmetrically about its
+// own bounding-box center (both ends move, like Scale), leaving the
+// other two axes untouched. No face pick: a stretch is a resize of the
+// body, not an edit of one face.
+
+export enum FuzzyCADStretchAxis
+{
+    annotation { "Name" : "X" }
+    X,
+    annotation { "Name" : "Y" }
+    Y,
+    annotation { "Name" : "Z" }
+    Z
+}
 
 annotation {
     "Feature Type Name" : "FuzzyCAD Needs Input Stretch",
@@ -21,12 +29,11 @@ annotation {
 export const fuzzycadNeedsInputStretch = defineFeature(function(context is Context, id is Id, definition is map)
     precondition
     {
-        annotation {
-            "Name" : "Select the side that stays fixed",
-            "Filter" : EntityType.FACE && BodyType.SOLID,
-            "MaxNumberOfPicks" : 1
-        }
-        definition.face is Query;
+        annotation { "Name" : "Select object", "Filter" : EntityType.BODY, "MaxNumberOfPicks" : 1 }
+        definition.body is Query;
+
+        annotation { "Name" : "Stretch along" }
+        definition.stretchAxis is FuzzyCADStretchAxis;
 
         annotation { "Name" : "Stretch factor" }
         isReal(definition.stretchFactor, POSITIVE_REAL_BOUNDS);
@@ -42,28 +49,31 @@ export const fuzzycadNeedsInputStretch = defineFeature(function(context is Conte
         definition.accepted is boolean;
     }
     {
-        if (isQueryEmpty(context, definition.face))
+        if (isQueryEmpty(context, definition.body))
         {
             return;
         }
 
-        // Derived from the face, not a separate selector -- same
-        // qOwnerBody pattern already used by needsInputChamfer.fs and
-        // needsInputFillet.fs for the identical reason (an unfilled
-        // separate "pick the body too" selector silently leaves a
-        // feature with no preview geometry at all).
-        const originalBody = qOwnerBody(definition.face);
+        const originalBody = definition.body;
 
-        const tangentPlane = evFaceTangentPlane(context, {
-                "face" : definition.face,
-                "parameter" : vector(0.5, 0.5)
-        });
+        // Anchor at the body's own bounding-box center and stretch along
+        // the chosen world axis -- symmetric about the center (both ends
+        // move), the same "resize the whole body" feel as Scale.
+        const bbox = evBox3d(context, { "topology" : originalBody, "tight" : true });
+        const anchorPoint = (bbox.minCorner + bbox.maxCorner) / 2;
 
-        const facePoint = tangentPlane.origin;
-        const faceNormal = tangentPlane.normal;
+        var axisDirection = vector(0, 0, 1);
+        if (definition.stretchAxis == FuzzyCADStretchAxis.X)
+        {
+            axisDirection = vector(1, 0, 0);
+        }
+        else if (definition.stretchAxis == FuzzyCADStretchAxis.Y)
+        {
+            axisDirection = vector(0, 1, 0);
+        }
 
         const stretchTransform =
-            buildAxialStretchTransform(facePoint, faceNormal, definition.stretchFactor);
+            buildAxialStretchTransform(anchorPoint, axisDirection, definition.stretchFactor);
 
         if (definition.accepted)
         {
@@ -98,14 +108,13 @@ export const fuzzycadNeedsInputStretch = defineFeature(function(context is Conte
 
         drawNeedsInputSketch(context, id + "needsSketch", proposedBody);
 
-        const bbox = evBox3d(context, { "topology" : originalBody, "tight" : true });
         const bboxDiagonal = norm(bbox.maxCorner - bbox.minCorner);
         const referenceLength = max(bboxDiagonal * 0.5, 25 * millimeter);
 
         const shownTarget =
             definition.stretchFactorNeedsInput
-            ? facePoint + faceNormal * referenceLength * 1.3
-            : facePoint + faceNormal * referenceLength * definition.stretchFactor;
+            ? anchorPoint + axisDirection * referenceLength * 1.3
+            : anchorPoint + axisDirection * referenceLength * definition.stretchFactor;
 
         const labelText =
             definition.stretchFactorNeedsInput
@@ -115,7 +124,7 @@ export const fuzzycadNeedsInputStretch = defineFeature(function(context is Conte
         drawEngineeringLinearArrow(
             context,
             id + "stretchArrow",
-            facePoint,
+            anchorPoint,
             shownTarget,
             labelText,
             true
@@ -123,8 +132,8 @@ export const fuzzycadNeedsInputStretch = defineFeature(function(context is Conte
 
         addManipulators(context, id, {
                 "stretchManipulator" : linearManipulator({
-                        "base" : facePoint,
-                        "direction" : faceNormal,
+                        "base" : anchorPoint,
+                        "direction" : axisDirection,
                         "offset" : referenceLength * definition.stretchFactor,
                         "primaryParameterId" : "stretchFactor"
                 })
@@ -146,7 +155,7 @@ returns map
         return definition;
     }
 
-    const originalBody = qOwnerBody(definition.face);
+    const originalBody = definition.body;
 
     const bbox = evBox3d(context, { "topology" : originalBody, "tight" : true });
     const bboxDiagonal = norm(bbox.maxCorner - bbox.minCorner);

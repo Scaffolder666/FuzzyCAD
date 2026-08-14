@@ -484,9 +484,9 @@ const TOOLBAR_TOOLS: {
     category: "needsInput",
     featureStudioElementId: "d6a330bef33fffa871e8116a",
     guidance: {
-      select: "Select the face that should stay fixed in the 3D view.",
+      select: "Select the object you want to stretch in the 3D view.",
       adjust:
-        "The object stretches away from this face. The exact amount can stay unresolved for a collaborator to decide.",
+        "Choose the axis to stretch along and the amount. The exact factor can stay unresolved for a collaborator to decide.",
     },
   },
   {
@@ -796,8 +796,11 @@ function buildCustomFeatureParameters(tool: ToolbarToolId, geometryIds: string[]
         booleanParameter("accepted", false),
       ];
     case "stretch":
+      // needsInputStretch.fs now takes a whole body + a world axis to
+      // stretch along (FuzzyCADStretchAxis enum), not a fixed face.
       return [
-        queryListParameter("face", geometryIds),
+        queryListParameter("body", geometryIds),
+        enumParameter("stretchAxis", "FuzzyCADStretchAxis", "Z"),
         quantityParameter("stretchFactor", "1.5"),
         booleanParameter("stretchFactorNeedsInput", true),
         booleanParameter("accepted", false),
