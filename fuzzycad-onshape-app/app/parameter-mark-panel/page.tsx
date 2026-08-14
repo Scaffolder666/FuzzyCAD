@@ -2948,7 +2948,12 @@ function ParameterMarkPanelInner() {
             ? TOOLBAR_TOOLS.find((entry) => entry.id === activeCreation.toolId)?.category
             : undefined;
           return (
-            <div key={category} className={`${styles.toolbarSection} ${meta.sectionClass}`}>
+            <div
+              key={category}
+              className={`${styles.toolbarSection} ${meta.sectionClass} ${
+                activeCreation && creationCategory === category ? styles.toolbarSectionActive : ""
+              }`}
+            >
               <div className={styles.toolbarSectionLabel}>{meta.label}</div>
               <div className={styles.toolbarSectionButtons}>
                 {tools.map((tool) => {

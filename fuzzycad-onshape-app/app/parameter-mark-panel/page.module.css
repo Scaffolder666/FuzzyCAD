@@ -225,8 +225,8 @@
    at the same category identity. */
 .toolbar {
   display: flex;
-  flex-direction: column;
-  gap: 8px;
+  flex-flow: row wrap;
+  gap: 6px;
   margin-bottom: 6px;
 }
 
@@ -234,7 +234,11 @@
   border: 1px solid transparent;
   border-left-width: 3px;
   border-radius: 8px;
-  padding: 8px 10px 10px;
+  padding: 6px 10px 7px;
+  /* Size to content and share a row instead of three full-width bars:
+     Needs Input (7 tools) fills the top row, Mark Constrain + Conflict
+     (one tool each) sit side by side below. */
+  flex: 1 1 auto;
 }
 
 .toolbarSectionLabel {
@@ -242,7 +246,14 @@
   font-weight: 700;
   letter-spacing: 0.07em;
   text-transform: uppercase;
-  margin-bottom: 6px;
+  margin-bottom: 4px;
+}
+
+/* The section currently holding an active creation guide takes the full
+   width so its form (e.g. the Note text field) isn't cramped into a
+   half-row. */
+.toolbarSectionActive {
+  flex-basis: 100%;
 }
 
 .toolbarSectionButtons {
@@ -256,6 +267,8 @@
   background: #eef3fd;
   border-color: #c3d6f7;
   border-left-color: #2452c8;
+  /* Full-width top row; the two single-tool sections wrap below it. */
+  flex-basis: 100%;
 }
 .toolbarSectionNeedsInput .toolbarSectionLabel {
   color: #2452c8;
