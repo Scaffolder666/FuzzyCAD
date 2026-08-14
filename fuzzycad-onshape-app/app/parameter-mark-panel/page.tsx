@@ -1023,6 +1023,30 @@ function ParameterMarkPanelInner() {
   // session. This is local, ephemeral session state instead.
   const [activeCreation, setActiveCreation] = useState<{ toolId: ToolbarToolId; featureId: string } | null>(null);
   const [creationActionBusy, setCreationActionBusy] = useState(false);
+  // The feature whose Onshape dialog we currently have open (from a card or
+  // during creation). While set, the editing-sync poll below keeps the card
+  // in step with values dragged in the 3D view. A safety timer auto-clears
+  // it, since Onshape gives no signal if the user closes that dialog natively.
+  const [openDialogFeatureId, setOpenDialogFeatureId] = useState<string | null>(null);
+  const openDialogAutoClearRef = useRef<number | null>(null);
+
+  // Editing-sync poll: while a mark is being created OR its Onshape dialog is
+  // open, refresh the marks on a short interval so the card stays in step
+  // with values dragged in the 3D view -- Onshape sends third-party right
+  // panels no "parameter changed"/regenerated event, so a poll is the only
+  // way to notice. Only while editing and the tab is visible; idle => no
+  // polling at all. Each tick is a deduped, silent (no status flicker) load.
+  useEffect(() => {
+    if (activeCreation === null && openDialogFeatureId === null) return;
+    const intervalId = window.setInterval(() => {
+      if (typeof document !== "undefined" && document.hidden) return;
+      void loadEverything({ allowDedup: true, background: true });
+    }, 2000);
+    return () => window.clearInterval(intervalId);
+    // loadEverything intentionally omitted from deps -- re-subscribing on
+    // every render would reset the interval; the closure it captures is fine.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeCreation, openDialogFeatureId]);
 
   useEffect(() => {
     contextRef.current = context;
@@ -1336,7 +1360,10 @@ function ParameterMarkPanelInner() {
   // other caller (manual refresh, and every post-write refresh after an
   // accept/reject/insert/edit) leaves it off, forcing a fresh fetch so edits
   // always show immediately -- no staleness, purely fewer duplicate requests.
-  async function loadEverything(options?: { manual?: boolean; allowDedup?: boolean }) {
+  // background: a silent poll (the editing-sync loop) -- skips the
+  // "scanning..."/"ready" status churn so it doesn't flicker every tick;
+  // real errors (429/402/load failure) still surface.
+  async function loadEverything(options?: { manual?: boolean; allowDedup?: boolean; background?: boolean }) {
     // contextRef, not the outer `context` state variable directly: this
     // function is called (via insertToolbarMark and the debounced
     // post-SELECTION refresh below) from inside the SELECTION handler's
@@ -1365,7 +1392,9 @@ function ParameterMarkPanelInner() {
       rateLimitedUntilRef.current = null;
     }
 
-    setStatus("scanning feature tree for Cosmo Feature proposals...");
+    if (!options?.background) {
+      setStatus("scanning feature tree for Cosmo Feature proposals...");
+    }
 
     const params = new URLSearchParams({
       documentId: context.documentId,
@@ -1486,7 +1515,8 @@ function ParameterMarkPanelInner() {
     }
 
     setUncertaintyDoc(currentDoc);
-    setStatus(
+    if (!(options?.background && upstreamOk)) {
+      setStatus(
       upstreamOk
         ? "ready"
         : upstreamStatus === 429
@@ -1496,7 +1526,8 @@ function ParameterMarkPanelInner() {
           : upstreamStatus === 402
             ? "Onshape's annual API allocation appears exhausted (HTTP 402) -- automatic reloads paused, click Refresh to check again"
             : `error loading parameters from Onshape (HTTP ${upstreamStatus})`,
-    );
+      );
+    }
 
     for (const found of detected) {
       const annotation = currentDoc.annotations.find(
@@ -1784,6 +1815,18 @@ function ParameterMarkPanelInner() {
         context.server,
       );
     }, 0);
+
+    // Mark this dialog open so the editing-sync poll runs. Re-arm a safety
+    // timer that clears it after a while, since a native close of that
+    // dialog gives us no signal (which would otherwise poll forever).
+    setOpenDialogFeatureId(featureId);
+    if (openDialogAutoClearRef.current !== null) {
+      window.clearTimeout(openDialogAutoClearRef.current);
+    }
+    openDialogAutoClearRef.current = window.setTimeout(() => {
+      setOpenDialogFeatureId(null);
+      openDialogAutoClearRef.current = null;
+    }, 90000);
   }
 
   /** Reload -> apply a pure document.ts mutation -> save -> update local state, shared by every action below. */
@@ -2173,6 +2216,12 @@ function ParameterMarkPanelInner() {
    * close without saving".
    */
   function postCloseFeatureDialog(accept: boolean) {
+    // No dialog is open anymore -- stop the editing-sync poll.
+    setOpenDialogFeatureId(null);
+    if (openDialogAutoClearRef.current !== null) {
+      window.clearTimeout(openDialogAutoClearRef.current);
+      openDialogAutoClearRef.current = null;
+    }
     if (!context) return;
     window.parent.postMessage(
       {
