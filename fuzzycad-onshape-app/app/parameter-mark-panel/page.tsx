@@ -1261,7 +1261,9 @@ function ParameterMarkPanelInner() {
       }
       selectionRefreshTimerRef.current = setTimeout(() => {
         selectionRefreshTimerRef.current = null;
-        void loadEverything();
+        // View-only refresh (nothing was edited) -- safe to share an
+        // in-flight fetch with any concurrent refresh.
+        void loadEverything({ allowDedup: true });
       }, 1500);
     }
 
@@ -1315,7 +1317,12 @@ function ParameterMarkPanelInner() {
    * interval so newly-inserted proposals show up without a manual
    * reopen, and from the header's Refresh button for an immediate check.
    */
-  async function loadEverything(options?: { manual?: boolean }) {
+  // allowDedup: only the automatic, view-only SELECTION refresh sets this,
+  // letting concurrent identical reads share one upstream Onshape call. Every
+  // other caller (manual refresh, and every post-write refresh after an
+  // accept/reject/insert/edit) leaves it off, forcing a fresh fetch so edits
+  // always show immediately -- no staleness, purely fewer duplicate requests.
+  async function loadEverything(options?: { manual?: boolean; allowDedup?: boolean }) {
     // contextRef, not the outer `context` state variable directly: this
     // function is called (via insertToolbarMark and the debounced
     // post-SELECTION refresh below) from inside the SELECTION handler's
@@ -1352,6 +1359,12 @@ function ParameterMarkPanelInner() {
       partStudioElementId: context.elementId,
       server: context.server,
     });
+    // Force a fresh (non-deduped) fetch unless this is the automatic
+    // view-only refresh -- so anything that could have changed a value is
+    // never served an in-flight snapshot from just before the change.
+    if (!options?.allowDedup) {
+      params.set("force", "1");
+    }
 
     const [paramsRes, stateRes] = await Promise.all([
       fetch(`/api/onshape/partstudio-feature-parameters-debug?${params.toString()}`),

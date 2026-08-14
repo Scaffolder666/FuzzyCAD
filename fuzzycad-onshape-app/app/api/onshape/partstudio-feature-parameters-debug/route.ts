@@ -72,12 +72,61 @@ function collectValueParameters(features: unknown[], out: ValueParameterEntry[])
  * format, enum values) across a real feature tree. Purely diagnostic --
  * not used by the production app. Disposable.
  */
+// Module-level in-flight dedup: the panel's automatic (view-only) refreshes
+// can fire several identical reads at once; they share ONE upstream Onshape
+// call instead of each hitting the rate limiter. Dedup-only, NO TTL cache --
+// each group still fetches fresh, so an edited value is never served stale.
+// Bypassed entirely when the caller passes force=1 (every refresh that
+// follows a write, plus manual refresh), so edits always show immediately.
+type FeatureParamsPayload = { status: number; body: Record<string, unknown> };
+const featureParamsInflight = new Map<string, Promise<FeatureParamsPayload>>();
+
+async function computeFeatureParams(
+  featuresEndpoint: string,
+  accessToken: string,
+): Promise<FeatureParamsPayload> {
+  const featuresRes = await onshapeFetch(
+    featuresEndpoint,
+    {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        Accept: "application/json",
+      },
+    },
+    { route: "/api/onshape/partstudio-feature-parameters-debug", operation: "fetch-features" },
+  );
+
+  const data = await parseJsonOrText(featuresRes);
+
+  const valueParameters: ValueParameterEntry[] = [];
+  const features = isRecord(data) && Array.isArray(data.features) ? data.features : [];
+  collectValueParameters(features, valueParameters);
+
+  return {
+    status: 200,
+    body: {
+      endpoint: featuresEndpoint,
+      status: featuresRes.status,
+      ok: featuresRes.ok,
+      // Onshape's own 429 response tells us exactly how long to back off
+      // (confirmed live) -- surfaced so the panel can show a real
+      // countdown instead of a vague "try again shortly".
+      retryAfter: featuresRes.headers.get("Retry-After"),
+      featureCount: features.length,
+      valueParameterCount: valueParameters.length,
+      valueParameters,
+      rawData: data,
+    },
+  };
+}
+
 export async function GET(req: NextRequest) {
   const params = req.nextUrl.searchParams;
   const server = params.get("server") || "https://cad.onshape.com";
   const documentId = params.get("documentId");
   const workspaceId = params.get("workspaceId");
   const partStudioElementId = params.get("partStudioElementId");
+  const force = params.get("force") === "1";
 
   const accessToken = req.cookies.get("onshape_access_token")?.value;
 
@@ -97,37 +146,23 @@ export async function GET(req: NextRequest) {
 
   const featuresEndpoint = `${server}/api/partstudios/d/${documentId}/w/${workspaceId}/e/${partStudioElementId}/features`;
 
-  const featuresRes = await onshapeFetch(
-    featuresEndpoint,
-    {
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        Accept: "application/json",
-      },
-    },
-    { route: "/api/onshape/partstudio-feature-parameters-debug", operation: "fetch-features" },
-  );
+  let payload: FeatureParamsPayload;
 
-  const data = await parseJsonOrText(featuresRes);
+  if (force) {
+    payload = await computeFeatureParams(featuresEndpoint, accessToken);
+  } else {
+    const key = [server, documentId, workspaceId, partStudioElementId].join("|");
+    const pending = featureParamsInflight.get(key);
+    if (pending) {
+      payload = await pending;
+    } else {
+      const promise = computeFeatureParams(featuresEndpoint, accessToken).finally(() => {
+        featureParamsInflight.delete(key);
+      });
+      featureParamsInflight.set(key, promise);
+      payload = await promise;
+    }
+  }
 
-  const valueParameters: ValueParameterEntry[] = [];
-  const features = isRecord(data) && Array.isArray(data.features) ? data.features : [];
-  collectValueParameters(features, valueParameters);
-
-  return NextResponse.json(
-    {
-      endpoint: featuresEndpoint,
-      status: featuresRes.status,
-      ok: featuresRes.ok,
-      // Onshape's own 429 response tells us exactly how long to back off
-      // (confirmed live) -- surfaced so the panel can show a real
-      // countdown instead of a vague "try again shortly".
-      retryAfter: featuresRes.headers.get("Retry-After"),
-      featureCount: features.length,
-      valueParameterCount: valueParameters.length,
-      valueParameters,
-      rawData: data,
-    },
-    { status: 200 },
-  );
+  return NextResponse.json(payload.body, { status: payload.status });
 }
