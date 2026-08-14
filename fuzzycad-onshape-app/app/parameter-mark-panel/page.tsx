@@ -526,7 +526,7 @@ const TOOLBAR_CATEGORY_META: Record<
   { label: string; sectionClass: string }
 > = {
   needsInput: { label: "Needs Input", sectionClass: styles.toolbarSectionNeedsInput },
-  markConstrain: { label: "Mark", sectionClass: styles.toolbarSectionMarkConstrain },
+  markConstrain: { label: "Mark Constrain", sectionClass: styles.toolbarSectionMarkConstrain },
   conflict: { label: "Conflict", sectionClass: styles.toolbarSectionConflict },
 };
 
@@ -537,14 +537,22 @@ const TOOLBAR_CATEGORY_META: Record<
  * illegible in practice. Plain SVG paths render pixel-identically
  * everywhere and can be sized as large as the toolbar needs.
  */
+// SketchUp-style two-tone icon language: navy draws the object, red marks
+// the action or the key point, a faint blue fills a solid's face. The three
+// category cards keep their own tint, so the glyphs are uniform without
+// losing which group a tool belongs to. Colors are hard-set here (not
+// currentColor) on purpose -- that's what makes the red accent read.
+const ICON_NAVY = "#21313f";
+const ICON_RED = "#d92f1c";
+const ICON_BLUE = "#3f7cba";
+
 function ToolbarIcon({ tool }: { tool: ToolbarToolId }) {
   const common = {
-    width: 22,
-    height: 22,
+    width: 24,
+    height: 24,
     viewBox: "0 0 24 24",
     fill: "none",
-    stroke: "currentColor",
-    strokeWidth: 1.8,
+    strokeWidth: 1.9,
     strokeLinecap: "round" as const,
     strokeLinejoin: "round" as const,
   };
@@ -553,70 +561,76 @@ function ToolbarIcon({ tool }: { tool: ToolbarToolId }) {
     case "move":
       return (
         <svg {...common}>
-          <path d="M12 2v20M2 12h20" />
-          <path d="M12 2l-3 3M12 2l3 3M12 22l-3-3M12 22l3-3" />
-          <path d="M2 12l3-3M2 12l3 3M22 12l-3-3M22 12l-3 3" />
+          <line x1="12" y1="5" x2="12" y2="19" stroke={ICON_NAVY} />
+          <line x1="5" y1="12" x2="19" y2="12" stroke={ICON_NAVY} />
+          <path
+            stroke={ICON_RED}
+            d="M12 3.4 9.6 6 M12 3.4 14.4 6 M12 20.6 9.6 18 M12 20.6 14.4 18 M3.4 12 6 9.6 M3.4 12 6 14.4 M20.6 12 18 9.6 M20.6 12 18 14.4"
+          />
         </svg>
       );
     case "extrude":
       return (
         <svg {...common}>
-          <rect x="5" y="11" width="14" height="9" rx="1" />
-          <path d="M12 8V2M12 2l-3 3M12 2l3 3" />
+          <rect x="5" y="12" width="14" height="7.5" rx="1" fill={ICON_BLUE} fillOpacity="0.13" />
+          <rect x="5" y="12" width="14" height="7.5" rx="1" stroke={ICON_NAVY} />
+          <path stroke={ICON_RED} d="M12 10 V3 M12 3 9.6 5.4 M12 3 14.4 5.4" />
         </svg>
       );
     case "chamfer":
       return (
         <svg {...common}>
-          <path d="M9 4h11v16H4V9L9 4z" />
-          <path d="M4 9L9 4" strokeDasharray="0" />
+          <path stroke={ICON_NAVY} d="M8 4 H20 V20 H4 V8 Z" />
+          <circle fill={ICON_RED} cx="6" cy="6" r="1.9" />
         </svg>
       );
     case "fillet":
       return (
         <svg {...common}>
-          <path d="M4 20V10a6 6 0 0 1 6-6h10v16H4z" />
+          <path stroke={ICON_NAVY} d="M4 20 V10 A6 6 0 0 1 10 4 H20 V20 Z" />
+          <circle fill={ICON_RED} cx="6.4" cy="6.4" r="1.9" />
         </svg>
       );
     case "scale":
       return (
         <svg {...common}>
-          <rect x="4" y="4" width="12" height="12" />
-          <path d="M14 20h6v-6" />
-          <path d="M20 20L13 13" />
+          <rect x="5" y="5" width="10" height="10" stroke={ICON_NAVY} />
+          <path stroke={ICON_RED} d="M13 13 20.5 20.5 M20.5 20.5 H16 M20.5 20.5 V16" />
+          <circle fill={ICON_RED} cx="15" cy="15" r="1.7" />
         </svg>
       );
     case "rotate":
       return (
         <svg {...common}>
-          <path d="M4 12a8 8 0 1 1 2.7 6" />
-          <path d="M3 16l1.7-4.5L9 13" />
+          <path stroke={ICON_NAVY} d="M6 17 A7.5 7.5 0 1 1 8.3 18.8" />
+          <path stroke={ICON_RED} d="M6 17 5.6 13.2 M6 17 9.7 16.4" />
+          <circle fill={ICON_RED} cx="12" cy="12" r="1.6" />
         </svg>
       );
     case "stretch":
       return (
         <svg {...common}>
-          <rect x="7" y="7" width="10" height="10" />
-          <path d="M2 12h4M2 12l3-3M2 12l3 3" />
-          <path d="M22 12h-4M22 12l-3-3M22 12l-3 3" />
+          <rect x="7.5" y="6.5" width="9" height="11" stroke={ICON_NAVY} />
+          <path
+            stroke={ICON_RED}
+            d="M3 12 H8 M3 12 5.3 9.7 M3 12 5.3 14.3 M21 12 H16 M21 12 18.7 9.7 M21 12 18.7 14.3"
+          />
         </svg>
       );
     case "note":
       return (
         <svg {...common}>
-          <circle cx="12" cy="9" r="2" />
-          <path d="M12 11v9" />
-          <path d="M8 22h8" />
+          <path stroke={ICON_NAVY} d="M12 21 C12 21 6 14.2 6 9 A6 6 0 1 1 18 9 C18 14.2 12 21 12 21 Z" />
+          <circle fill={ICON_RED} cx="12" cy="9" r="2.1" />
         </svg>
       );
     case "compare":
       return (
         <svg {...common}>
-          <path d="M12 3v6" />
-          <path d="M12 9L5 15v6" />
-          <path d="M12 9l7 6v6" />
-          <circle cx="5" cy="20" r="1.5" />
-          <circle cx="19" cy="20" r="1.5" />
+          <path stroke={ICON_NAVY} d="M12 20 V13 M12 13 6.5 7 M12 13 17.5 7" />
+          <circle fill={ICON_NAVY} cx="12" cy="20.4" r="1.4" />
+          <circle fill={ICON_RED} cx="6" cy="6.4" r="2" />
+          <circle fill={ICON_RED} cx="18" cy="6.4" r="2" />
         </svg>
       );
   }
